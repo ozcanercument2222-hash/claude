@@ -84,7 +84,7 @@ private:
     sccui::InfoText    typeInfo        { 11.0f };
     sccui::NeonButton  slotAButton     { "A", 14.0f };
     sccui::NeonButton  slotBButton     { "B", 14.0f };
-    sccui::NeonButton  designerButton  { "DESIGNER  >", 12.5f };
+    sccui::NeonButton  designerButton  { "CHARACTER DESIGNER", 11.5f };
 
     std::atomic<float>* amountParam  = nullptr;
     std::atomic<float>* ratioParam   = nullptr;
@@ -127,10 +127,13 @@ public:
     void showDesigner (bool shouldShowDesigner);
     bool isDesignerShown() const noexcept { return designer.isVisible(); }
 
+    static constexpr int kMinWidth = 600, kMaxWidth = 1920;
+
 private:
     SCCAudioProcessor& proc;
     MainView view;
     DesignerPanel designer;
+    bool constructed = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SCCAudioProcessorEditor)
 };

@@ -120,7 +120,8 @@ target_link_libraries(SCC
 #
 #    SCC_DspTest    : V5 kompresor testi (JUCE gerektirmez; V5 davranisinin korundugunu dogrular)
 #    SCC_V6Test     : V6 DSP testi (JUCE gerektirmez)
-#    SCC_PluginTest : plugin katmani testi (parametreler, state, presetler, arayuz goruntuleri)
+#    SCC_PluginTest : plugin katmani testi (parametreler, state, presetler, arayuz goruntuleri;
+#                     istege bagli olarak derlenmis SCC.vst3'u bir host gibi yukleyip sinar)
 # ------------------------------------------------------------------------------
 option(SCC_BUILD_TESTS "Test programlarini da olustur" OFF)
 if(SCC_BUILD_TESTS)
@@ -137,6 +138,8 @@ if(SCC_BUILD_TESTS)
     target_include_directories(SCC_PluginTest PRIVATE Source)
     target_compile_definitions(SCC_PluginTest PRIVATE
         SCC_BUILD_PLUGIN_TEST=1
+        JUCE_MODAL_LOOPS_PERMITTED=1
+        JUCE_PLUGINHOST_VST3=1
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_STANDALONE_APPLICATION=1)

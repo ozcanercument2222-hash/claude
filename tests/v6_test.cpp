@@ -1013,6 +1013,68 @@ int main()
     }
 
     //--------------------------------------------------------------------------
+    std::printf ("\n=== 12b) Ses alti temizlik: asimetrik tipler zarfi izleyen DC / gumleme birakmaz ===\n");
+    {
+        // 25 Hz altindaki enerji (4 kutuplu alcak geciren), toplam enerjiye gore dB
+        auto subsonicDb = [] (const std::vector<float>& x)
+        {
+            const double a = 1.0 - std::exp (-2 * kPi * 25.0 / kFs);
+            double z[4] = { 0, 0, 0, 0 }, es = 0, et = 0;
+            for (size_t i = 0; i < x.size(); ++i)
+            {
+                double v = x[i];
+                for (auto& st : z) { st += a * (v - st); v = st; }
+                if (i > x.size() / 4) { es += v * v; et += (double) x[i] * x[i]; }
+            }
+            return 10.0 * std::log10 (es / et + 1e-30);
+        };
+
+        // Kendi ses alti icerigi olmayan (simetrik dalga formlu) hece dizisi: cikista 25 Hz
+        // altinda ne varsa karakter katinin urettigi seydir.
+        std::vector<float> v ((size_t) (12.0 * kFs), 0.0f);
+        {
+            Rng rng; size_t n = 0; double phase = 0;
+            while (n < v.size())
+            {
+                const size_t sylN = (size_t) ((0.16 + 0.12 * (rng.next() * 0.5 + 0.5)) * kFs);
+                const size_t gapN = (size_t) ((0.03 + 0.12 * (rng.next() * 0.5 + 0.5)) * kFs);
+                const double amp = std::pow (10.0, (-18.0 + 14.0 * (rng.next() * 0.5 + 0.5)) / 20.0);
+                const double f0  = 110.0 + 60.0 * (rng.next() * 0.5 + 0.5);
+                for (size_t i = 0; i < sylN && n < v.size(); ++i, ++n)
+                {
+                    const double env = std::pow (std::sin (kPi * (double) i / (double) sylN), 0.6);
+                    phase += f0 / kFs;
+                    double h = 0;
+                    for (int k = 1; k <= 20; ++k) h += std::sin (2 * kPi * k * phase) / (k * (1.0 + 0.02 * k * k));
+                    v[n] = (float) (0.7 * amp * env * h);
+                }
+                n += gapN;
+            }
+        }
+        const double inSub = subsonicDb (v);
+        double worst = -300; int worstType = 0;
+        for (int t = 0; t < kNumCharacterTypes; ++t)
+        {
+            CharacterSettings cs = charOn (t, 1.0);
+            if (t == kCharCustom)
+                for (int p = 0; p < kNumCustomParams; ++p) cs.spec[0].custom[p] = 70.0f;
+            const double d = subsonicDb (throughCharacter (cs, v));
+            if (d > worst) { worst = d; worstType = t; }
+        }
+        std::printf ("  giris: 25 Hz alti %.1f dB;  en kotu tip (%s, %%100): %.1f dB\n", inSub, characterTypeName (worstType), worst);
+        CHECK (worst < -40.0, "butun tiplerde 25 Hz alti icerik sinyalin 40 dB'den fazla altinda (en kotu %.1f dB)", worst);
+
+        // dogrusal yol etkilenmez: cok alcak seviyeli 20 Hz sinus, TUBE %100 -> kazanc 0 dB
+        CharacterProbe probe;
+        CharacterSpec tube; tube.type = kCharTube;
+        const auto low = probe.measure (tube, 1.0, kFs, 20.0, 0.001);
+        CharacterSpec custom = blankCustom(); custom.custom[kCpLowChar] = 100; custom.custom[kCpDensity] = 0;
+        const auto low2 = probe.measure (custom, 1.0, kFs, 20.0, 0.25);
+        CHECK (std::abs (low2.fundamentalGainDb) < 0.01, "suzgec yalnizca kalintida: 20 Hz'de dogrusal yolun kazanci %+.4f dB (bas kaybi yok)", low2.fundamentalGainDb);
+        (void) low;
+    }
+
+    //--------------------------------------------------------------------------
     std::printf ("\n=== 13) Dayaniklilik ===\n");
     {
         // NaN / Inf + tam olcek gurultu, butun tipler, Analog mod

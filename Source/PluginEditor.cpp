@@ -31,8 +31,8 @@ namespace
         const juce::Rectangle<int> custom      { 444, 480,  66,  38 };
         const juce::Rectangle<int> chevUp      { 516, 480,  24,  19 };
         const juce::Rectangle<int> chevDown    { 516, 499,  24,  19 };
-        constexpr int optionsXAdaptive = 572, optionsXAnalog = 630;
-        constexpr int autoGainY = 474, lowCutY = 510, optionW = 84, optionH = 32;
+        constexpr int optionsXAdaptive = 568, optionsXAnalog = 626;
+        constexpr int autoGainY = 474, lowCutY = 510, optionW = 96, optionH = 32;
 
         const juce::Rectangle<int> presetPrev  { 330,  58,  26,  30 };
         const juce::Rectangle<int> presetBox   { 358,  56, 152,  34 };
@@ -613,15 +613,19 @@ SCCAudioProcessorEditor::SCCAudioProcessorEditor (SCCAudioProcessor& p)
     view.onOpenDesigner = [this] { showDesigner (true); };
     designer.onClose    = [this] { showDesigner (false); };
 
-    setResizable (true, true);
-    setResizeLimits (600, 460, 1920, 1472);
-    getConstrainer()->setFixedAspectRatio ((double) MainView::kW / (double) MainView::kH);
+    // En son kullanilan pencere boyutu. Sinirlar ayarlanmadan ONCE okunmali:
+    // setResizeLimits pencereyi en kucuk boyuta cekip resized()'i tetikler.
+    const int savedW = juce::jlimit (kMinWidth, kMaxWidth, (int) proc.apvts.state.getProperty ("uiWidth", MainView::kW));
+    const bool openDesigner = (bool) proc.apvts.state.getProperty ("designerOpen", false);
 
-    // en son kullanilan pencere boyutunu ve sayfayi hatirla
-    const int savedW = juce::jlimit (600, 1920, (int) proc.apvts.state.getProperty ("uiWidth", MainView::kW));
+    setResizable (true, true);
+    setResizeLimits (kMinWidth, juce::roundToInt ((float) kMinWidth * (float) MainView::kH / (float) MainView::kW),
+                     kMaxWidth, juce::roundToInt ((float) kMaxWidth * (float) MainView::kH / (float) MainView::kW));
+    getConstrainer()->setFixedAspectRatio ((double) MainView::kW / (double) MainView::kH);
     setSize (savedW, juce::roundToInt ((float) savedW * (float) MainView::kH / (float) MainView::kW));
 
-    if ((bool) proc.apvts.state.getProperty ("designerOpen", false))
+    constructed = true;                 // bundan sonraki boyut degisiklikleri kullanicinin: hatirla
+    if (openDesigner)
         showDesigner (true);
 }
 
@@ -629,7 +633,8 @@ void SCCAudioProcessorEditor::showDesigner (bool shouldShowDesigner)
 {
     designer.setVisible (shouldShowDesigner);
     view.setVisible (! shouldShowDesigner);
-    proc.apvts.state.setProperty ("designerOpen", shouldShowDesigner, nullptr);
+    if (constructed)
+        proc.apvts.state.setProperty ("designerOpen", shouldShowDesigner, nullptr);
 }
 
 void SCCAudioProcessorEditor::paint (juce::Graphics& g)
@@ -647,5 +652,6 @@ void SCCAudioProcessorEditor::resized()
     designer.setTransform (transform);
     designer.setBounds (0, 0, DesignerPanel::kW, DesignerPanel::kH);
 
-    proc.apvts.state.setProperty ("uiWidth", getWidth(), nullptr);
+    if (constructed)
+        proc.apvts.state.setProperty ("uiWidth", getWidth(), nullptr);
 }

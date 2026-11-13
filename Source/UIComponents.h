@@ -67,9 +67,11 @@ inline void drawLabel (juce::Graphics& g, const juce::String& text, juce::Rectan
                        float size, juce::Colour colour, bool bold = false,
                        juce::Justification just = juce::Justification::centred)
 {
+    // Sigmayan yazi kirpilmaz, yatayda daraltilir (yazi tipi genislikleri isletim
+    // sistemine gore degisir; ayni yerlesim her yerde okunakli kalsin).
     useFont (g, size, bold);
     g.setColour (colour);
-    g.drawText (text, area, just, false);
+    g.drawFittedText (text, area.getSmallestIntegerContainer(), just, 1, 0.7f);
 }
 
 // Parlayan cizgi: 3 kat, genisten inceye

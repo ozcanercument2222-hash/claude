@@ -11,6 +11,8 @@
 #if defined (__SSE__) || defined (_M_X64) || (defined (_M_IX86_FP) && _M_IX86_FP >= 1)
  #include <xmmintrin.h>
  #define SCC_HAS_SSE_CSR 1
+#else
+ #define SCC_HAS_SSE_CSR 0
 #endif
 
 namespace scc

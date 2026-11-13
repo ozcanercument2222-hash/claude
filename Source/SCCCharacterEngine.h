@@ -33,8 +33,9 @@
 //    * Cikis telafisi: her ayarda referans seviyedeki ses yuksekligi korunur.
 //      LEVEL MATCH acikken buna ek olarak giris / cikis enerjisi dinamik esitlenir
 //      (A ve B icin ayri ayri ogrenilir -> A/B gecisinde aninda dogru seviye).
-//    * Asimetrik egrilerin urettigi DC, yalnizca dogrusal olmayan KALINTIDAN
-//      suzulur; dogrusal yolun bas tepkisi hic degismez.
+//    * Asimetrik egriler sinyalin zarfini izleyen bir DC kaymasi (ses alti "gumleme")
+//      uretir. Bu, her tipin sonunda yalnizca dogrusal olmayan KALINTIDAN
+//      ( cikis - giris ) 30 Hz'de suzulur; dogrusal yolun bas tepkisi hic degismez.
 //    * Butun parametreler ornek basina yumusatilir; tip degisimi (ve tipleri farkli
 //      A/B gecisi) iki serit arasinda capraz gecisle yapilir -> tik / sicrama yok.
 //    * Ses is parcaciginda bellek ayirma, kilit, dosya islemi yoktur.
@@ -297,8 +298,8 @@ public:
         co.xfLow   = onePoleCoef (85.0, fsOs);
         co.drvLow  = onePoleCoef (180.0, fsOs);
         co.drvLp   = onePoleCoef (6500.0, fsOs);
-        co.dcR     = dcBlockerCoef (8.0, fsOs);
         co.dcR2    = dcBlockerCoef (15.0, fsOs);
+        co.resHp   = onePoleCoef (30.0, fsOs);
         co.tubeAtk = smoothCoef (8.0, fsOs);
         co.tubeRel = smoothCoef (150.0, fsOs);
 
@@ -373,7 +374,7 @@ private:
     {
         double smooth = 0.001;
         double warmLow = 0, warmHf = 0, tapeHf = 0, tapeLp = 0, xfLow = 0, drvLow = 0, drvLp = 0;
-        double dcR = 0.999, dcR2 = 0.999, tubeAtk = 0, tubeRel = 0;
+        double dcR2 = 0.999, resHp = 0.001, tubeAtk = 0, tubeRel = 0;
     };
 
     struct Lane
@@ -392,7 +393,8 @@ private:
         LowEmphasis  lowE[2];
         HighEmphasis highE[2];
         OnePole      lpA[2];
-        DcBlocker    dc[2], dc2[2];
+        OnePole      resHp1[2], resHp2[2];    // kalinti uzerinde 2 kutuplu yuksek geciren
+        DcBlocker    dc[2];
         BandPass     bump[2];
         double       tubeEnv = 0.0;
 
@@ -418,7 +420,8 @@ private:
         {
             L.sh1[c].reset();  L.sh2[c].reset();
             L.lowE[c].reset(); L.highE[c].reset();
-            L.lpA[c].reset();  L.dc[c].reset();  L.dc2[c].reset();
+            L.lpA[c].reset();  L.dc[c].reset();
+            L.resHp1[c].reset();  L.resHp2[c].reset();
             L.bump[c].reset();
         }
         L.tubeEnv = 0.0;
@@ -553,7 +556,6 @@ private:
                         {
                             const double u = L.lowE[c].pre (x[c], v[vKPre], co.warmLow);
                             double w = (L.sh1[c].process (d1 * u + b0, s1) - sb) * inv;
-                            w = u + L.dc[c].process (w - u, co.dcR);            // DC: yalnizca kalintidan
                             w = L.lowE[c].post (w, v[vKPre], co.warmLow);
                             w -= v[vPost1] * (w - L.lpA[c].lp (w, co.warmHf));
                             y[c] = w;
@@ -590,8 +592,7 @@ private:
                         const double inv = 1.0 / (d1 * SD (b0, s1));
                         for (int c = 0; c < numCh; ++c)
                         {
-                            const double w = (L.sh1[c].process (d1 * x[c] + b0, s1) - sb) * inv;
-                            y[c] = x[c] + L.dc[c].process (w - x[c], co.dcR);  // DC: yalnizca kalintidan
+                            y[c] = (L.sh1[c].process (d1 * x[c] + b0, s1) - sb) * inv;
                         }
                         break;
                     }
@@ -626,7 +627,7 @@ private:
                             const double u = L.lowE[c].pre (x[c], kPre, co.drvLow);
                             const double lin = d1 * u;
                             double w = (L.sh1[c].process (lin + b0, s1) - sb) * inv1;
-                            w = lin + L.dc[c].process (w - lin, co.dcR2);       // DC: yalnizca kalintidan
+                            w = lin + L.dc[c].process (w - lin, co.dcR2);       // 2. kademe ortali calissin
                             w = L.sh2[c].process (d2 * w, s2) * inv;
                             w = L.lowE[c].post (w, kPre, co.drvLow);
                             w += v[vPost1] * (L.lpA[c].lp (w, co.drvLp) - w);
@@ -694,17 +695,21 @@ private:
                                 w[c] += v[vThick] * L.thick.process (c);
                         }
 
-                        // (simetrik doyurucu DC uretmez; ureteclerin DC'si kendi iclerinde suzulur)
                         y[0] = w[0];
                         y[1] = w[1];
                         break;
                     }
                 }
 
+                // Ses alti temizlik: yalnizca dogrusal olmayan kalinti ( y - x ) suzulur.
+                // y == x oldugunda (dogrusal bolge) sinyal bit duzeyinde degismez.
                 const double blend = v[vBlend];
                 const double comp  = v[vComp];
                 for (int c = 0; c < numCh; ++c)
-                    out[c][i] = x[c] + blend * (comp * y[c] - x[c]);
+                {
+                    const double residual = L.resHp2[c].hp (L.resHp1[c].hp (y[c] - x[c], co.resHp), co.resHp);
+                    out[c][i] = x[c] + blend * (comp * (x[c] + residual) - x[c]);
+                }
             }
 
             L.gainPrev = g1;
