@@ -84,7 +84,7 @@ private:
     sccui::InfoText    typeInfo        { 11.0f };
     sccui::NeonButton  slotAButton     { "A", 14.0f };
     sccui::NeonButton  slotBButton     { "B", 14.0f };
-    sccui::NeonButton  designerButton  { "CHARACTER DESIGNER", 11.5f };
+    sccui::NeonButton  designerButton  { "CHARACTER DESIGNER", 10.5f };
 
     std::atomic<float>* amountParam  = nullptr;
     std::atomic<float>* ratioParam   = nullptr;

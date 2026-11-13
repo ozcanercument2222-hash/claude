@@ -55,7 +55,7 @@ namespace
         const juce::Rectangle<int> typeInfo    { 268, 654, 490,  34 };
         const juce::Rectangle<int> slotA       { 784, 612,  40,  34 };
         const juce::Rectangle<int> slotB       { 828, 612,  40,  34 };
-        const juce::Rectangle<int> designer    { 784, 652, 132,  34 };
+        const juce::Rectangle<int> designer    { 782, 652, 140,  34 };
     }
 
     juce::String fmtMs (float ms)

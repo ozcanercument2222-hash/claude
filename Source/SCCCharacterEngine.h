@@ -189,7 +189,7 @@ namespace character
         {
             case kCharClean:
                 v[vD1] = dbToLin (4.0 * I);
-                v[vT1] = 1.0 - 0.85 * I;              // %100'de -16 dBFS'in altinda tamamen dogrusal
+                v[vT1] = std::min (1.0 - 0.85 * I, 0.98);    // %100'de -16 dBFS'in altinda tamamen dogrusal
                 break;
 
             case kCharWarm:
