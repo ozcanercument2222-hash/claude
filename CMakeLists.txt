@@ -11,6 +11,10 @@ project(SCC VERSION 6.0.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Windows: C++ calisma zamani plugin'in icine gomulur; kullanicinin bilgisayarinda
+# "Visual C++ Redistributable" kurulu olmasi gerekmez.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
@@ -150,4 +154,13 @@ if(SCC_BUILD_TESTS)
         PUBLIC
             juce::juce_recommended_config_flags
             juce::juce_recommended_warning_flags)
+
+    # Testler ses motorunu yigin (stack) uzerinde olusturur; Windows'un 1 MB'lik varsayilan
+    # yigini buna dar gelebilir. (Plugin'in kendisinde motor yiginda degil, heap'tedir.)
+    foreach(test_target SCC_DspTest SCC_V6Test SCC_PluginTest)
+        target_link_options(${test_target} PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/STACK:16777216>")
+    endforeach()
+    foreach(test_target SCC_DspTest SCC_V6Test)
+        target_compile_options(${test_target} PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
+    endforeach()
 endif()

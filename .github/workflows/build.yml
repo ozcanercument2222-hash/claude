@@ -1,0 +1,148 @@
+# SCC V6 - otomatik derleme
+#
+# Her kaynak degisikliginde (veya Actions sayfasindan elle "Run workflow" ile)
+# Windows, macOS ve Linux'ta plugin derlenir, testler calistirilir ve derlenmis
+# dosyalar indirilebilir paket olarak yuklenir:
+#
+#   GitHub -> Actions -> "SCC derle" -> en ustteki calisma -> sayfanin altindaki "Artifacts"
+#
+#     SCC-V6-Windows : SCC.vst3 + SCC.exe (Standalone)
+#     SCC-V6-macOS   : SCC.vst3 + SCC.component (AU) + SCC.app  (Apple Silicon + Intel)
+#     SCC-V6-Linux   : SCC.vst3 + SCC_Standalone
+name: SCC derle
+
+on:
+  push:
+    paths:
+      - 'Source/**'
+      - 'tests/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: scc-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows, os: windows-latest }
+          - { name: macOS,   os: macos-latest }
+          - { name: Linux,   os: ubuntu-22.04 }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux bagimliliklari
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxext-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev xvfb
+
+      - name: Yapilandir
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DSCC_BUILD_TESTS=ON -DSCC_COPY_AFTER_BUILD=OFF
+
+      - name: Derle
+        run: cmake --build build --config Release --parallel 4
+
+      # Once paketle ve yukle: testlerden biri takilsa bile derlenmis dosyalar indirilebilir olsun
+      - name: Paketle
+        shell: bash
+        run: |
+          R=build/SCC_artefacts/Release
+          P=paket/SCC-V6-$RUNNER_OS
+          mkdir -p "$P"
+          cp -R "$R/VST3/SCC.vst3" "$P/"
+          cp README.md "$P/"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "$R/Standalone/SCC.exe" "$P/"
+            printf '%s\r\n' \
+              "SCC V6 - Windows (64 bit)" "" \
+              "KURULUM" \
+              "  1) SCC.vst3 klasorunu oldugu gibi su klasorun icine kopyala:" \
+              "       C:\\Program Files\\Common Files\\VST3" \
+              "  2) DAW'i yeniden baslat ve plugin taramasi yap." \
+              "" \
+              "SCC.exe: DAW olmadan calisan surum (Standalone)." \
+              "" \
+              "Windows 'bilinmeyen yayinci' uyarisi verirse: Ek bilgi -> Yine de calistir." \
+              "(Dosyalar imzalanmamistir.)" > "$P/KURULUM.txt"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            cp -R "$R/AU/SCC.component" "$P/"
+            cp -R "$R/Standalone/SCC.app" "$P/"
+            printf '%s\n' \
+              "SCC V6 - macOS (Apple Silicon + Intel, macOS 11 ve ustu)" "" \
+              "KURULUM" \
+              "  SCC.vst3       ->  ~/Library/Audio/Plug-Ins/VST3/" \
+              "  SCC.component  ->  ~/Library/Audio/Plug-Ins/Components/   (Logic / GarageBand)" \
+              "  Sonra DAW'i yeniden baslat ve plugin taramasi yap." \
+              "" \
+              "macOS 'dogrulanamadi / hasarli' derse (dosyalar Apple tarafindan onaylanmamistir):" \
+              "  Terminal'de, dosyalari kopyaladiktan sonra:" \
+              "    xattr -cr ~/Library/Audio/Plug-Ins/VST3/SCC.vst3" \
+              "    xattr -cr ~/Library/Audio/Plug-Ins/Components/SCC.component" \
+              "  veya Sistem Ayarlari -> Gizlilik ve Guvenlik -> 'Yine de izin ver'." \
+              "" \
+              "SCC.app: DAW olmadan calisan surum (Standalone)." > "$P/KURULUM.txt"
+          else
+            cp "$R/Standalone/SCC" "$P/SCC_Standalone"
+            printf '%s\n' \
+              "SCC V6 - Linux (x86_64)" "" \
+              "KURULUM" \
+              "  SCC.vst3 klasorunu ~/.vst3/ icine kopyala, DAW'da plugin taramasi yap." \
+              "  SCC_Standalone: chmod +x SCC_Standalone && ./SCC_Standalone" > "$P/KURULUM.txt"
+          fi
+
+      # macOS paketleri calistirma izinlerini ve imzayi korumak icin once ziplenir
+      - name: macOS paketini ziple
+        if: runner.os == 'macOS'
+        run: cd paket && ditto -c -k --keepParent SCC-V6-macOS SCC-V6-macOS.zip && rm -rf SCC-V6-macOS
+
+      - name: Yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: SCC-V6-${{ runner.os }}
+          path: paket/
+          if-no-files-found: error
+
+      # JUCE gerektirmeyen DSP testleri: V5 davranisi + V6 olcumleri
+      - name: DSP testleri
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then D=build/Release; else D=build; fi
+          "$D/SCC_DspTest"
+          "$D/SCC_V6Test"
+
+      # Plugin katmani + derlenmis VST3'un host tarafindan yuklenmesi
+      - name: Plugin testi (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          xvfb-run -a build/SCC_PluginTest_artefacts/Release/SCC_PluginTest goruntuler \
+            --vst3 build/SCC_artefacts/Release/VST3/SCC.vst3
+
+      - name: Plugin testi (Windows / macOS)
+        if: runner.os != 'Linux'
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          build/SCC_PluginTest_artefacts/Release/SCC_PluginTest goruntuler \
+            --vst3 build/SCC_artefacts/Release/VST3/SCC.vst3
+
+      - name: Ekran goruntuleri
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arayuz-goruntuleri-${{ runner.os }}
+          path: goruntuler/
+          if-no-files-found: ignore
