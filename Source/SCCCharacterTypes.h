@@ -110,7 +110,7 @@ struct CharacterSpec
     {
         if (type != o.type) return false;
         for (int i = 0; i < kNumCustomParams; ++i)
-            if (custom[i] != o.custom[i]) return false;
+            if (custom[i] < o.custom[i] || custom[i] > o.custom[i]) return false;
         return true;
     }
     bool operator!= (const CharacterSpec& o) const noexcept { return ! (*this == o); }

@@ -77,7 +77,7 @@ public:
     //--------------------------------------------------------------------------
     inline double tick (double peak, const TransientParams& p, double& ceilingOut) noexcept
     {
-        if (p.windowMs != lastWindowMs)
+        if (std::abs (p.windowMs - lastWindowMs) > 1.0e-9)
         {
             lastWindowMs = p.windowMs;
             slowAtk = smoothCoef (p.windowMs, fs);
@@ -92,7 +92,7 @@ public:
         ceilingOut = 2.0 * envSlow * (1.0 + p.roundHeadroom) + kFloor;
 
         double target = 0.0;
-        if (p.amount != 0.0)
+        if (std::abs (p.amount) > 0.0)
         {
             // vurus olcusu (dB): hizli zarf yavas zarfin ne kadar ustunde?
             const double t = 8.685889638065035 * std::log ((envFast + kFloor) / (envSlow + kFloor));

@@ -469,7 +469,7 @@ private:
         }
 
         Lane& tgt = fading ? lanes[1 - active] : cur;
-        if (want.type == tgt.type && (intensity != tgt.lastIntensity || want != tgt.lastSpec))
+        if (want.type == tgt.type && (std::abs (intensity - tgt.lastIntensity) > 0.0 || want != tgt.lastSpec))
             applyVoicing (tgt, want, intensity, false);
     }
 
@@ -722,7 +722,7 @@ private:
         const CharacterSpec& want = settings.spec[slot];
 
         // Tam kapali: sinyale dokunma, islemci harcama
-        if (onTarget == 0.0 && onMix <= 0.0)
+        if (! wantOn && onMix <= 0.0)
         {
             idle = true;
             return;

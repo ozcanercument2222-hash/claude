@@ -6,7 +6,7 @@ if(APPLE)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
 endif()
 
-project(SCC VERSION 1.0.0 LANGUAGES C CXX)
+project(SCC VERSION 6.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -66,13 +66,37 @@ juce_add_plugin(SCC
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "SCC Standalone ses girisi icin mikrofona erisim ister.")
 
-target_sources(SCC PRIVATE
+# Arayuz + plugin katmani
+set(SCC_PLUGIN_SOURCES
     Source/PluginProcessor.cpp
     Source/PluginProcessor.h
     Source/PluginEditor.cpp
     Source/PluginEditor.h
+    Source/CharacterDesigner.cpp
+    Source/CharacterDesigner.h
+    Source/CharacterPresetManager.cpp
+    Source/CharacterPresetManager.h
     Source/UIComponents.h
-    Source/SCCDsp.h)
+    Source/AnalyzerViews.h)
+
+# DSP cekirdegi (JUCE'dan bagimsiz, yalnizca baslik dosyalari)
+set(SCC_DSP_HEADERS
+    Source/SCCDsp.h
+    Source/SCCManualCompressor.h
+    Source/SCCEngine.h
+    Source/SCCCharacterTypes.h
+    Source/SCCCharacterEngine.h
+    Source/SCCCharacterAnalysis.h
+    Source/SCCHarmonicGenerator.h
+    Source/SCCSaturationProcessor.h
+    Source/SCCTransientProcessor.h
+    Source/SCCCharacterToneProcessor.h
+    Source/SCCShaper.h
+    Source/SCCFilters.h
+    Source/SCCOversampler.h
+    Source/SCCSpectrumAnalyzer.h)
+
+target_sources(SCC PRIVATE ${SCC_PLUGIN_SOURCES} ${SCC_DSP_HEADERS})
 
 target_compile_definitions(SCC PUBLIC
     JUCE_WEB_BROWSER=0
@@ -90,13 +114,37 @@ target_link_libraries(SCC
         juce::juce_recommended_warning_flags)
 
 # ------------------------------------------------------------------------------
-#  Istege bagli: DSP testi (JUCE gerektirmez, plugin'e dahil degildir)
+#  Istege bagli: testler (plugin'e dahil degildir)
 #    cmake -B build -DSCC_BUILD_TESTS=ON
-#    cmake --build build --config Release --target SCC_DspTest
+#    cmake --build build --config Release --target SCC_DspTest SCC_V6Test SCC_PluginTest
+#
+#    SCC_DspTest    : V5 kompresor testi (JUCE gerektirmez; V5 davranisinin korundugunu dogrular)
+#    SCC_V6Test     : V6 DSP testi (JUCE gerektirmez)
+#    SCC_PluginTest : plugin katmani testi (parametreler, state, presetler, arayuz goruntuleri)
 # ------------------------------------------------------------------------------
-option(SCC_BUILD_TESTS "DSP test programini de olustur" OFF)
+option(SCC_BUILD_TESTS "Test programlarini da olustur" OFF)
 if(SCC_BUILD_TESTS)
     add_executable(SCC_DspTest tests/dsp_test.cpp)
     target_compile_definitions(SCC_DspTest PRIVATE SCC_BUILD_DSP_TEST)
     target_compile_features(SCC_DspTest PRIVATE cxx_std_17)
+
+    add_executable(SCC_V6Test tests/v6_test.cpp)
+    target_compile_definitions(SCC_V6Test PRIVATE SCC_BUILD_DSP_TEST)
+    target_compile_features(SCC_V6Test PRIVATE cxx_std_17)
+
+    juce_add_console_app(SCC_PluginTest PRODUCT_NAME "SCC_PluginTest")
+    target_sources(SCC_PluginTest PRIVATE tests/plugin_test.cpp ${SCC_PLUGIN_SOURCES})
+    target_include_directories(SCC_PluginTest PRIVATE Source)
+    target_compile_definitions(SCC_PluginTest PRIVATE
+        SCC_BUILD_PLUGIN_TEST=1
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_STANDALONE_APPLICATION=1)
+    target_compile_options(SCC_PluginTest PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
+    target_link_libraries(SCC_PluginTest
+        PRIVATE
+            juce::juce_audio_utils
+        PUBLIC
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_warning_flags)
 endif()
