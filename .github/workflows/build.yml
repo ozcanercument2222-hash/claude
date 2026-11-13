@@ -37,7 +37,9 @@ jobs:
       matrix:
         include:
           - { name: Windows, os: windows-latest }
-          - { name: macOS,   os: macos-latest }
+          # macos-latest (macOS 26) havuzu is almadan 15 dk'da dusuyordu; macos-15 ayri havuz.
+          # Cikti ayni: mimariler ve en dusuk macOS surumu CMakeLists.txt'te sabit.
+          - { name: macOS,   os: macos-15 }
           - { name: Linux,   os: ubuntu-22.04 }
 
     steps:
