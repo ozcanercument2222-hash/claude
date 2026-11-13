@@ -1,0 +1,9 @@
+build/
+build-*/
+*.o
+/dsp_test
+/v6_test
+.DS_Store
+.vs/
+out/
+CMakeUserPresets.json
