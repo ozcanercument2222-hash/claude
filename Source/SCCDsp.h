@@ -149,10 +149,10 @@ inline float pivotMap (float t, float v0, float vMid, float v1) noexcept
 }
 
 // Yumusak dizli statik egri: verilen giris seviyesi icin gain reduction (dB, >= 0)
-inline float grCurve (float levelDb, float thresholdDb, float ratio, float kneeDb) noexcept
+//   slope = 1 - 1/ratio   (0 = kompresyon yok, 1 = limiter)
+inline float grCurveSlope (float levelDb, float thresholdDb, float slope, float kneeDb) noexcept
 {
-    const float over  = levelDb - thresholdDb;
-    const float slope = 1.0f - 1.0f / std::max (ratio, 1.0f);
+    const float over = levelDb - thresholdDb;
 
     if (kneeDb < 0.01f)
         return over > 0.0f ? over * slope : 0.0f;
@@ -166,6 +166,11 @@ inline float grCurve (float levelDb, float thresholdDb, float ratio, float kneeD
         return slope * t * t / (2.0f * kneeDb);
     }
     return over * slope;
+}
+
+inline float grCurve (float levelDb, float thresholdDb, float ratio, float kneeDb) noexcept
+{
+    return grCurveSlope (levelDb, thresholdDb, 1.0f - 1.0f / std::max (ratio, 1.0f), kneeDb);
 }
 
 //==============================================================================
@@ -241,6 +246,7 @@ public:
 
     //--------------------------------------------------------------------------
     //  io : kanal basina bir isaretci dizisi (yerinde isler). 1 veya 2 kanal.
+    //  (V5 yolu: kazanci uygular, bypass + telemetri dahil.)
     //--------------------------------------------------------------------------
     void process (float* const* io, int numCh, int numSamples) noexcept
     {
@@ -248,18 +254,7 @@ public:
         if (numCh <= 0 || numSamples <= 0)
             return;
 
-        const CharacterParams& cp = characterFor (settings.mode);
-        curChar = &cp;
-
-        const float thrTarget   = thresholdForAmount (settings.amountPct);
-        const float ratioTarget = std::clamp (settings.ratio, 1.0f, 100.0f);
-        const float kneeTarget  = kneeFor (cp, settings.amountPct);
-
-        if (snapParams) { thr = thrTarget; ratio = ratioTarget; knee = kneeTarget; snapParams = false; }
-
-        const float paramStep  = 1.0f - paramCoef;
-        const float makeupStep = 1.0f - makeupCoef;
-        const bool  lowCutOn   = settings.lowCut;
+        const BlockParams bp = beginBlock();
         const float bypassTarget = settings.bypass ? 1.0f : 0.0f;
         const float bypassStep   = 1.0f - bypassCoef;
 
@@ -268,75 +263,28 @@ public:
 
         for (int n = 0; n < numSamples; ++n)
         {
-            thr   += (thrTarget   - thr)   * paramStep;
-            ratio += (ratioTarget - ratio) * paramStep;
-            knee  += (kneeTarget  - knee)  * paramStep;
-
-            // ---- yan zincir: stereo bagli tepe degeri
             float x[2] = { 0.0f, 0.0f };
-            float det = 0.0f, detRaw = 0.0f, inPow = 0.0f;
             for (int c = 0; c < numCh; ++c)
             {
                 float s = io[c][n];
                 if (! std::isfinite (s)) s = 0.0f;
                 x[c] = s;
-                const float a = std::abs (s);
-                inPk[c] = std::max (inPk[c], a);
-                detRaw  = std::max (detRaw, a);
-                inPow  += s * s;
-
-                // low-cut filtresi hep calisir (durum surekli kalsin), kullanimi LOW CUT'a bagli
-                const double yf = hpB0 * (double) s + hpZ1[c];
-                hpZ1[c] = hpB1 * (double) s - hpA1 * yf + hpZ2[c];
-                hpZ2[c] = hpB2 * (double) s - hpA2 * yf;
-                det = std::max (det, lowCutOn ? (float) std::abs (yf) : a);
-            }
-            inPow /= (float) numCh;
-
-            // tepe izleyici + orta vadeli RMS
-            pk = (det > pk) ? det : det + peakRelCoef * (pk - det);
-            ms = det * det + midCoef * (ms - det * det);
-
-            if (++ctrlCount >= ctrlInterval)
-            {
-                ctrlCount = 0;
-                updateControl();
+                inPk[c] = std::max (inPk[c], std::abs (s));
             }
 
-            // ---- kazanc hesabi (dB alani)
-            const float levelDb = 20.0f * std::log10 (std::max (pk, 1.0e-9f));
-            const float target  = grCurve (levelDb, thr, ratio, knee);
-
-            // "decoupled" yumusatma: once release (tepe tutma + ussel dusus), sonra attack
-            y1 = std::max (target, target + releaseCoef * (y1 - target));
-            gr = y1 + attackCoef * (gr - y1);
-            if (y1 < 1.0e-9f) y1 = 0.0f;
-            if (gr < 1.0e-9f) gr = 0.0f;
-            gr = std::min (gr, 80.0f);
-
-            const float gComp = std::exp (-gr * kLn10Over20);
-            makeupLin += (makeupTargetLin - makeupLin) * makeupStep;
+            float detRaw = 0.0f;
+            const float gComp = tick (x, numCh, bp, detRaw);
 
             bypassMix += (bypassTarget - bypassMix) * bypassStep;
             if (std::abs (bypassTarget - bypassMix) < 1.0e-4f) bypassMix = bypassTarget;
 
-            float outPow = 0.0f;
             for (int c = 0; c < numCh; ++c)
             {
                 const float yc  = x[c] * gComp;
-                outPow += yc * yc;
                 const float wet = yc * makeupLin;
                 const float yo  = wet + (x[c] - wet) * bypassMix;      // bypass: islenmis -> kuru gecis
                 io[c][n] = yo;
                 outPk[c] = std::max (outPk[c], std::abs (yo));
-            }
-            outPow /= (float) numCh;
-
-            // ---- auto gain enerji ortalamalari (sadece sinyal varken)
-            if (ms > kGatePower)
-            {
-                inE  += agUpdate * ((double) inPow  - inE);
-                outE += agUpdate * ((double) outPow - outE);
             }
 
             // ---- osiloskop kolonu
@@ -366,13 +314,136 @@ public:
         }
     }
 
+    //--------------------------------------------------------------------------
+    //  V6 yolu: sinyale DOKUNMAZ, sadece kazanci hesaplar.
+    //    in      : temiz (NaN/Inf icermeyen) giris, 1 veya 2 kanal
+    //    gainOut : ornek basina lineer kazanc (kompresyon * makeup)
+    //    grOut   : ornek basina gain reduction (dB, >= 0)  - nullptr olabilir
+    //  Ayni dedektor / adaptif analiz / auto gain; bypass ve telemetri ust katmanda.
+    //--------------------------------------------------------------------------
+    void processGain (const float* const* in, int numCh, int numSamples,
+                      float* gainOut, float* grOut = nullptr) noexcept
+    {
+        numCh = std::min (numCh, 2);
+        if (numCh <= 0 || numSamples <= 0)
+            return;
+
+        const BlockParams bp = beginBlock();
+
+        for (int n = 0; n < numSamples; ++n)
+        {
+            float x[2] = { in[0][n], numCh > 1 ? in[1][n] : 0.0f };
+            float detRaw = 0.0f;
+            const float gComp = tick (x, numCh, bp, detRaw);
+            gainOut[n] = gComp * makeupLin;
+            if (grOut != nullptr) grOut[n] = gr;
+        }
+    }
+
     // testler / GUI icin okuma
     float currentGrDb()     const noexcept { return gr; }
     float currentAttackMs() const noexcept { return attackMs; }
     float currentReleaseMs()const noexcept { return releaseMs; }
     float currentFluxDbPerSec() const noexcept { return fluxSm; }
+    float currentMakeupDb() const noexcept { return 20.0f * std::log10 (std::max (makeupLin, 1.0e-6f)); }
 
 private:
+    //--------------------------------------------------------------------------
+    //  Blok basinda bir kez hesaplanan hedefler
+    //--------------------------------------------------------------------------
+    struct BlockParams
+    {
+        float thrTarget, ratioTarget, kneeTarget;
+        float paramStep, makeupStep;
+        bool  lowCutOn;
+    };
+
+    BlockParams beginBlock() noexcept
+    {
+        const CharacterParams& cp = characterFor (settings.mode);
+        curChar = &cp;
+
+        BlockParams bp;
+        bp.thrTarget   = thresholdForAmount (settings.amountPct);
+        bp.ratioTarget = std::clamp (settings.ratio, 1.0f, 100.0f);
+        bp.kneeTarget  = kneeFor (cp, settings.amountPct);
+        bp.paramStep   = 1.0f - paramCoef;
+        bp.makeupStep  = 1.0f - makeupCoef;
+        bp.lowCutOn    = settings.lowCut;
+
+        if (snapParams) { thr = bp.thrTarget; ratio = bp.ratioTarget; knee = bp.kneeTarget; snapParams = false; }
+        return bp;
+    }
+
+    //--------------------------------------------------------------------------
+    //  Tek ornek: yan zincir + adaptif analiz + kazanc + auto gain olcumu.
+    //  x[] temizlenmis giris. Donus: kompresyon kazanci (makeup haric, lineer).
+    //--------------------------------------------------------------------------
+    float tick (const float* x, int numCh, const BlockParams& bp, float& detRaw) noexcept
+    {
+        thr   += (bp.thrTarget   - thr)   * bp.paramStep;
+        ratio += (bp.ratioTarget - ratio) * bp.paramStep;
+        knee  += (bp.kneeTarget  - knee)  * bp.paramStep;
+
+        // ---- yan zincir: stereo bagli tepe degeri
+        float det = 0.0f, inPow = 0.0f;
+        detRaw = 0.0f;
+        for (int c = 0; c < numCh; ++c)
+        {
+            const float s = x[c];
+            const float a = std::abs (s);
+            detRaw  = std::max (detRaw, a);
+            inPow  += s * s;
+
+            // low-cut filtresi hep calisir (durum surekli kalsin), kullanimi LOW CUT'a bagli
+            const double yf = hpB0 * (double) s + hpZ1[c];
+            hpZ1[c] = hpB1 * (double) s - hpA1 * yf + hpZ2[c];
+            hpZ2[c] = hpB2 * (double) s - hpA2 * yf;
+            det = std::max (det, bp.lowCutOn ? (float) std::abs (yf) : a);
+        }
+        inPow /= (float) numCh;
+
+        // tepe izleyici + orta vadeli RMS
+        pk = (det > pk) ? det : det + peakRelCoef * (pk - det);
+        ms = det * det + midCoef * (ms - det * det);
+
+        if (++ctrlCount >= ctrlInterval)
+        {
+            ctrlCount = 0;
+            updateControl();
+        }
+
+        // ---- kazanc hesabi (dB alani)
+        const float levelDb = 20.0f * std::log10 (std::max (pk, 1.0e-9f));
+        const float target  = grCurve (levelDb, thr, ratio, knee);
+
+        // "decoupled" yumusatma: once release (tepe tutma + ussel dusus), sonra attack
+        y1 = std::max (target, target + releaseCoef * (y1 - target));
+        gr = y1 + attackCoef * (gr - y1);
+        if (y1 < 1.0e-9f) y1 = 0.0f;
+        if (gr < 1.0e-9f) gr = 0.0f;
+        gr = std::min (gr, 80.0f);
+
+        const float gComp = std::exp (-gr * kLn10Over20);
+        makeupLin += (makeupTargetLin - makeupLin) * bp.makeupStep;
+
+        float outPow = 0.0f;
+        for (int c = 0; c < numCh; ++c)
+        {
+            const float yc = x[c] * gComp;
+            outPow += yc * yc;
+        }
+        outPow /= (float) numCh;
+
+        // ---- auto gain enerji ortalamalari (sadece sinyal varken)
+        if (ms > kGatePower)
+        {
+            inE  += agUpdate * ((double) inPow  - inE);
+            outE += agUpdate * ((double) outPow - outE);
+        }
+        return gComp;
+    }
+
     float pole     (float ms_)  const noexcept { return std::exp (-1.0f / (0.001f * ms_ * fs)); }
     float ctrlPole (float ms_)  const noexcept { return std::exp (-ctrlDt / (0.001f * ms_)); }
 
@@ -450,6 +521,9 @@ private:
     int   colCount = 0;
     float colIn = 0.0f;
 };
+
+// V6 moduler mimarideki adi
+using AdaptiveCompressor = Compressor;
 
 } // namespace scc
 
