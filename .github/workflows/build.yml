@@ -37,10 +37,13 @@ jobs:
       matrix:
         include:
           - { name: Windows, os: windows-latest }
-          # macos-latest (macOS 26) ve macos-15 (ikisi de Apple Silicon makineler) isi makine
-          # atanmadan 15 dk'da dusuruyordu; macos-15-intel farkli donanim havuzu.
+          # Kasim 2026: GitHub'in macOS makine kapasitesi sorunu yuzunden isler makine atanmadan
+          # 15 dk'da iptal olabiliyor (github.com/orgs/community/discussions/211885). Yogun
+          # saatlerde macos-latest, macos-15 ve macos-15-intel ayni sekilde dustu; cozum, isi
+          # daha sakin bir saatte "Re-run failed jobs" ile yeniden baslatmak.
+          # macos-15: macos-latest (macOS 26) alamazken makine alabildigi bildirilen havuz.
           # Cikti ayni: mimariler ve en dusuk macOS surumu CMakeLists.txt'te sabit.
-          - { name: macOS,   os: macos-15-intel }
+          - { name: macOS,   os: macos-15 }
           - { name: Linux,   os: ubuntu-22.04 }
 
     steps:
