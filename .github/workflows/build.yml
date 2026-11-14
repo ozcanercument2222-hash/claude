@@ -122,30 +122,6 @@ jobs:
           path: paket/
           if-no-files-found: error
 
-      # GECICI TANI: macOS'ta "V5 korunuyor" testindeki fark hangi derleyici ayarindan geliyor?
-      - name: Tani (gecici) - macOS kayan nokta farki
-        if: runner.os == 'macOS'
-        continue-on-error: true
-        shell: bash
-        run: |
-          c++ --version
-          grep -E "^CMAKE_CXX_FLAGS(_RELEASE)?:|^CMAKE_CXX_COMPILER:" build/CMakeCache.txt || true
-          echo "--- test programinin disaridan kullandigi matematik sembolleri"
-          nm -u -arch arm64 build/SCC_V6Test | grep -i -E "simd|exp|log|pow" || true
-          try() {
-            name="$1"; shift
-            if c++ -std=c++17 -DSCC_BUILD_DSP_TEST "$@" tests/v6_test.cpp -o "$RUNNER_TEMP/v6_$name" 2> "$RUNNER_TEMP/err_$name"; then
-              echo "== $name ($*)"
-              "$RUNNER_TEMP/v6_$name" | grep -A40 "=== 2)" | grep -E "FAIL|adimlar|tani|katsayi|Smooth|Balanced|Hard " || true
-            else
-              echo "== $name ($*): derlenemedi"; head -5 "$RUNNER_TEMP/err_$name"
-            fi
-          }
-          try tani_o3           -O3 -DSCC_TEST_TANI
-          try tani_o1           -O1 -DSCC_TEST_TANI
-          try nobuiltin_o3      -O3 -fno-builtin
-          try tani_nobuiltin_o3 -O3 -fno-builtin -DSCC_TEST_TANI
-
       # JUCE gerektirmeyen DSP testleri: V5 davranisi + V6 olcumleri
       - name: DSP testleri
         shell: bash

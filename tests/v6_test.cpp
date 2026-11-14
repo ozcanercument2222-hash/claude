@@ -12,19 +12,8 @@
 //   A/B, dayaniklilik, gercek zaman guvenligi (bellek ayirma yok) ve islemci yuku.
 #ifdef SCC_BUILD_DSP_TEST
 
-#ifdef SCC_TEST_TANI      // GECICI TANI: katsayilari okuyabilmek icin (yalnizca elle derlemede)
- #include <algorithm>
- #include <atomic>
- #include <cmath>
- #include <cstdint>
- #include <vector>
- #define private public
-#endif
 #include "../Source/SCCEngine.h"
 #include "../Source/SCCCharacterAnalysis.h"
-#ifdef SCC_TEST_TANI
- #undef private
-#endif
 
 #include <chrono>
 #include <cstdio>
@@ -279,16 +268,26 @@ int main()
     std::printf ("\n=== 2) V5 korunuyor: V6 motoru (Adaptive, Character kapali) == V5 kompresor ===\n");
     {
         auto v = makeVoice (8.0);
+
+        // Ornekleme hizi burada bilerek calisma zamani degeridir (plugin'de de host oyle verir).
+        // Derleme zamani sabiti olursa derleyici, dogrudan kurulan Compressor'da prepare()
+        // katsayilarini (exp) kendisi hesaplar, Engine'in icindekinde ise calisma zamani
+        // kutuphanesi hesaplar. 48 kHz'de 80 ms'lik katsayi iki float'in neredeyse tam
+        // ortasina duser (hata -0.5024 / +0.4976 ULP); Apple Silicon'da iki hesap bu yuzden
+        // son basamakta ayrilir ve adaptif analiz 1 ULP'yi ~1e-3 dB'ye (cikista 4e-05) buyutur.
+        volatile double fsRuntime = kFs;
+        const double fs = fsRuntime;
+
         for (int mode = 0; mode < 3; ++mode)
         {
             Settings s; s.amountPct = 70; s.ratio = 6; s.mode = mode; s.autoGain = true; s.lowCut = (mode == 1);
 
             std::vector<float> L5 = v, R5 = v;
-            Compressor c5; c5.prepare (kFs); c5.setSettings (s);
+            Compressor c5; c5.prepare (fs); c5.setSettings (s);
             runStereo (c5, L5, R5);
 
             std::vector<float> L6 = v, R6 = v;
-            Engine e; e.prepare (kFs);
+            Engine e; e.prepare (fs);
             EngineSettings es; es.adaptive = s;
             e.setSettings (es);
             runStereo (e, L6, R6);
@@ -297,124 +296,6 @@ int main()
             for (size_t i = 0; i < v.size(); ++i) maxErr = std::max (maxErr, (double) std::abs (L5[i] - L6[i]));
             const char* names[3] = { "Smooth", "Balanced", "Hard" };
             CHECK (maxErr < 2.0e-6, "%-8s : V5 ile en buyuk fark %.2e (ayni ses)", names[mode], maxErr);
-
-            // Fark hangi adimda olusuyor? (bilgi amacli: V5 process -> processGain -> + flush-to-zero -> Engine)
-            auto gainPath = [&v, &s] (bool flush)
-            {
-                Compressor c; c.prepare (kFs); c.setSettings (s);
-                std::vector<float> out (v.size()), g (256);
-                for (size_t i = 0; i < v.size(); i += 256)
-                {
-                    const int len = (int) std::min ((size_t) 256, v.size() - i);
-                    const float* in[2] = { v.data() + i, v.data() + i };
-                    if (flush) { const ScopedFlushDenormals fz; c.processGain (in, 2, len, g.data()); }
-                    else       {                                c.processGain (in, 2, len, g.data()); }
-                    for (int k = 0; k < len; ++k) out[i + (size_t) k] = v[i + (size_t) k] * g[(size_t) k];
-                }
-                return out;
-            };
-            auto diff = [] (const std::vector<float>& a, const std::vector<float>& b, long& first)
-            {
-                double m = 0; first = -1;
-                for (size_t i = 0; i < a.size(); ++i)
-                {
-                    const double d = std::abs ((double) a[i] - (double) b[i]);
-                    if (d > 1.0e-6 && first < 0) first = (long) i;
-                    m = std::max (m, d);
-                }
-                return m;
-            };
-            const auto G = gainPath (false), Gz = gainPath (true);
-            long f1, f2, f3;
-            const double d1 = diff (L5, G, f1), d2 = diff (G, Gz, f2), d3 = diff (Gz, L6, f3);
-            std::printf ("           adimlar: process->processGain %.2e (ilk %ld), +flush-to-zero %.2e (ilk %ld), ->Engine %.2e (ilk %ld)\n",
-                         d1, f1, d2, f2, d3, f3);
-
-            // GECICI TANI: Engine'in yaptigini adim adim taklit et (64'luk parcalar, Analog kompresor, karisim)
-            if (mode == 0)
-            {
-                long nonFinite = 0; float gmMin = 1.0e30f, gmMax = -1.0e30f;
-                auto variant = [&] (bool withManual, bool withMix)
-                {
-                    Compressor a; a.prepare (kFs); a.setSettings (s);
-                    ManualCompressor m; m.prepare (kFs); m.setSettings (ManualSettings());
-                    std::vector<float> out (v.size());
-                    float gA[64], gM[64], grA[64], grM[64];
-                    volatile float zero = 0.0f;
-                    for (size_t i = 0; i < v.size(); i += 256)
-                    {
-                        const int len = (int) std::min ((size_t) 256, v.size() - i);
-                        const ScopedFlushDenormals fz;
-                        for (int done = 0; done < len; )
-                        {
-                            const int n = std::min (64, len - done);
-                            const float* in[2] = { v.data() + i + (size_t) done, v.data() + i + (size_t) done };
-                            a.processGain (in, 2, n, gA, grA);
-                            if (withManual) m.processGain (in, 2, n, gM, grM);
-                            else            std::fill (gM, gM + 64, 1.0f);
-                            for (int k = 0; k < n; ++k)
-                            {
-                                if (! std::isfinite (gM[k])) ++nonFinite;
-                                gmMin = std::min (gmMin, gM[k]); gmMax = std::max (gmMax, gM[k]);
-                                const float mm = zero;
-                                const float gg = withMix ? gA[k] + (gM[k] - gA[k]) * mm : gA[k];
-                                out[i + (size_t) (done + k)] = v[i + (size_t) (done + k)] * gg;
-                            }
-                            done += n;
-                        }
-                    }
-                    return out;
-                };
-                long q;
-                const auto A = variant (false, false), B = variant (true, false), C = variant (true, true);
-                std::printf ("           tani: parca64 %.2e, +analog %.2e, +karisim %.2e, karisim->Engine %.2e; gM [%g, %g], sonlu olmayan %ld\n",
-                             diff (G, A, q), diff (G, B, q), diff (G, C, q), diff (C, L6, q), (double) gmMin, (double) gmMax, nonFinite);
-
-                // Engine'in icindeki adaptif kompresorun durumu, yan yana calisan bagimsiz bir kopyayla ne zaman ayriliyor?
-                Engine e2; e2.prepare (kFs); EngineSettings es2; es2.adaptive = s; e2.setSettings (es2);
-                Compressor ref; ref.prepare (kFs); ref.setSettings (s);
-                std::vector<float> L = v, R = v, g (256);
-                long fGr = -1, fAtk = -1, fRel = -1, fFlux = -1, fMk = -1, fOut = -1;
-                double dGr = 0, dAtk = 0, dRel = 0, dFlux = 0, dMk = 0;
-                for (size_t i = 0; i < v.size(); i += 256)
-                {
-                    const int len = (int) std::min ((size_t) 256, v.size() - i);
-                    const float* in[2] = { v.data() + i, v.data() + i };
-                    ref.processGain (in, 2, len, g.data());
-                    float* ch[2] = { L.data() + i, R.data() + i };
-                    e2.process (ch, 2, len);
-                    const Compressor& ea = e2.adaptiveCompressor();
-                    const long blk = (long) (i / 256);
-                    auto cmp = [blk] (float x, float y, long& first, double& maxD)
-                    {
-                        if (x != y && first < 0) first = blk;
-                        maxD = std::max (maxD, (double) std::abs (x - y));
-                    };
-                    cmp (ea.currentGrDb(),          ref.currentGrDb(),          fGr,   dGr);
-                    cmp (ea.currentAttackMs(),      ref.currentAttackMs(),      fAtk,  dAtk);
-                    cmp (ea.currentReleaseMs(),     ref.currentReleaseMs(),     fRel,  dRel);
-                    cmp (ea.currentFluxDbPerSec(),  ref.currentFluxDbPerSec(),  fFlux, dFlux);
-                    cmp (ea.currentMakeupDb(),      ref.currentMakeupDb(),      fMk,   dMk);
-                    for (int k = 0; k < len && fOut < 0; ++k)
-                        if (L[i + (size_t) k] != v[i + (size_t) k] * g[(size_t) k]) fOut = (long) (i + (size_t) k);
-                    if (blk == 0)
-                        std::printf ("           tani: blok 0 sonu -> attack %a / %a, release %a / %a, flux %a / %a (bagimsiz / engine)\n",
-                                     (double) ref.currentAttackMs(), (double) ea.currentAttackMs(), (double) ref.currentReleaseMs(), (double) ea.currentReleaseMs(),
-                                     (double) ref.currentFluxDbPerSec(), (double) ea.currentFluxDbPerSec());
-                }
-               #ifdef SCC_TEST_TANI
-                {
-                    const Compressor& ea = e2.adaptive;
-                    #define SCC_TANI_P(n) std::printf ("           katsayi %-12s bagimsiz %a  engine %a%s\n", #n, (double) ref.n, (double) ea.n, ref.n == ea.n ? "" : "   <-- FARKLI")
-                    SCC_TANI_P (fs); SCC_TANI_P (ctrlDt); SCC_TANI_P (peakRelCoef); SCC_TANI_P (midCoef); SCC_TANI_P (paramCoef); SCC_TANI_P (makeupCoef);
-                    SCC_TANI_P (dRiseCoef); SCC_TANI_P (dFallCoef); SCC_TANI_P (fluxCoef); SCC_TANI_P (agUpdate);
-                    SCC_TANI_P (hpB0); SCC_TANI_P (hpB1); SCC_TANI_P (hpA1); SCC_TANI_P (hpA2);
-                    std::printf ("           katsayi ctrlInterval bagimsiz %d engine %d\n", ref.ctrlInterval, ea.ctrlInterval);
-                }
-               #endif
-                std::printf ("           tani: ilk ayrilan blok (256 ornek) / en buyuk fark -> GR %ld / %.2e dB, attack %ld / %.2e ms, release %ld / %.2e ms, flux %ld / %.2e, makeup %ld / %.2e dB; ilk farkli cikis ornegi %ld\n",
-                             fGr, dGr, fAtk, dAtk, fRel, dRel, fFlux, dFlux, fMk, dMk, fOut);
-            }
         }
     }
 
