@@ -286,6 +286,38 @@ int main()
             for (size_t i = 0; i < v.size(); ++i) maxErr = std::max (maxErr, (double) std::abs (L5[i] - L6[i]));
             const char* names[3] = { "Smooth", "Balanced", "Hard" };
             CHECK (maxErr < 2.0e-6, "%-8s : V5 ile en buyuk fark %.2e (ayni ses)", names[mode], maxErr);
+
+            // Fark hangi adimda olusuyor? (bilgi amacli: V5 process -> processGain -> + flush-to-zero -> Engine)
+            auto gainPath = [&v, &s] (bool flush)
+            {
+                Compressor c; c.prepare (kFs); c.setSettings (s);
+                std::vector<float> out (v.size()), g (256);
+                for (size_t i = 0; i < v.size(); i += 256)
+                {
+                    const int len = (int) std::min ((size_t) 256, v.size() - i);
+                    const float* in[2] = { v.data() + i, v.data() + i };
+                    if (flush) { const ScopedFlushDenormals fz; c.processGain (in, 2, len, g.data()); }
+                    else       {                                c.processGain (in, 2, len, g.data()); }
+                    for (int k = 0; k < len; ++k) out[i + (size_t) k] = v[i + (size_t) k] * g[(size_t) k];
+                }
+                return out;
+            };
+            auto diff = [] (const std::vector<float>& a, const std::vector<float>& b, long& first)
+            {
+                double m = 0; first = -1;
+                for (size_t i = 0; i < a.size(); ++i)
+                {
+                    const double d = std::abs ((double) a[i] - (double) b[i]);
+                    if (d > 1.0e-6 && first < 0) first = (long) i;
+                    m = std::max (m, d);
+                }
+                return m;
+            };
+            const auto G = gainPath (false), Gz = gainPath (true);
+            long f1, f2, f3;
+            const double d1 = diff (L5, G, f1), d2 = diff (G, Gz, f2), d3 = diff (Gz, L6, f3);
+            std::printf ("           adimlar: process->processGain %.2e (ilk %ld), +flush-to-zero %.2e (ilk %ld), ->Engine %.2e (ilk %ld)\n",
+                         d1, f1, d2, f2, d3, f3);
         }
     }
 
