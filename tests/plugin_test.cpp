@@ -36,6 +36,20 @@ namespace
 
     bool near (float a, float b, float tol = 1.0e-4f) { return std::abs (a - b) <= tol; }
 
+    // Iki karakter ayni mi? Slot degerleri parametrelere yazilip geri okunur (gercek deger -> 0..1 ->
+    // gercek deger). Bu gidis-donus FMA kullanan islemcilerde (Apple Silicon) son basamakta
+    // oynayabilir: 20 -> 20.000002, -10 -> -9.999999. Degerler 0.1 adimli oldugu icin 0.001'lik
+    // pay fazlasiyla siki; yanlis slot / yanlis preset gibi gercek hatalar tam birimlerle ayrilir.
+    bool sameSpec (const scc::CharacterSpec& a, const scc::CharacterSpec& b, float tol = 1.0e-3f)
+    {
+        if (a.type != b.type)
+            return false;
+        for (int i = 0; i < scc::kNumCustomParams; ++i)
+            if (! (std::abs (a.custom[i] - b.custom[i]) <= tol))
+                return false;
+        return true;
+    }
+
     // Ses benzeri test sinyali: harmonikli ton + hece zarfi
     void fillVoice (juce::AudioBuffer<float>& buffer, juce::int64 startSample, double fs = kFs)
     {
@@ -405,7 +419,8 @@ int main (int argc, char* argv[])
         const int crunch = pm.indexOf ("Crunch"), velvet = pm.indexOf ("Velvet Even");
 
         p.loadCharacterPreset (0, crunch);
-        CHECK (p.getSlotSpec (0) == pm.getPreset (crunch).spec && p.getSlotPresetName (0) == "Crunch" && (int) paramValue (p, "ca_type") == scc::kCharCustom,
+        CHECK (sameSpec (p.getSlotSpec (0), pm.getPreset (crunch).spec) && p.getSlotPresetName (0) == "Crunch"
+               && (int) std::lround (paramValue (p, "ca_type")) == scc::kCharCustom,
                "preset A slotuna yuklendi: 15 deger + tip parametrelere yazildi");
         CHECK (! p.isSlotModified (0), "yukledikten hemen sonra degisiklik isareti yok");
 
@@ -415,17 +430,18 @@ int main (int argc, char* argv[])
         p.loadCharacterPreset (1, velvet);
         const auto a = p.getSlotSpec (0), b = p.getSlotSpec (1);
         p.swapSlots();
-        CHECK (p.getSlotSpec (0) == b && p.getSlotSpec (1) == a && p.getSlotPresetName (0) == "Velvet Even" && p.getSlotPresetName (1) == "Crunch",
+        CHECK (sameSpec (p.getSlotSpec (0), b) && sameSpec (p.getSlotSpec (1), a) && ! sameSpec (a, b)
+               && p.getSlotPresetName (0) == "Velvet Even" && p.getSlotPresetName (1) == "Crunch",
                "SWAP: A ve B yer degistirdi (adlariyla birlikte)");
 
         p.copySlot (0, 1);
-        CHECK (p.getSlotSpec (1) == p.getSlotSpec (0) && p.getSlotPresetName (1) == "Velvet Even", "COPY: A, B'ye kopyalandi");
+        CHECK (sameSpec (p.getSlotSpec (1), p.getSlotSpec (0)) && p.getSlotPresetName (1) == "Velvet Even", "COPY: A, B'ye kopyalandi");
 
         // kompresor presetleri karakter slotlarina dokunmaz
         const auto before = p.getSlotSpec (0);
         p.setParameterReal ("analog", 1.0f);
         p.applyPreset (5);
-        CHECK (p.getSlotSpec (0) == before && paramValue (p, "analog") < 0.5f && std::abs (paramValue (p, "amount") - 85.0f) < 0.01f,
+        CHECK (sameSpec (p.getSlotSpec (0), before) && paramValue (p, "analog") < 0.5f && std::abs (paramValue (p, "amount") - 85.0f) < 0.01f,
                "kompresor preseti (Radio Rap): Adaptive'e doner, karakteri degistirmez");
     }
 
