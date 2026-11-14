@@ -136,19 +136,13 @@ jobs:
             name="$1"; shift
             if c++ -std=c++17 -DSCC_BUILD_DSP_TEST "$@" tests/v6_test.cpp -o "$RUNNER_TEMP/v6_$name" 2> "$RUNNER_TEMP/err_$name"; then
               echo "== $name ($*)"
-              "$RUNNER_TEMP/v6_$name" | grep -A6 "=== 2)" | grep -E "FAIL|OK|adimlar" || true
+              "$RUNNER_TEMP/v6_$name" | grep -A12 "=== 2)" | grep -E "FAIL|OK|adimlar|tani" || true
             else
               echo "== $name ($*): derlenemedi"; head -5 "$RUNNER_TEMP/err_$name"
             fi
           }
-          try cmake_gibi    -O3 -DNDEBUG -mmacosx-version-min=11.0
-          try o3            -O3
-          try o3_nocontract -O3 -ffp-contract=off
-          try o3_novec      -O3 -fno-slp-vectorize -fno-vectorize
-          try o3_noveclib   -O3 -fveclib=none
-          try o2            -O2
-          try o1            -O1
-          try intel         -O3 -arch x86_64
+          try o0            -O0
+          try o0_nocontract -O0 -ffp-contract=off
 
       # JUCE gerektirmeyen DSP testleri: V5 davranisi + V6 olcumleri
       - name: DSP testleri

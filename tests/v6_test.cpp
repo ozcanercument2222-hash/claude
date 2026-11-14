@@ -318,6 +318,78 @@ int main()
             const double d1 = diff (L5, G, f1), d2 = diff (G, Gz, f2), d3 = diff (Gz, L6, f3);
             std::printf ("           adimlar: process->processGain %.2e (ilk %ld), +flush-to-zero %.2e (ilk %ld), ->Engine %.2e (ilk %ld)\n",
                          d1, f1, d2, f2, d3, f3);
+
+            // GECICI TANI: Engine'in yaptigini adim adim taklit et (64'luk parcalar, Analog kompresor, karisim)
+            if (mode == 0)
+            {
+                long nonFinite = 0; float gmMin = 1.0e30f, gmMax = -1.0e30f;
+                auto variant = [&] (bool withManual, bool withMix)
+                {
+                    Compressor a; a.prepare (kFs); a.setSettings (s);
+                    ManualCompressor m; m.prepare (kFs); m.setSettings (ManualSettings());
+                    std::vector<float> out (v.size());
+                    float gA[64], gM[64], grA[64], grM[64];
+                    volatile float zero = 0.0f;
+                    for (size_t i = 0; i < v.size(); i += 256)
+                    {
+                        const int len = (int) std::min ((size_t) 256, v.size() - i);
+                        const ScopedFlushDenormals fz;
+                        for (int done = 0; done < len; )
+                        {
+                            const int n = std::min (64, len - done);
+                            const float* in[2] = { v.data() + i + (size_t) done, v.data() + i + (size_t) done };
+                            a.processGain (in, 2, n, gA, grA);
+                            if (withManual) m.processGain (in, 2, n, gM, grM);
+                            else            std::fill (gM, gM + 64, 1.0f);
+                            for (int k = 0; k < n; ++k)
+                            {
+                                if (! std::isfinite (gM[k])) ++nonFinite;
+                                gmMin = std::min (gmMin, gM[k]); gmMax = std::max (gmMax, gM[k]);
+                                const float mm = zero;
+                                const float gg = withMix ? gA[k] + (gM[k] - gA[k]) * mm : gA[k];
+                                out[i + (size_t) (done + k)] = v[i + (size_t) (done + k)] * gg;
+                            }
+                            done += n;
+                        }
+                    }
+                    return out;
+                };
+                long q;
+                const auto A = variant (false, false), B = variant (true, false), C = variant (true, true);
+                std::printf ("           tani: parca64 %.2e, +analog %.2e, +karisim %.2e, karisim->Engine %.2e; gM [%g, %g], sonlu olmayan %ld\n",
+                             diff (G, A, q), diff (G, B, q), diff (G, C, q), diff (C, L6, q), (double) gmMin, (double) gmMax, nonFinite);
+
+                // Engine'in icindeki adaptif kompresorun durumu, yan yana calisan bagimsiz bir kopyayla ne zaman ayriliyor?
+                Engine e2; e2.prepare (kFs); EngineSettings es2; es2.adaptive = s; e2.setSettings (es2);
+                Compressor ref; ref.prepare (kFs); ref.setSettings (s);
+                std::vector<float> L = v, R = v, g (256);
+                long fGr = -1, fAtk = -1, fRel = -1, fFlux = -1, fMk = -1, fOut = -1;
+                double dGr = 0, dAtk = 0, dRel = 0, dFlux = 0, dMk = 0;
+                for (size_t i = 0; i < v.size(); i += 256)
+                {
+                    const int len = (int) std::min ((size_t) 256, v.size() - i);
+                    const float* in[2] = { v.data() + i, v.data() + i };
+                    ref.processGain (in, 2, len, g.data());
+                    float* ch[2] = { L.data() + i, R.data() + i };
+                    e2.process (ch, 2, len);
+                    const Compressor& ea = e2.adaptiveCompressor();
+                    const long blk = (long) (i / 256);
+                    auto cmp = [blk] (float x, float y, long& first, double& maxD)
+                    {
+                        if (x != y && first < 0) first = blk;
+                        maxD = std::max (maxD, (double) std::abs (x - y));
+                    };
+                    cmp (ea.currentGrDb(),          ref.currentGrDb(),          fGr,   dGr);
+                    cmp (ea.currentAttackMs(),      ref.currentAttackMs(),      fAtk,  dAtk);
+                    cmp (ea.currentReleaseMs(),     ref.currentReleaseMs(),     fRel,  dRel);
+                    cmp (ea.currentFluxDbPerSec(),  ref.currentFluxDbPerSec(),  fFlux, dFlux);
+                    cmp (ea.currentMakeupDb(),      ref.currentMakeupDb(),      fMk,   dMk);
+                    for (int k = 0; k < len && fOut < 0; ++k)
+                        if (L[i + (size_t) k] != v[i + (size_t) k] * g[(size_t) k]) fOut = (long) (i + (size_t) k);
+                }
+                std::printf ("           tani: ilk ayrilan blok (256 ornek) / en buyuk fark -> GR %ld / %.2e dB, attack %ld / %.2e ms, release %ld / %.2e ms, flux %ld / %.2e, makeup %ld / %.2e dB; ilk farkli cikis ornegi %ld\n",
+                             fGr, dGr, fAtk, dAtk, fRel, dRel, fFlux, dFlux, fMk, dMk, fOut);
+            }
         }
     }
 
