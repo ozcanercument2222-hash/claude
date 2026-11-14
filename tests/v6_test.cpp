@@ -12,8 +12,19 @@
 //   A/B, dayaniklilik, gercek zaman guvenligi (bellek ayirma yok) ve islemci yuku.
 #ifdef SCC_BUILD_DSP_TEST
 
+#ifdef SCC_TEST_TANI      // GECICI TANI: katsayilari okuyabilmek icin (yalnizca elle derlemede)
+ #include <algorithm>
+ #include <atomic>
+ #include <cmath>
+ #include <cstdint>
+ #include <vector>
+ #define private public
+#endif
 #include "../Source/SCCEngine.h"
 #include "../Source/SCCCharacterAnalysis.h"
+#ifdef SCC_TEST_TANI
+ #undef private
+#endif
 
 #include <chrono>
 #include <cstdio>
@@ -386,7 +397,21 @@ int main()
                     cmp (ea.currentMakeupDb(),      ref.currentMakeupDb(),      fMk,   dMk);
                     for (int k = 0; k < len && fOut < 0; ++k)
                         if (L[i + (size_t) k] != v[i + (size_t) k] * g[(size_t) k]) fOut = (long) (i + (size_t) k);
+                    if (blk == 0)
+                        std::printf ("           tani: blok 0 sonu -> attack %a / %a, release %a / %a, flux %a / %a (bagimsiz / engine)\n",
+                                     (double) ref.currentAttackMs(), (double) ea.currentAttackMs(), (double) ref.currentReleaseMs(), (double) ea.currentReleaseMs(),
+                                     (double) ref.currentFluxDbPerSec(), (double) ea.currentFluxDbPerSec());
                 }
+               #ifdef SCC_TEST_TANI
+                {
+                    const Compressor& ea = e2.adaptive;
+                    #define SCC_TANI_P(n) std::printf ("           katsayi %-12s bagimsiz %a  engine %a%s\n", #n, (double) ref.n, (double) ea.n, ref.n == ea.n ? "" : "   <-- FARKLI")
+                    SCC_TANI_P (fs); SCC_TANI_P (ctrlDt); SCC_TANI_P (peakRelCoef); SCC_TANI_P (midCoef); SCC_TANI_P (paramCoef); SCC_TANI_P (makeupCoef);
+                    SCC_TANI_P (dRiseCoef); SCC_TANI_P (dFallCoef); SCC_TANI_P (fluxCoef); SCC_TANI_P (agUpdate);
+                    SCC_TANI_P (hpB0); SCC_TANI_P (hpB1); SCC_TANI_P (hpA1); SCC_TANI_P (hpA2);
+                    std::printf ("           katsayi ctrlInterval bagimsiz %d engine %d\n", ref.ctrlInterval, ea.ctrlInterval);
+                }
+               #endif
                 std::printf ("           tani: ilk ayrilan blok (256 ornek) / en buyuk fark -> GR %ld / %.2e dB, attack %ld / %.2e ms, release %ld / %.2e ms, flux %ld / %.2e, makeup %ld / %.2e dB; ilk farkli cikis ornegi %ld\n",
                              fGr, dGr, fAtk, dAtk, fRel, dRel, fFlux, dFlux, fMk, dMk, fOut);
             }

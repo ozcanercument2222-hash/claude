@@ -136,13 +136,15 @@ jobs:
             name="$1"; shift
             if c++ -std=c++17 -DSCC_BUILD_DSP_TEST "$@" tests/v6_test.cpp -o "$RUNNER_TEMP/v6_$name" 2> "$RUNNER_TEMP/err_$name"; then
               echo "== $name ($*)"
-              "$RUNNER_TEMP/v6_$name" | grep -A12 "=== 2)" | grep -E "FAIL|OK|adimlar|tani" || true
+              "$RUNNER_TEMP/v6_$name" | grep -A40 "=== 2)" | grep -E "FAIL|adimlar|tani|katsayi|Smooth|Balanced|Hard " || true
             else
               echo "== $name ($*): derlenemedi"; head -5 "$RUNNER_TEMP/err_$name"
             fi
           }
-          try o0            -O0
-          try o0_nocontract -O0 -ffp-contract=off
+          try tani_o3           -O3 -DSCC_TEST_TANI
+          try tani_o1           -O1 -DSCC_TEST_TANI
+          try nobuiltin_o3      -O3 -fno-builtin
+          try tani_nobuiltin_o3 -O3 -fno-builtin -DSCC_TEST_TANI
 
       # JUCE gerektirmeyen DSP testleri: V5 davranisi + V6 olcumleri
       - name: DSP testleri
