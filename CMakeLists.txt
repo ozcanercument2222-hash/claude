@@ -81,6 +81,8 @@ set(SCC_PLUGIN_SOURCES
     Source/CharacterPresetManager.cpp
     Source/CharacterPresetManager.h
     Source/UIComponents.h
+    Source/SCCKnobStyle.h
+    Source/SCCKnobFont.h
     Source/AnalyzerViews.h)
 
 # DSP cekirdegi (JUCE'dan bagimsiz, yalnizca baslik dosyalari)

@@ -50,7 +50,6 @@ private:
     sccui::ScopeView scope;
     sccui::LevelMeter inMeter, outMeter;
     sccui::ThresholdDisplay thresholdDisplay;
-    sccui::ValueText amountValue    { 30.0f };
     sccui::ValueText thresholdValue { 24.0f };
     sccui::ReadoutBox ratioBox, attackBox, releaseBox, kneeBox;
     std::array<std::unique_ptr<sccui::NeonButton>, 6> ratioButtons;

@@ -60,6 +60,34 @@ macOS "doğrulanamadı" derse: Sistem Ayarları → Gizlilik ve Güvenlik → "Y
 
 Plugin kimliği V5 ile aynıdır (`Sccx` / `Scc1`, `com.sccaudio.scc`): V6, V5'in yerine geçer ve V5 oturumlarını açar.
 
+## Knob görünümü
+
+Bütün knob'lar (ana knob, Analog Mode, Character Designer) tek bir çizim koduyla çizilir:
+fırçalanmış çelik çerçeve, kara cam kubbe, parlayan beyaz yay ve çerçeveyi aşan kapsül işaretçi.
+Değer, kubbenin ortasında gömülü **Oxanium** yazı tipiyle yazılır (rakamlar eşit genişliktedir, değer değişirken titremez).
+
+![Knob'lar: önce / sonra](docs/knob_onceki_sonraki.png)
+
+- **Etkileşim koduna dokunulmadı:** sürükleme, çift tık, tekerlek JUCE `Slider`'ın kendi davranışıdır. Yeni olan tek şey, fare üstündeyken çerçevenin parlamasıdır.
+- **Kilitli** (tip seçiliyken Designer knob'ları) knob'lar gri yay ve gri değerle solar, yine okunur.
+- **Iki kutuplu** knob'larda (TRANSIENT, LOW, HIGH) yay 12 yönünden başlar ve orta çentik görünür.
+- Çerçeve + cam + iz bandı bir kez, ekranın gerçek piksel çözünürlüğünde (1x / 2x) çizilip saklanır; değer
+  değişince yalnızca yay, işaretçi ve yazı yeniden çizilir (ölçülen: küçük knob ≈ 0.7 ms, ana knob ≈ 1.7 ms).
+
+Ayar noktaları (`Source/SCCKnobStyle.h`):
+
+| Ne | Nerede |
+|---|---|
+| Yay / işaretçi / yazı rengi (varsayılan sıcak beyaz). Eski neon yeşil için `= kNeon` yap | `kKnobLight` |
+| Çerçeve, yay, işaretçi kalınlıkları ve oranları | `struct Geo` |
+| Çeliğin ışık dağılımı, fırça dokusu | `makeBezelImage` |
+| Yay çevresindeki parlama | `KnobRenderer::draw` içindeki "yay parlaması" döngüsü |
+| Değerin knob'un altında yazılması (eski düzen) | `LabeledKnob::setValueInside (false)` |
+
+Yazı tipi: **Oxanium** (Medium, SIL Open Font License 1.1). `Source/SCCKnobFont.h` içine bayt dizisi olarak
+gömülüdür; ek dosya ya da BinaryData gerekmez, yalnızca `Source` klasörünü kendi projene eklemek yeter.
+Lisans metni: `Resources/OFL-Oxanium.txt` (plugin'i dağıtırsan lisans metnini de birlikte ver).
+
 ## Ekranlar
 
 | ADAPTIVE | ANALOG |
@@ -75,7 +103,7 @@ Plugin kimliği V5 ile aynıdır (`Sccx` / `Scc1`, `com.sccaudio.scc`): V6, V5'i
 **Ana ekran** (960 × 736, pencere 600–1920 piksel arasında büyütülebilir; boyut hatırlanır)
 
 - üst: kompresör PRESET'i, BYPASS, **MODE** (ADAPTIVE / ANALOG)
-- orta: IN / OUT metreleri, threshold göstergesi (diz şeridiyle), ana knob, dalga formu + gain reduction
+- orta: IN / OUT metreleri, threshold göstergesi (diz şeridiyle), ana knob (değeri kubbenin ortasında), dalga formu + gain reduction
 - alt çubuk: ratio ve seçenekler (moda göre değişir)
 - en alt: **CHARACTER** şeridi – ON, AMOUNT, tip, MATCH, A/B, CHARACTER DESIGNER
 
@@ -336,6 +364,7 @@ Windows'ta 1 ve 2 için: `cmake --build build --config Release --target SCC_DspT
 Bu sürüm Linux'ta derlendi ve test edildi (VST3 + Standalone). Şunlar **senin tarafında** denenmeli:
 
 - **macOS ve Windows derlemesi, AU formatı** (burada derlenemedi; kod taşınabilir yazıldı ama denenmedi).
+- **Yeni knob'ların macOS ve Windows'ta görünümü** (gömülü yazı tipi ve HiDPI çizimi yalnızca Linux'ta görüntü olarak doğrulandı; DAW'da pencereyi 100 % / 150 % / 200 % ölçekte açıp bak).
 - **Gerçek bir DAW içinde** kullanım: otomasyon yazma/okuma, oturum kaydet/aç, pencere davranışı.
 - **Kulakla dinleme.** Tiplerin ve fabrika karakterlerinin seslendirmesi ölçümle ayarlandı (harmonik seviyeleri, frekans
   bağımlılığı, ses yüksekliği); zevke göre ince ayar için sabitler aşağıda.
@@ -356,6 +385,7 @@ Bu sürüm Linux'ta derlendi ve test edildi (VST3 + Standalone). Şunlar **senin
 - `Source/CharacterPresetManager.*` – karakter presetleri
 - `Source/PluginEditor.*` – ana ekran; `Source/CharacterDesigner.*` – Designer ekranı
 - `Source/UIComponents.h`, `Source/AnalyzerViews.h` – arayüz parçaları ve görselleştirmeler
+- `Source/SCCKnobStyle.h`, `Source/SCCKnobFont.h` – knob çizimi ve gömülü yazı tipi; `Resources/OFL-Oxanium.txt` – yazı tipi lisansı
 - `tests/` – üç test programı
 - `docs/SCC_V6_Master_TODO.txt` – V6 hedef listesi
 - `CMakeLists.txt` – derleme

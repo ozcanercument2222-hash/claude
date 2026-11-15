@@ -9,6 +9,7 @@
 #include <memory>
 #include "SCCDsp.h"
 #include "SCCCharacterTypes.h"
+#include "SCCKnobStyle.h"
 
 //==============================================================================
 //  SCC arayuz parcalari (karanlik panel + neon yesil)
@@ -86,99 +87,34 @@ inline void strokeGlow (juce::Graphics& g, const juce::Path& p, juce::Colour c, 
 }
 
 //==============================================================================
-//  Ana knob
+//  Knob. Ana knob, Analog Mode ve Character Designer ayni cizimi kullanir; cizimin
+//  kendisi SCCKnobStyle.h'dedir (celik cerceve, cam kubbe, beyaz yay, isaretci).
+//  Slider ozellikleri (slider.getProperties()):
+//    "bipolar"       : true ise yay ortadan baslar
+//    "centerReadout" : false ise kubbenin ortasina deger yazilmaz (varsayilan true)
+//  Ortadaki yazi, slider'in textFromValueFunction'indan gelir.
 //==============================================================================
 class KnobLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
     void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
-                           float pos, float startAngle, float endAngle, juce::Slider&) override
+                           float pos, float startAngle, float endAngle, juce::Slider& slider) override
     {
-        const juce::Rectangle<float> b ((float) x, (float) y, (float) width, (float) height);
-        const float R  = std::min (b.getWidth(), b.getHeight()) * 0.5f;
-        const float cx = b.getCentreX();
-        const float cy = b.getCentreY();
-        const float angle = startAngle + pos * (endAngle - startAngle);
+        knobstyle::Params p;
+        p.pos        = pos;
+        p.startAngle = startAngle;
+        p.endAngle   = endAngle;
+        p.bipolar    = (bool) slider.getProperties().getWithDefault ("bipolar", false);
+        p.enabled    = slider.isEnabled();
+        p.hot        = slider.isMouseOverOrDragging();
+        if ((bool) slider.getProperties().getWithDefault ("centerReadout", true))
+            p.readout = slider.getTextFromValue (slider.getValue());
 
-        const float ringR = R * 0.74f;      // neon halka
-        const float ringW = R * 0.070f;
-        const float bodyR = R * 0.60f;      // metal govde
-
-        auto point = [cx, cy] (float radius, float a)
-        {
-            return juce::Point<float> (cx + radius * std::sin (a), cy - radius * std::cos (a));
-        };
-
-        // koyu cerceve
-        {
-            juce::ColourGradient bez (juce::Colour (0xff1f221f), cx, cy - R, juce::Colour (0xff050605), cx, cy + R, false);
-            g.setGradientFill (bez);
-            g.fillEllipse (cx - R * 0.99f, cy - R * 0.99f, R * 1.98f, R * 1.98f);
-            g.setColour (juce::Colour (0xff343934));
-            g.drawEllipse (cx - R * 0.99f, cy - R * 0.99f, R * 1.98f, R * 1.98f, 1.2f);
-        }
-
-        // cetvel cizgileri
-        for (int i = 0; i <= 40; ++i)
-        {
-            const float a = startAngle + (endAngle - startAngle) * (float) i / 40.0f;
-            const bool major = (i % 10) == 0;
-            const auto p1 = point (R * 0.88f, a);
-            const auto p2 = point (R * (major ? 0.96f : 0.93f), a);
-            g.setColour (kTextDim.withAlpha (major ? 0.60f : 0.28f));
-            g.drawLine (p1.x, p1.y, p2.x, p2.y, major ? 1.6f : 1.0f);
-        }
-
-        // soluk yol
-        {
-            juce::Path track;
-            track.addCentredArc (cx, cy, ringR, ringR, 0.0f, startAngle, endAngle, true);
-            g.setColour (kNeon.withAlpha (0.10f));
-            g.strokePath (track, juce::PathStrokeType (ringW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        }
-
-        // deger yayi (parlayan)
-        if (pos > 0.002f)
-        {
-            juce::Path arc;
-            arc.addCentredArc (cx, cy, ringR, ringR, 0.0f, startAngle, angle, true);
-            strokeGlow (g, arc, kNeon, ringW);
-        }
-
-        // metal govde
-        {
-            juce::ColourGradient body (juce::Colour (0xff3b403b), cx - bodyR * 0.5f, cy - bodyR * 0.7f,
-                                       juce::Colour (0xff0a0b0a), cx + bodyR * 0.8f, cy + bodyR * 0.9f, false);
-            g.setGradientFill (body);
-            g.fillEllipse (cx - bodyR, cy - bodyR, bodyR * 2.0f, bodyR * 2.0f);
-
-            for (int i = 1; i <= 7; ++i)    // fircalanmis metal halkalari
-            {
-                const float rr = bodyR * (float) i / 7.5f;
-                g.setColour (juce::Colours::white.withAlpha ((i % 2) != 0 ? 0.035f : 0.015f));
-                g.drawEllipse (cx - rr, cy - rr, rr * 2.0f, rr * 2.0f, 1.0f);
-            }
-            g.setColour (juce::Colours::white.withAlpha (0.16f));
-            g.drawEllipse (cx - bodyR, cy - bodyR, bodyR * 2.0f, bodyR * 2.0f, 1.4f);
-        }
-
-        // ibre: yayin bittigi yerle ayni aciyi gosterir
-        {
-            juce::Path pointer;
-            pointer.startNewSubPath (point (bodyR * 0.30f, angle));
-            pointer.lineTo (point (bodyR * 0.88f, angle));
-            strokeGlow (g, pointer, kNeon, R * 0.030f);
-        }
-
-        // yay ucundaki nokta
-        {
-            const auto d = point (ringR, angle);
-            g.setColour (kNeon.withAlpha (0.28f));
-            g.fillEllipse (d.x - ringW * 1.4f, d.y - ringW * 1.4f, ringW * 2.8f, ringW * 2.8f);
-            g.setColour (kNeon);
-            g.fillEllipse (d.x - ringW * 0.75f, d.y - ringW * 0.75f, ringW * 1.5f, ringW * 1.5f);
-        }
+        renderer.draw (g, { (float) x, (float) y, (float) width, (float) height }, p);
     }
+
+private:
+    knobstyle::KnobRenderer renderer;       // degerden bagimsiz katmanin onbellegi bu ornege ozeldir
 };
 
 //==============================================================================
@@ -693,79 +629,11 @@ private:
 };
 
 //==============================================================================
-//  Kucuk knob (Analog Mode ve Character Designer). Iki kutuplu (-..+) knob'larda
-//  yay ortadan baslar. Slider'in "bipolar" ozelligi ile secilir.
+//  Kucuk knob (Analog Mode ve Character Designer): ana knob ile ayni cizim, boyuta
+//  gore otomatik olceklenir. Iki kutuplu (-..+) knob'larda yay ortadan baslar;
+//  Slider'in "bipolar" ozelligi ile secilir.
 //==============================================================================
-class SmallKnobLookAndFeel : public juce::LookAndFeel_V4
-{
-public:
-    void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
-                           float pos, float startAngle, float endAngle, juce::Slider& slider) override
-    {
-        const juce::Rectangle<float> b ((float) x, (float) y, (float) width, (float) height);
-        const float R  = std::min (b.getWidth(), b.getHeight()) * 0.5f - 1.0f;
-        const float cx = b.getCentreX();
-        const float cy = b.getCentreY();
-        const float angle = startAngle + pos * (endAngle - startAngle);
-        const bool  bipolar = (bool) slider.getProperties().getWithDefault ("bipolar", false);
-        const bool  enabled = slider.isEnabled();
-        const juce::Colour accent = enabled ? kNeon : kTextDim.withAlpha (0.5f);
-
-        const float ringR = R * 0.86f;
-        const float ringW = std::max (2.2f, R * 0.11f);
-        const float bodyR = R * 0.66f;
-
-        auto point = [cx, cy] (float radius, float a)
-        {
-            return juce::Point<float> (cx + radius * std::sin (a), cy - radius * std::cos (a));
-        };
-
-        // soluk yol
-        {
-            juce::Path track;
-            track.addCentredArc (cx, cy, ringR, ringR, 0.0f, startAngle, endAngle, true);
-            g.setColour (kNeon.withAlpha (enabled ? 0.10f : 0.05f));
-            g.strokePath (track, juce::PathStrokeType (ringW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        }
-
-        // deger yayi
-        {
-            const float from = bipolar ? (startAngle + endAngle) * 0.5f : startAngle;
-            if (std::abs (angle - from) > 0.02f)
-            {
-                juce::Path arc;
-                arc.addCentredArc (cx, cy, ringR, ringR, 0.0f, std::min (from, angle), std::max (from, angle), true);
-                g.setColour (accent.withAlpha (0.16f));
-                g.strokePath (arc, juce::PathStrokeType (ringW * 2.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-                g.setColour (accent);
-                g.strokePath (arc, juce::PathStrokeType (ringW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-            }
-            if (bipolar)
-            {
-                const auto p1 = point (ringR - ringW, from), p2 = point (ringR + ringW, from);
-                g.setColour (kTextDim.withAlpha (0.7f));
-                g.drawLine (p1.x, p1.y, p2.x, p2.y, 1.2f);
-            }
-        }
-
-        // govde
-        {
-            juce::ColourGradient body (juce::Colour (0xff343934), cx - bodyR * 0.5f, cy - bodyR * 0.7f,
-                                       juce::Colour (0xff0a0b0a), cx + bodyR * 0.8f, cy + bodyR * 0.9f, false);
-            g.setGradientFill (body);
-            g.fillEllipse (cx - bodyR, cy - bodyR, bodyR * 2.0f, bodyR * 2.0f);
-            g.setColour (juce::Colours::white.withAlpha (slider.isMouseOverOrDragging() && enabled ? 0.30f : 0.14f));
-            g.drawEllipse (cx - bodyR, cy - bodyR, bodyR * 2.0f, bodyR * 2.0f, 1.2f);
-        }
-
-        // ibre
-        {
-            const auto p1 = point (bodyR * 0.25f, angle), p2 = point (bodyR * 0.86f, angle);
-            g.setColour (accent);
-            g.drawLine (p1.x, p1.y, p2.x, p2.y, std::max (2.0f, R * 0.07f));
-        }
-    }
-};
+class SmallKnobLookAndFeel : public KnobLookAndFeel {};
 
 //==============================================================================
 //  Baslik + knob + deger. Bir plugin parametresine baglanir; slot degisince
@@ -784,7 +652,9 @@ public:
         slider.setMouseDragSensitivity (180);
         slider.getProperties().set ("bipolar", isBipolar);
         slider.setLookAndFeel (&lnf);
+        slider.setRepaintsOnMouseActivity (true);       // fare ustundeyken cerceve parlar
         slider.onValueChange = [this] { repaint(); };
+        installReadout();
         addAndMakeVisible (slider);
     }
 
@@ -798,12 +668,26 @@ public:
     {
         attachment.reset();
         attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (state, paramId, slider);
+        installReadout();                               // attachment kendi metin fonksiyonunu kurar; bizimkini geri koy
         repaint();
     }
 
     void setTitle (const juce::String& t)   { if (t != title) { title = t; repaint(); } }
     void setTitleSize (float s)             { titleSize = s; }
     void setValueSize (float s)             { valueSize = s; }
+
+    // true (varsayilan): deger kubbenin ortasinda yazilir, altta satir ayrilmaz.
+    // false: eski duzen, deger knob'un altinda.
+    void setValueInside (bool inside)
+    {
+        if (inside != valueInside)
+        {
+            valueInside = inside;
+            slider.getProperties().set ("centerReadout", valueInside);
+            resized();
+            repaint();
+        }
+    }
 
     // kontrol su an sesi etkilemiyorsa (ornegin CUSTOM secili degilken) soluk ve kilitli
     void setActive (bool shouldBeActive)
@@ -822,7 +706,8 @@ public:
     {
         auto r = getLocalBounds();
         r.removeFromTop (juce::roundToInt (titleSize + 5.0f));
-        r.removeFromBottom (juce::roundToInt (valueSize + 5.0f));
+        if (! valueInside)
+            r.removeFromBottom (juce::roundToInt (valueSize + 5.0f));
         const int side = std::min (r.getWidth(), r.getHeight());
         slider.setBounds (r.withSizeKeepingCentre (side, side));
     }
@@ -831,20 +716,32 @@ public:
     {
         auto r = getLocalBounds().toFloat();
         const auto top = r.removeFromTop (titleSize + 5.0f);
-        const auto bottom = r.removeFromBottom (valueSize + 5.0f);
         drawLabel (g, title, top, titleSize, active ? kText : kTextDim.withAlpha (0.55f));
 
-        const juce::String text = formatValue ? formatValue (slider.getValue())
-                                              : juce::String (juce::roundToInt (slider.getValue()));
-        drawLabel (g, text, bottom, valueSize, active ? kNeon : kTextDim.withAlpha (0.55f));
+        if (! valueInside)
+        {
+            const auto bottom = r.removeFromBottom (valueSize + 5.0f);
+            drawLabel (g, slider.getTextFromValue (slider.getValue()), bottom, valueSize,
+                       active ? kNeon : kTextDim.withAlpha (0.55f));
+        }
     }
 
     juce::Slider slider;
 
 private:
+    // Knob'un ortasindaki / altindaki yazi tek yerden gelir: formatValue (yoksa tam sayi)
+    void installReadout()
+    {
+        slider.textFromValueFunction = [this] (double v)
+        {
+            return formatValue ? formatValue (v) : juce::String (juce::roundToInt (v));
+        };
+    }
+
     SmallKnobLookAndFeel lnf;
     juce::String title;
     float titleSize = 11.0f, valueSize = 12.5f;
+    bool  valueInside = true;
     bool  active = true;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
 };

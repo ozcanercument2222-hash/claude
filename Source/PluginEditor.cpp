@@ -15,8 +15,7 @@ namespace
         const juce::Rectangle<int> thrValue    { 130, 186, 140,  30 };
         const juce::Rectangle<int> thrDisplay  { 130, 224, 140, 144 };
 
-        const juce::Rectangle<int> knob        { 254, 160, 236, 236 };
-        const juce::Rectangle<int> amountValue { 272, 138, 200,  36 };
+        const juce::Rectangle<int> knob        { 248, 144, 252, 252 };       // ana (hero) knob; ustundeki deger yazisi kubbeye tasindi, knob buyudu
 
         const juce::Rectangle<int> scope       { 508, 128, 352, 178 };
         const juce::Rectangle<int> ratioBox    { 513, 344,  78,  36 };
@@ -90,18 +89,22 @@ MainView::MainView (SCCAudioProcessor& p)
                                 juce::MathConstants<float>::pi * 2.75f, true);
         s->setMouseDragSensitivity (220);
         s->setLookAndFeel (&knobLnf);
+        s->setRepaintsOnMouseActivity (true);           // fare ustundeyken cerceve parlar
     }
     addAndMakeVisible (amountSlider);
     addChildComponent (thresholdSlider);
     amountAttach    = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "amount", amountSlider);
     thresholdAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "a_thr",  thresholdSlider);
 
+    // Knob'un ortasindaki okuma (attachment'lardan SONRA kurulmali, yoksa onlarinki ustune yazar)
+    amountSlider.textFromValueFunction    = [] (double v) { return juce::String (juce::roundToInt (v)) + "%"; };
+    thresholdSlider.textFromValueFunction = [] (double v) { return juce::String (v, 1) + " dB"; };
+
     // ---- gostergeler
     addAndMakeVisible (scope);
     addAndMakeVisible (inMeter);
     addAndMakeVisible (outMeter);
     addAndMakeVisible (thresholdDisplay);
-    addAndMakeVisible (amountValue);
     addAndMakeVisible (thresholdValue);
     addAndMakeVisible (ratioBox);
     addAndMakeVisible (attackBox);
@@ -360,7 +363,6 @@ void MainView::timerCallback()
     const float thr     = analog ? aThrParam->load() : scc::Compressor::thresholdForAmount (amount);
     const float knee    = analog ? aKneeParam->load() : scc::kneeFor (scc::characterFor (modeIdx), amount);
 
-    amountValue.setText (analog ? juce::String (thr, 1) + " dB" : juce::String (juce::roundToInt (amount)) + "%");
     thresholdValue.setText (juce::String (juce::roundToInt (thr)) + " dB");
     thresholdDisplay.setValues (thr, knee);
 
@@ -430,7 +432,6 @@ void MainView::resized()
 {
     amountSlider.setBounds (layout::knob);
     thresholdSlider.setBounds (layout::knob);
-    amountValue.setBounds (layout::amountValue);
     thresholdValue.setBounds (layout::thrValue);
     thresholdDisplay.setBounds (layout::thrDisplay);
 
