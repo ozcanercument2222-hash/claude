@@ -1,0 +1,33 @@
+{
+  "lock_hash": "0c55dab77289b8cbc07f886472a23b368a5bf7fbdf7e6ef8ef908044f6e97a91",
+  "root": ".agents/skills",
+  "skills": {
+    "a5c-ai-audio-dsp": {
+      "body_sha256": "f57b40207dc96ed53653691a1ac43e01eaede0c4897f60b96f219f3ddbe9bf67",
+      "description_sha256": "297659ae65a1f9d5184c19176b5d87d961d87d60d0b6932022271bab50d41841",
+      "executable": [],
+      "files": {
+        "SKILL.md": "23c3505b49aef10e1c6a20582131a9f0412f3f618dd042355e73a760f8b9717a"
+      },
+      "installed_at": "2026-11-16T08:42:04Z",
+      "invocation": "model",
+      "name": "a5c-ai/audio-dsp",
+      "path": ".agents/skills/a5c-ai-audio-dsp",
+      "pin": "latest",
+      "render": {
+        "format": 1,
+        "hash": "79aa9ae2a450a1a815b035f529fc97d42719e4b002c152badeda3d85b6dfae5c",
+        "variant": "foreign"
+      },
+      "skill_id": "96c65a98-283d-44c6-942f-6e70a59efdde",
+      "source": {
+        "base_url": "https://api.decimal.ai",
+        "org": null
+      },
+      "unavailable": [],
+      "version": 1,
+      "version_id": "57fd81ac-80fa-48fc-bb99-e2fde49e7b9b"
+    }
+  },
+  "version": 2
+}

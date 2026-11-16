@@ -1,0 +1,6 @@
+install.json
+staging/
+backup/
+migrated-v1/
+skills.lock.journal
+.skills.lck
