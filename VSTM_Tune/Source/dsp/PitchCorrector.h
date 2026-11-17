@@ -15,6 +15,11 @@
 //    saga  -> retune 4 kata kadar yavaslar, notalar arasi gecis S-egrisiyle kayar
 //             (en fazla 110 ms), notanin baslangicindaki dogal "kayis" serbest kalir,
 //             uzun notalarda humanize artar: duzeltme duyulmaz, ses insani kalir.
+//
+//  Nota secimi: yeni nota ancak (1) histerezisi asinca ve (2) kisa bir sure kararli
+//  kalinca secilir. Sarkici iki nota arasinda (or. E ile F'nin ortasinda) dururken
+//  hedefin her 3-10 ms'de bir gidip gelmesi ("nota titremesi") boylece engellenir;
+//  ses yeni notaya acikca vardiginda (>= 1.5 yarim ses sicrama) beklemeden gecilir.
 //==============================================================================
 #include "DspCommon.h"
 #include "Scales.h"
@@ -49,6 +54,8 @@ public:
     {
         wasVoiced = false;
         note = kNoNote;
+        pendingNote = kNoNote;
+        pendingAge = 0.0f;
         delta = 0.0f;
         glideProgress = 1.0f;
         settledFlag = true;
@@ -75,12 +82,14 @@ public:
             onsetAge = 0.0f;
             delta = 0.0f;
             note = kNoNote;
+            pendingNote = kNoNote;
+            pendingAge = 0.0f;
         }
         centre += (inMidi - centre) * (1.0f - std::exp (-dt * 2.0f * (float) kPi * 3.0f));
         const float shaped = centre + s.vibratoScale * (inMidi - centre);
 
-        // target note with hysteresis (cents): small when robotic, larger when human
-        const float hyst = (12.0f + 20.0f * human - 6.0f * robot) * 0.01f;
+        // target note with hysteresis (cents) and a minimum dwell time before switching
+        const float hyst = (15.0f + 20.0f * human) * 0.01f;
         const int candidate = nearestAllowedNote (shaped, s.key, s.mask);
         if (note == kNoNote)
         {
@@ -97,13 +106,31 @@ public:
             startTransition (candidate);           // scale or key changed under the held note
             out.noteChanged = true;
         }
-        else if (candidate != note)
+        else if (candidate != note
+                 && std::abs (shaped - (float) candidate) + hyst < std::abs (shaped - (float) note))
         {
-            if (std::abs (shaped - (float) candidate) + hyst < std::abs (shaped - (float) note))
+            if (candidate == pendingNote)
+                pendingAge += dt;
+            else
+            {
+                pendingNote = candidate;
+                pendingAge = dt;
+            }
+            // clearly arrived at another note (a real leap): switch now; hovering between
+            // two notes must persist before the target moves
+            const bool arrived = std::abs (shaped - (float) note) >= 1.5f
+                              && std::abs (shaped - (float) candidate) <= 0.5f;
+            const float dwellMs = arrived ? 0.0f : 22.0f + 30.0f * human - 8.0f * robot;
+            if (pendingAge * 1000.0f >= dwellMs)
             {
                 startTransition (candidate);
                 out.noteChanged = true;
             }
+        }
+        else
+        {
+            pendingNote = kNoNote;
+            pendingAge = 0.0f;
         }
 
         // "insansi gecis": S-curve glide between notes, only on the human side
@@ -161,6 +188,8 @@ private:
 
     void startTransition (int newNote) noexcept
     {
+        pendingNote = kNoNote;
+        pendingAge = 0.0f;
         glideFrom = glide;
         note = newNote;
         glideProgress = 0.0f;
@@ -170,6 +199,8 @@ private:
 
     bool wasVoiced = false;
     int note = kNoNote;
+    int pendingNote = kNoNote;
+    float pendingAge = 0.0f;
     float centre = 0.0f, delta = 0.0f;
     float glideFrom = 0.0f, glide = 0.0f, glideProgress = 1.0f;
     float noteAge = 0.0f, onsetAge = 0.0f;

@@ -135,6 +135,11 @@ target_link_libraries(VSTMTune
 option(VSTM_BUILD_TESTS "Test programlarini da olustur" OFF)
 if(VSTM_BUILD_TESTS)
     add_executable(VSTMTune_EngineTest tests/engine_test.cpp)
+
+    # gercek kayitlar icin cevrimdisi render + analiz kaydi (tests/vocal_metrics.py ile)
+    add_executable(VSTMTune_WavProbe tests/wav_probe.cpp)
+    target_include_directories(VSTMTune_WavProbe PRIVATE Source)
+    target_compile_features(VSTMTune_WavProbe PRIVATE cxx_std_17)
     target_include_directories(VSTMTune_EngineTest PRIVATE Source)
     target_compile_features(VSTMTune_EngineTest PRIVATE cxx_std_17)
     target_compile_options(VSTMTune_EngineTest PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")

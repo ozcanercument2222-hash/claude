@@ -271,6 +271,41 @@ int main()
         check (humanMs > 45.0, "Insansi: note change glides (" + std::to_string (humanMs) + " ms)");
     }
 
+    // 6b) no note chatter: a singer hovering right between E4 and F4 (64.5 +- 10 ct of
+    //     small, fast wobble) must not make the target flip every few milliseconds
+    {
+        auto f0 = [] (double t)
+        {
+            return midiToHz (64.5 + 0.06 * std::sin (2.0 * kPi * 7.3 * t) + 0.04 * std::sin (2.0 * kPi * 13.1 * t + 1.0));
+        };
+        auto x = makeVoice (sr, 2.5, f0);
+        for (const float robotism : { 0.0f, 0.5f })
+        {
+            TuneEngine e;
+            e.prepare (sr, true);
+            auto p = baseParams();
+            p.scale = kMajor;
+            p.key = 0;
+            p.retuneMs = 0.0f;
+            p.robotism = robotism;
+            e.setParams (p);
+            int changes = 0, hops = 0;
+            for (size_t pos = 0; pos < x.size(); pos += 256)
+            {
+                const int n = (int) std::min ((size_t) 256, x.size() - pos);
+                float* chans[2] = { x.data() + pos, nullptr };
+                e.process (chans, 1, n);
+                TuneEngine::DisplayPoint d;
+                while (e.display.pop (d))
+                    if (++hops * e.getHopSeconds() > 0.5 && (d.flags & TuneEngine::kNoteChange))
+                        ++changes;
+            }
+            // the engine before the dwell rule flipped 28 (Robotik) / 37 (Dengeli) times here
+            check (changes <= 8, std::string (robotism < 0.25f ? "Robotik" : "Dengeli")
+                                 + ": no note chatter between E and F (" + std::to_string (changes) + " changes in 2 s)");
+        }
+    }
+
     // 7) vibrato: flattened when robotic, kept when human
     {
         auto f0 = [] (double t) { return midiToHz (57.0 + 0.5 * std::sin (2.0 * kPi * 5.5 * t)); };

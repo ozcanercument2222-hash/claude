@@ -22,7 +22,7 @@ Testle ölçülen davranış (48 kHz, sentetik vokal, A3 → C4 sıçraması, ±
 
 | | Robotik (0) | İnsansı (100) |
 |---|---|---|
-| Nota geçiş süresi (%10 → %90) | 20 ms (basamak) | ~215 ms (kayarak) |
+| Nota geçiş süresi (%10 → %90) | 24 ms (basamak) | ~250 ms (kayarak) |
 | Vibrato (tepe–tepe) | 1 cent (dümdüz) | 98 cent (korunur) |
 
 ## Kontroller
@@ -72,6 +72,10 @@ giriş (gecikmeli, "dry") ──────────────────
 ```
 
 - Düzeltme sesin kendi periyoduna göre yapılır: hard-tune'da çıkış hedef notada **0.05 cent'ten** daha az hata verir.
+- **Nota seçimi titremez:** yeni nota ancak histerezisi (15 cent, İnsansı'da 35 cent) geçip kısa bir süre kararlı kalınca
+  seçilir (Robotik 14 ms, Dengeli 22 ms, İnsansı 52 ms); sesin yeni notaya açıkça vardığı sıçramalarda (≥ 1.5 yarım ses) hemen.
+  İki notanın tam ortasında söylenen seste hedefin her 3–10 ms'de bir gidip gelmesi ("trill") böylece önlenir:
+  gerçek vokallerde 40 ms'den kısa nota bölümleri 3–10 kat azaldı.
 - Düzeltme 0 iken plugin şeffaftır (çıkış = giriş, 61 dB SNR) ve dry sinyalle örneğine kadar hizalıdır; MIX'te faz kayması olmaz.
 - Motor blok boyutundan bağımsızdır (64 veya 1013 örneklik bloklar bit-bit aynı çıkışı verir), ses iş parçacığında kilit / bellek ayırma yoktur.
 - Arayüz 1536 × 1024'lük vektörel bir tuval üzerinde çizilir ve ölçeklenir (her boyutta ve HiDPI'da keskin);
@@ -103,7 +107,14 @@ cmake --build build --config Release
 ```
 
 - **EngineTest:** hard-tune doğruluğu, seviye, şeffaflık + gecikme hizası, ±12 / +7 transpoze, formant, blok boyutu
-  bağımsızlığı, Robotik / İnsansı geçiş süresi ve vibrato, otomatik ton (C majör), sessizlik.
+  bağımsızlığı, Robotik / İnsansı geçiş süresi ve vibrato, iki nota arasında nota titremesi olmaması, otomatik ton
+  (C majör), sessizlik.
+- **WavProbe + vocal_metrics.py:** gerçek bir kaydı motordan geçirir, her analiz adımını (voiced, perde, hedef nota)
+  CSV'ye yazar ve ölçer: nota titremesi, çıkış–hedef sapması, cent dağılımı, 20–150 Hz patlamaları, seviye.
+  ```bash
+  ./build/VSTMTune_WavProbe vokal.wav cikis.wav --csv adimlar.csv key=-1 robotism=0 retune=0
+  python3 tests/vocal_metrics.py vokal.wav cikis.wav --csv adimlar.csv
+  ```
 - **PluginTest:** parametre varsayılanları ve yazıları, gecikme bildirimi (20 / 40 ms), bypass, oturum kaydet / geri yükle,
   presetler, editör; `goruntuler/` klasörüne ekran görüntüleri; `--vst3` ile derlenmiş VST3'ü bir DAW gibi yükleyip sınar.
 
@@ -114,6 +125,10 @@ cmake --build build --config Release
   DAW'da kontrol edilecekler: Windows HiDPI ölçekleme, Ableton / FL Studio / Logic'te pencere boyutlandırma,
   otomasyon yazıları, aynı plugin'den iki pencere.
 - Monofonik vokal içindir (akor / koro düzeltmez). Çok kalın bas seslerde REALTIME'ı kapat veya ⚙ → Vocal range → Bass.
+- **Perde kaydırırken 20–150 Hz'de düşük seviyeli enerji:** TD-PSOLA sentezi, düzeltme ya da transpoze uygulandığında
+  (±0.5 yarım seste bile) sesli bölümlerde kuru seste olmayan düşük frekanslı enerji üretir. Gerçek vokallerde tepe
+  ≈ −43 dBFS (temel frekans bandının ~25–35 dB altında), −12 st transpozede ≈ −30 dBFS. Düzeltme kapalıyken yoktur.
+  Ölçülerek doğrulandı; insan kulağıyla değerlendirilmedi. Sentez çekirdeğinde ayrı bir çalışma gerektirir.
 
 ## Lisanslar
 
