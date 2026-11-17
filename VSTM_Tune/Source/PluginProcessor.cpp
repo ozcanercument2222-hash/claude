@@ -11,19 +11,24 @@ VSTMTuneProcessor::VSTMTuneProcessor()
       apvts (*this, nullptr, "VSTMTune", params::createLayout())
 {
     bypassParam = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter (ids::bypass));
-    pKey        = apvts.getRawParameterValue (ids::key);
-    pScale      = apvts.getRawParameterValue (ids::scale);
-    pCorrection = apvts.getRawParameterValue (ids::correction);
-    pRetune     = apvts.getRawParameterValue (ids::retune);
-    pHumanize   = apvts.getRawParameterValue (ids::humanize);
-    pRobotism   = apvts.getRawParameterValue (ids::robotism);
-    pVibrato    = apvts.getRawParameterValue (ids::vibrato);
-    pFormant    = apvts.getRawParameterValue (ids::formant);
-    pTranspose  = apvts.getRawParameterValue (ids::transpose);
-    pMix        = apvts.getRawParameterValue (ids::mix);
-    pBypass     = apvts.getRawParameterValue (ids::bypass);
-    pRealtime   = apvts.getRawParameterValue (ids::realtime);
-    pRange      = apvts.getRawParameterValue (ids::range);
+    auto raw = [this] (const juce::String& id)
+    {
+        auto* prm = apvts.getParameter (id);
+        return RawParam { apvts.getRawParameterValue (id), prm->convertFrom0to1 (prm->getDefaultValue()) };
+    };
+    pKey        = raw (ids::key);
+    pScale      = raw (ids::scale);
+    pCorrection = raw (ids::correction);
+    pRetune     = raw (ids::retune);
+    pHumanize   = raw (ids::humanize);
+    pRobotism   = raw (ids::robotism);
+    pVibrato    = raw (ids::vibrato);
+    pFormant    = raw (ids::formant);
+    pTranspose  = raw (ids::transpose);
+    pMix        = raw (ids::mix);
+    pBypass     = raw (ids::bypass);
+    pRealtime   = raw (ids::realtime);
+    pRange      = raw (ids::range);
 
     apvts.addParameterListener (ids::realtime, this);
     apvts.state.setProperty ("presetName", presets.getCurrentName(), nullptr);
@@ -49,18 +54,18 @@ bool VSTMTuneProcessor::isBusesLayoutSupported (const BusesLayout& layouts) cons
 vstm::TuneEngine::Params VSTMTuneProcessor::readParams() const noexcept
 {
     TuneEngine::Params p;
-    p.key = juce::roundToInt (pKey->load()) - 1;
-    p.scale = juce::jlimit (0, (int) kNumScales - 1, juce::roundToInt (pScale->load()));
-    p.amount = pCorrection->load() * 0.01f;
-    p.retuneMs = pRetune->load();
-    p.humanize = pHumanize->load() * 0.01f;
-    p.robotism = pRobotism->load() * 0.01f;
-    p.vibratoScale = pVibrato->load() * 0.01f;
-    p.formant = pFormant->load();
-    p.transpose = std::round (pTranspose->load());
-    p.mix = pMix->load() * 0.01f;
-    p.active = pBypass->load() < 0.5f;
-    p.range = juce::roundToInt (pRange->load());
+    p.key = juce::jlimit (-1, 11, juce::roundToInt (pKey.get()) - 1);
+    p.scale = juce::jlimit (0, (int) kNumScales - 1, juce::roundToInt (pScale.get()));
+    p.amount = pCorrection.get() * 0.01f;
+    p.retuneMs = pRetune.get();
+    p.humanize = pHumanize.get() * 0.01f;
+    p.robotism = pRobotism.get() * 0.01f;
+    p.vibratoScale = pVibrato.get() * 0.01f;
+    p.formant = pFormant.get();
+    p.transpose = std::round (pTranspose.get());
+    p.mix = pMix.get() * 0.01f;
+    p.active = pBypass.get() < 0.5f;
+    p.range = juce::jlimit (0, 2, juce::roundToInt (pRange.get()));
     return p;
 }
 
@@ -68,7 +73,7 @@ void VSTMTuneProcessor::prepareToPlay (double sampleRate, int)
 {
     currentRate = sampleRate;
     engine.setParams (readParams());
-    engine.prepare (sampleRate, pRealtime->load() > 0.5f);
+    engine.prepare (sampleRate, pRealtime.get() > 0.5f);
     setLatencySamples (engine.getLatencySamples());
 }
 
@@ -89,7 +94,7 @@ void VSTMTuneProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         buffer.clear (ch, 0, buffer.getNumSamples());
 
     engine.setParams (readParams());
-    const bool rt = pRealtime->load() > 0.5f;
+    const bool rt = pRealtime.get() > 0.5f;
     if (engine.isRealtime() != rt)
         engine.setRealtime (rt);
 
@@ -123,7 +128,14 @@ void VSTMTuneProcessor::setStateInformation (const void* data, int sizeInBytes)
         {
             auto state = juce::ValueTree::fromXml (*xml);
             apvts.replaceState (state);
-            uiScale = (float) juce::jlimit (0.5, 1.0, (double) state.getProperty ("uiScale", 0.75));
+
+            // a damaged session can hold "nan" / "inf" (JUCE reads them as numbers): back to the default
+            for (auto* prm : getParameters())
+                if (! std::isfinite (prm->getValue()))
+                    prm->setValueNotifyingHost (prm->getDefaultValue());
+
+            const double scale = state.getProperty ("uiScale", 0.75);
+            uiScale = (float) (std::isfinite (scale) ? juce::jlimit (0.5, 1.0, scale) : 0.75);
             presets.restoreCurrent (state.getProperty ("presetName", "Default Preset").toString());
         }
     }

@@ -47,20 +47,18 @@ private:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     vstm::TuneEngine::Params readParams() const noexcept;
 
+    /** A parameter's live value for the audio thread. A stored value that is not a number
+        (damaged session or preset) reads as the parameter's default. */
+    struct RawParam
+    {
+        std::atomic<float>* value = nullptr;
+        float fallback = 0.0f;
+        float get() const noexcept { const float v = value->load(); return std::isfinite (v) ? v : fallback; }
+    };
+
     juce::AudioParameterBool* bypassParam = nullptr;
-    std::atomic<float>* pKey = nullptr;
-    std::atomic<float>* pScale = nullptr;
-    std::atomic<float>* pCorrection = nullptr;
-    std::atomic<float>* pRetune = nullptr;
-    std::atomic<float>* pHumanize = nullptr;
-    std::atomic<float>* pRobotism = nullptr;
-    std::atomic<float>* pVibrato = nullptr;
-    std::atomic<float>* pFormant = nullptr;
-    std::atomic<float>* pTranspose = nullptr;
-    std::atomic<float>* pMix = nullptr;
-    std::atomic<float>* pBypass = nullptr;
-    std::atomic<float>* pRealtime = nullptr;
-    std::atomic<float>* pRange = nullptr;
+    RawParam pKey, pScale, pCorrection, pRetune, pHumanize, pRobotism, pVibrato,
+             pFormant, pTranspose, pMix, pBypass, pRealtime, pRange;
 
     double currentRate = 44100.0;
 

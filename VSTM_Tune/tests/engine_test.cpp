@@ -11,6 +11,7 @@
 
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <random>
 #include <string>
 
@@ -442,6 +443,66 @@ int main()
         bool clean = true;
         for (float v : y) if (! std::isfinite (v) || std::abs (v) > 1.0e-6f) clean = false;
         check (clean, "silence stays silent");
+    }
+
+    // 10) a NaN and an Inf sample in the input (a broken plugin before this one): the output stays
+    //     finite and the tuning comes back. The engine before this test kept NaN in the detector's
+    //     filter state for good: no correction any more until the next reset.
+    {
+        const double f = midiToHz (57.40);
+        auto x = makeVoice (sr, 4.0, [&] (double) { return f; });
+        x[(size_t) (1.0 * sr)] = std::numeric_limits<float>::quiet_NaN();
+        x[(size_t) (1.5 * sr)] = std::numeric_limits<float>::infinity();
+        x[(size_t) (1.6 * sr)] = 1.0e30f;                     // finite, but absurd
+        TuneEngine e;
+        e.prepare (sr, true);
+        e.setParams (baseParams());
+        const auto y = run (e, x, 256);
+        bool finite = true;
+        for (float v : y) finite = finite && std::isfinite (v);
+        const double c = cents (measureHz (y, sr, (int) (sr * 3.0), (int) (sr * 0.2), 220.0), 220.0);
+        check (finite && std::abs (c) < 1.0, "NaN / Inf / huge input samples: output finite, tuning back (" + std::to_string (c) + " ct)");
+    }
+
+    // 11) NaN parameter values for half a second (a damaged preset or session): the output stays
+    //     finite and is normal again afterwards. Before: amount / formant / transpose silenced the
+    //     output for good, mix made it NaN for good.
+    {
+        const double f = midiToHz (57.40);
+        const auto x = makeVoice (sr, 4.0, [&] (double) { return f; });
+        bool finite = true, normal = true;
+        std::string detail;
+        const char* names[] = { "amount", "formant", "transpose", "mix", "retune", "robotism" };
+        for (int which = 0; which < 6; ++which)
+        {
+            TuneEngine e;
+            e.prepare (sr, true);
+            auto y = x;
+            for (size_t pos = 0; pos < y.size(); pos += 256)
+            {
+                auto p = baseParams();
+                if (pos >= (size_t) sr && pos < (size_t) (1.5 * sr))
+                {
+                    const float nan = std::numeric_limits<float>::quiet_NaN();
+                    if (which == 0) p.amount = nan;
+                    if (which == 1) p.formant = nan;
+                    if (which == 2) p.transpose = nan;
+                    if (which == 3) p.mix = nan;
+                    if (which == 4) p.retuneMs = nan;
+                    if (which == 5) p.robotism = nan;
+                }
+                e.setParams (p);
+                const int n = (int) std::min ((size_t) 256, y.size() - pos);
+                float* chans[2] = { y.data() + pos, nullptr };
+                e.process (chans, 1, n);
+            }
+            for (float v : y) finite = finite && std::isfinite (v);
+            const double c = cents (measureHz (y, sr, (int) (sr * 3.0), (int) (sr * 0.2), 220.0), 220.0);
+            const double lvl = rmsDb (y, (int) (sr * 2.8), (int) (sr * 0.5)) - rmsDb (x, (int) (sr * 2.8), (int) (sr * 0.5));
+            normal = normal && std::abs (c) < 1.0 && std::abs (lvl) < 1.0;
+            detail += std::string (which ? ", " : "") + names[which] + " " + std::to_string ((int) std::lround (c)) + " ct";
+        }
+        check (finite && normal, "NaN parameters for 0.5 s: output finite, normal afterwards (" + detail + ")");
     }
 
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASSED" : "FAILED", failures, failures == 1 ? "" : "s");

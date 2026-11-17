@@ -148,8 +148,25 @@ public:
         currentVoiced.store (false);
     }
 
-    void setParams (const Params& p) noexcept
+    /** A value that is not a number (damaged preset / session, broken host) keeps the last good one;
+        everything is limited to ranges that keep grain sizes and gains sane (the plugin's own ranges
+        lie inside them, so normal values pass unchanged). */
+    void setParams (const Params& requested) noexcept
     {
+        Params p = requested;
+        auto keep = [] (float v, float last, float lo, float hi) { return std::isfinite (v) ? std::clamp (v, lo, hi) : last; };
+        p.amount       = keep (p.amount,       params.amount,         0.0f,    1.0f);
+        p.retuneMs     = keep (p.retuneMs,     params.retuneMs,       0.0f, 1000.0f);
+        p.humanize     = keep (p.humanize,     params.humanize,       0.0f,    1.0f);
+        p.robotism     = keep (p.robotism,     params.robotism,       0.0f,    1.0f);
+        p.vibratoScale = keep (p.vibratoScale, params.vibratoScale,   0.0f,    4.0f);
+        p.formant      = keep (p.formant,      params.formant,      -24.0f,   24.0f);
+        p.transpose    = keep (p.transpose,    params.transpose,    -24.0f,   24.0f);
+        p.mix          = keep (p.mix,          params.mix,            0.0f,    1.0f);
+        if (p.key < -1 || p.key > 11) p.key = -1;
+        p.scale = std::clamp (p.scale, 0, (int) kNumScales - 1);
+        p.range = std::clamp (p.range, 0, 2);
+
         const bool rangeChanged = p.range != params.range;
         params = p;
         if (rangeChanged)
@@ -163,6 +180,8 @@ public:
         numCh = nc;
         const float smoothCoef = 1.0f - std::exp (-1.0f / (0.02f * (float) sr));
         const float wetTarget = params.active ? 1.0f : 0.0f;
+        if (! std::isfinite (mixSmooth)) mixSmooth = params.mix;      // never stay stuck on a bad value
+        if (! std::isfinite (wetSmooth)) wetSmooth = wetTarget;
 
         for (int i = 0; i < numSamples; ++i)
         {
@@ -170,7 +189,7 @@ public:
             float mono = 0.0f;
             for (int ch = 0; ch < nc; ++ch)
             {
-                const float x = channels[ch][i];
+                const float x = sanitize (channels[ch][i]);
                 in[(size_t) ch][(size_t) (nIn & kMask)] = x;
                 mono += x;
             }
@@ -229,6 +248,17 @@ public:
 private:
     static constexpr int kRing = 1 << 16;
     static constexpr int64_t kMask = kRing - 1;
+
+    /** NaN / Inf from a plugin before this one would stay in the analysis filters for good: they
+        become silence. Absurd finite values are limited to +80 dBFS so no sum can overflow.
+        Normal audio passes unchanged (one comparison). */
+    static float sanitize (float x) noexcept
+    {
+        constexpr float kMaxInput = 1.0e4f;
+        if (std::abs (x) <= kMaxInput)
+            return x;
+        return std::isfinite (x) ? std::copysign (kMaxInput, x) : 0.0f;
+    }
     static constexpr int kMarkRing = 1024;
     static constexpr int kRecRing = 256;
 
@@ -649,7 +679,7 @@ private:
     void placeGrains (int64_t t) noexcept
     {
         placeTailGrains (t);
-        if (sNext < (double) t - 4.0 * maxHalf())       // fell behind (should not happen): resync
+        if (! (sNext >= (double) t - 4.0 * maxHalf()))  // fell behind or not a number (should not happen): resync
         {
             sNext = (double) t;
             planValid = false;

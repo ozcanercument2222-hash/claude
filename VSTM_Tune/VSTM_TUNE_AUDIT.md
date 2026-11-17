@@ -428,7 +428,7 @@ Varsayılan ayar, 20 s melodi, 64 örneklik bloklar:
 | # | Risk | Önem | Kanıt | Yer |
 |---|---|---|---|---|
 | R1 | Tek bir NaN/Inf giriş örneği düzeltmeyi motor sıfırlanana kadar kapatıyor; 5 NaN örnek çıkışa geçiyor | **Yüksek** | MEASURED | `Source/dsp/TuneEngine.h:170-185`, `Source/dsp/DspCommon.h:43-49` |
-| R2 | NaN parametre (bozuk oturum/preset) kalıcı sessizlik ya da NaN çıkış üretiyor; değer düzelse de geçmiyor | **Yüksek** | MEASURED | `Source/PluginProcessor.cpp:49-65`, `Source/PresetManager.cpp:136-143`, `Source/dsp/TuneEngine.h:192,652` |
+| R2 | NaN parametre (bozuk oturum/preset) kalıcı sessizlik ya da NaN çıkış üretiyor; değer düzelse de geçmiyor | **Yüksek** | MEASURED | `Source/PluginProcessor.cpp:49-65`, `Source/PresetManager.cpp:82-89`, `Source/dsp/TuneEngine.h:192,652` |
 | R3 | Gerçek vokal test seti fiilen yok: 6 RAVDESS klibi, 8 kHz bantlı, NC lisans, depo dışı, metadata yok. Önceki bir oturumda kullanılan 2:48'lik vokal stem'i (MP3, kaynak ayrıştırıcı çıktısı) da depoda değil | **Yüksek** | MEASURED / INSPECTED | `~/.cache/vstm-ear/testdata`, `artifacts/audio-runs/tune-listening/README.txt` |
 | R4 | İnsan dinlemesi, DAW testi ve macOS/AU derlemesi yok | **Yüksek** | CI / INSPECTED | `.github/workflows/vstm-tune.yml` |
 | R5 | REALTIME geçişinde 40 ms sessizlik + tık + Auto key sıfırlanması | Orta | MEASURED | `Source/dsp/TuneEngine.h:98-122`, `Source/PluginProcessor.cpp:92-94` |
@@ -436,12 +436,12 @@ Varsayılan ayar, 20 s melodi, 64 örneklik bloklar:
 | R7 | Auto key: 1–2 notayla yanlış kesinlik, yavaş modülasyon takibi (>8 s), ilk tahminin yanlış olabilmesi; güven bilgisi yok | Orta | MEASURED (sentetik) | `Source/dsp/KeyDetector.h:29,59,84` |
 | R8 | Büyük transpoze / formant'ta −7,4…+2,6 dB seviye ve +5,9 dB tepe kayması; çıkış koruması yok | Orta | MEASURED (sentetik) | `Source/dsp/TuneEngine.h:528,545` |
 | R9 | CI test öncesi paket yüklüyor; başarısız testte yayın engeli, pluginval, WAV regresyonu ve sanitizer yok | Orta | INSPECTED | `.github/workflows/vstm-tune.yml:62-138` |
-| R10 | `setStateInformation` içinde dosya taraması ve snapshot yeniden kurulumu var; host bunu UI dışı iş parçacığından çağırırsa editör zamanlayıcısındaki `isDirty()` ile veri yarışı olabilir | Orta / Düşük | INSPECTED | `Source/PluginProcessor.cpp:127`, `Source/PresetManager.cpp:233-255`, `Source/PluginEditor.cpp:388-390` |
+| R10 | `setStateInformation` içinde dosya taraması ve snapshot yeniden kurulumu var; host bunu UI dışı iş parçacığından çağırırsa editör zamanlayıcısındaki `isDirty()` ile veri yarışı olabilir | Orta / Düşük | INSPECTED | `Source/PluginProcessor.cpp:127`, `Source/PresetManager.cpp:179-201`, `Source/PluginEditor.cpp:388-390` |
 | R11 | `vocal_metrics.py` depo kökündeki `tools/`'a bağımlı (zip'te yok); varsayılan 20 ms gecikme; pYIN tabanı +1…+4 ct; `out_vs_target` motorun kendi hedefini kullanıyor | Orta (QA) | MEASURED / INSPECTED | `tests/vocal_metrics.py:27,62,117` |
 | R12 | Stereo bağlı ve mono toplam analizli: kanal içerikleri farklıysa yanlış düzeltme | Düşük–Orta | MEASURED (sentetik) | `Source/dsp/TuneEngine.h:170-177` |
 | R13 | REALTIME'da analiz 0–6 ms geç kalabiliyor; perde işaretleri büyük sıçramada gecikmeli algıyı izliyor (oturma 30–70 ms) | Düşük–Orta | INSPECTED + MEASURED | `Source/dsp/TuneEngine.h:322-375` |
 | R14 | MIX %50'de 6,3 dB vuruntu (doğrusal geçiş, kaçınılmaz olabilir) | Düşük | MEASURED (sentetik) | `Source/dsp/TuneEngine.h:215` |
-| R15 | Preset yükleme Key ve Scale'i de değiştiriyor (kullanıcının tonu kaybolur) | Düşük (UX) | INSPECTED | `Source/PresetManager.cpp:84-87,136` |
+| R15 | Preset yükleme Key ve Scale'i de değiştiriyor (kullanıcının tonu kaybolur) | Düşük (UX) | INSPECTED | `Source/PresetManager.cpp:30-33,82` |
 | R16 | İngilizce etiketler çakışıyor: vibrato düğmesi "SCALE", transpoze "PITCH RANGE" | Düşük (UX) | INSPECTED + ekran görüntüsü | `Source/Lang.cpp:35,37` |
 | R17 | Inter alt kümesinde Kiril ve CJK yok; işletim sistemi yazı tipine bağlı | Düşük | MEASURED | `Resources/fonts/*`, `Source/ui/Theme.h:52-54` |
 | R18 | Oturum `version` alanı okunmuyor; ileride göç yolu yok | Düşük | INSPECTED | `Source/PluginProcessor.cpp:113,118-130` |
@@ -571,7 +571,7 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 
 **Dosyalar ve işler:**
 1. `Source/PluginProcessor.cpp:49-65` (`readParams`): Her değer `std::isfinite` + aralık kırpma; NaN ise varsayılan.
-2. `Source/PresetManager.cpp:128-145` (`applyValues`) ve `Source/PluginProcessor.cpp:118-130` (`setStateInformation`): Sonlu olmayan değerleri reddet → varsayılan.
+2. `Source/PresetManager.cpp:74-91` (`applyValues`) ve `Source/PluginProcessor.cpp:118-130` (`setStateInformation`): Sonlu olmayan değerleri reddet → varsayılan.
 3. `Source/dsp/TuneEngine.h` (`process` / `analysisHop` / `placeGrains`):
    - Sonlu olmayan giriş örneğini 0 yap.
    - Biquad / algılayıcı durumu bozulursa yalnızca analiz tarafını sıfırla.

@@ -144,6 +144,45 @@ Voice referenceMelody()
     v.vibrato = 0.12;
     return v;
 }
+
+/** Every parameter holds a number, and one second of singing comes out as finite samples. */
+bool paramsAndAudioFinite (VSTMTuneProcessor& p)
+{
+    for (auto* prm : p.getParameters())
+        if (! std::isfinite (prm->getValue()))
+            return false;
+    p.setPlayConfigDetails (2, 2, kFs, 512);
+    p.prepareToPlay (kFs, 512);
+    Voice v;
+    v.notes = { 57.35 };
+    std::vector<float> out;
+    processSeconds (p, v, 1.0, &out);
+    p.releaseResources();
+    for (float s : out)
+        if (! std::isfinite (s))
+            return false;
+    return true;
+}
+
+/** A saved session of a fresh processor, with its XML edited. */
+juce::MemoryBlock editedState (const std::function<void (juce::XmlElement&)>& edit)
+{
+    VSTMTuneProcessor a;
+    juce::MemoryBlock mb;
+    a.getStateInformation (mb);
+    auto xml = juce::AudioProcessor::getXmlFromBinary (mb.getData(), (int) mb.getSize());
+    edit (*xml);
+    juce::MemoryBlock out;
+    juce::AudioProcessor::copyXmlToBinary (*xml, out);
+    return out;
+}
+
+void setStateValue (juce::XmlElement& state, const char* id, const char* value)
+{
+    for (auto* e : state.getChildWithTagNameIterator ("PARAM"))
+        if (e->getStringAttribute ("id") == id)
+            e->setAttribute ("value", value);
+}
 } // namespace
 
 //==============================================================================
@@ -298,6 +337,118 @@ int main (int argc, char* argv[])
         const auto n1 = a.presets.getCurrentName();
         a.presets.loadPrevious();
         CHECK (n1 == "Robot Voice" && a.presets.getCurrentName() == "Hard Tune", "next / previous preset");
+    }
+
+    //--------------------------------------------------------------------------
+    std::printf ("\n=== 3b) Damaged or older sessions ===\n");
+    {
+        {
+            VSTMTuneProcessor p;
+            juce::Random rng (1234);
+            juce::MemoryBlock junk (4096);
+            for (size_t i = 0; i < junk.getSize(); ++i)
+                junk[i] = (char) rng.nextInt (256);
+            p.setStateInformation (junk.getData(), (int) junk.getSize());
+            p.setStateInformation (nullptr, 0);
+            CHECK (paramsAndAudioFinite (p) && p.apvts.getParameter (vstm::ids::robotism)->getCurrentValueAsText() == "Balanced",
+                   "random bytes / an empty block as session: ignored");
+        }
+        {
+            // a session from an older version: one known parameter, one that no longer exists, no version field
+            juce::XmlElement x ("VSTMTune");
+            auto* known = x.createNewChildElement ("PARAM");
+            known->setAttribute ("id", "robotism");
+            known->setAttribute ("value", 20.0);
+            auto* gone = x.createNewChildElement ("PARAM");
+            gone->setAttribute ("id", "paramFromAnOldVersion");
+            gone->setAttribute ("value", 3.0);
+            juce::MemoryBlock mb;
+            juce::AudioProcessor::copyXmlToBinary (x, mb);
+            VSTMTuneProcessor p;
+            setParam (p, vstm::ids::retune, 99.0f);
+            p.setStateInformation (mb.getData(), (int) mb.getSize());
+            CHECK (std::abs (p.apvts.getRawParameterValue (vstm::ids::robotism)->load() - 20.0f) < 1.0e-3f
+                       && std::abs (p.apvts.getRawParameterValue (vstm::ids::retune)->load() - 15.0f) < 1.0e-3f
+                       && paramsAndAudioFinite (p),
+                   "older session: known value restored, missing value back to default, unknown id ignored");
+        }
+        {
+            const auto mb = editedState ([] (juce::XmlElement& x)
+            {
+                setStateValue (x, "correction", "nan");
+                setStateValue (x, "key", "nan");
+                setStateValue (x, "bypass", "nan");
+                setStateValue (x, "mix", "inf");
+                setStateValue (x, "transpose", "99");
+                setStateValue (x, "formant", "-1e9");
+            });
+            VSTMTuneProcessor p;
+            p.setStateInformation (mb.getData(), (int) mb.getSize());
+            CHECK (paramsAndAudioFinite (p), "damaged session (nan / inf / out of range): every parameter and the audio stay finite");
+            auto text = [&p] (const juce::String& id) { return p.apvts.getParameter (id)->getCurrentValueAsText(); };
+            CHECK (text (vstm::ids::correction) == "100%" && text (vstm::ids::key) == "Auto" && text (vstm::ids::bypass) == "Off"
+                       && text (vstm::ids::mix) == "100%" && text (vstm::ids::transpose) == "+12 st" && text (vstm::ids::formant) == "-12.0",
+                   "nan -> default, inf / out of range -> limit (%s, %s, %s, %s, %s, %s)", text (vstm::ids::correction).toRawUTF8(),
+                   text (vstm::ids::key).toRawUTF8(), text (vstm::ids::bypass).toRawUTF8(), text (vstm::ids::mix).toRawUTF8(),
+                   text (vstm::ids::transpose).toRawUTF8(), text (vstm::ids::formant).toRawUTF8());
+        }
+    }
+
+    //--------------------------------------------------------------------------
+    std::printf ("\n=== 3c) User preset files ===\n");
+    {
+        // a throw-away folder: the test never touches the real user presets
+        const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("VSTMTune_PluginTest_Presets");
+        folder.deleteRecursively();
+        folder.createDirectory();
+        vstm::PresetManager::setUserPresetFolderOverride (folder);
+
+        folder.getChildFile ("A truncated.vstmpreset").replaceWithText ("<VSTMTunePreset name=\"A\"><PARAM id=\"robotism\" val");
+        folder.getChildFile ("B nan.vstmpreset").replaceWithText ("<VSTMTunePreset name=\"B\" version=\"1\"><PARAM id=\"correction\" value=\"nan\"/>"
+                                                                  "<PARAM id=\"key\" value=\"nan\"/><PARAM id=\"mix\" value=\"inf\"/>"
+                                                                  "<PARAM id=\"robotism\" value=\"10\"/></VSTMTunePreset>");
+        folder.getChildFile ("C range.vstmpreset").replaceWithText ("<VSTMTunePreset name=\"C\"><PARAM id=\"transpose\" value=\"99\"/>"
+                                                                    "<PARAM id=\"formant\" value=\"-99\"/><PARAM id=\"key\" value=\"57\"/></VSTMTunePreset>");
+        folder.getChildFile ("D empty.vstmpreset").replaceWithText ({});
+
+        VSTMTuneProcessor p;
+        auto& pm = p.presets;
+        pm.refreshUserPresets();
+        const int factory = pm.getNumFactoryPresets();
+        CHECK (pm.getNumPresets() == factory + 4, "%d user preset files listed", pm.getNumPresets() - factory);
+
+        bool finite = true;
+        for (int i = factory; i < pm.getNumPresets(); ++i)
+        {
+            pm.loadPreset (i);
+            finite = paramsAndAudioFinite (p) && finite;
+        }
+        CHECK (finite, "truncated / nan / out of range / empty preset files: parameters and audio stay finite");
+
+        int nanPreset = -1;
+        for (int i = 0; i < pm.getNumPresets(); ++i)
+            if (pm.getPresetName (i) == "B nan") nanPreset = i;
+        pm.loadPreset (nanPreset);
+        CHECK (std::abs (p.apvts.getRawParameterValue (vstm::ids::robotism)->load() - 10.0f) < 1.0e-3f
+                   && p.apvts.getParameter (vstm::ids::correction)->getCurrentValueAsText() == "100%"
+                   && p.apvts.getParameter (vstm::ids::key)->getCurrentValueAsText() == "Auto",
+               "preset with nan values: good values loaded, nan values at their defaults");
+
+        setParam (p, vstm::ids::humanize, 77.0f);
+        CHECK (pm.saveUserPreset ("Test Save"), "save a user preset");
+        setParam (p, vstm::ids::humanize, 11.0f);
+        CHECK (pm.saveUserPreset ("Test Save"), "overwrite it (same name)");
+        pm.loadPreset (0);
+        int saved = -1;
+        for (int i = 0; i < pm.getNumPresets(); ++i)
+            if (pm.getPresetName (i) == "Test Save") saved = i;
+        pm.loadPreset (saved);
+        CHECK (saved >= 0 && std::abs (p.apvts.getRawParameterValue (vstm::ids::humanize)->load() - 11.0f) < 0.06f && ! pm.isDirty(),
+               "reload the overwritten preset (humanize %s)", p.apvts.getParameter (vstm::ids::humanize)->getCurrentValueAsText().toRawUTF8());
+        CHECK (pm.deleteUserPreset (saved) && ! folder.getChildFile ("Test Save.vstmpreset").exists(), "delete it");
+
+        vstm::PresetManager::setUserPresetFolderOverride ({});
+        folder.deleteRecursively();
     }
 
     //--------------------------------------------------------------------------

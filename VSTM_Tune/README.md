@@ -88,6 +88,9 @@ giriş (gecikmeli, "dry") ──────────────────
   −45 dBFS'i aşan tıklar yarıya indi (40 → 22).
 - Düzeltme 0 iken plugin şeffaftır (çıkış = giriş, 61 dB SNR) ve dry sinyalle örneğine kadar hizalıdır; MIX'te faz kayması olmaz.
 - Motor blok boyutundan bağımsızdır (64 veya 1013 örneklik bloklar bit-bit aynı çıkışı verir), ses iş parçacığında kilit / bellek ayırma yoktur.
+- **Bozuk veriye karşı korumalı:** girişteki NaN / Inf örnekleri (bozuk bir önceki plugin) sessizliğe çevrilir, düzeltme
+  hemen kaldığı yerden sürer. Oturum veya preset dosyasındaki `nan` / `inf` değerler parametrenin varsayılanına döner;
+  motor sayı olmayan bir parametre değerinde son geçerli değeri kullanır. Normal seste çıkış bit-bit aynıdır.
 - Arayüz 1536 × 1024'lük vektörel bir tuval üzerinde çizilir ve ölçeklenir (her boyutta ve HiDPI'da keskin);
   sabit katmanlar ekranın gerçek piksel ölçeğinde bir kez çizilip saklanır.
 

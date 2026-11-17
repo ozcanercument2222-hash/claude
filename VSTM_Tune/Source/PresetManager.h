@@ -38,6 +38,9 @@ public:
     static juce::File getUserPresetFolder();
     static bool isPresetParameter (const juce::String& paramID);
 
+    /** Tests: keep user presets in another folder (an empty File = the normal location). */
+    static void setUserPresetFolderOverride (const juce::File& folder);
+
 private:
     struct Entry { juce::String id; float value; };
     struct Factory { juce::String name; std::vector<Entry> values; };

@@ -32,8 +32,24 @@ bool PresetManager::isPresetParameter (const juce::String& id)
     return id != ids::bypass && id != ids::realtime && id != ids::range;
 }
 
+namespace
+{
+juce::File& presetFolderOverride()
+{
+    static juce::File folder;            // set only by tests, before any preset is read
+    return folder;
+}
+} // namespace
+
+void PresetManager::setUserPresetFolderOverride (const juce::File& folder)
+{
+    presetFolderOverride() = folder;
+}
+
 juce::File PresetManager::getUserPresetFolder()
 {
+    if (presetFolderOverride() != juce::File())
+        return presetFolderOverride();
     return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
         .getChildFile ("VSTM Audio").getChildFile ("VSTM Tune").getChildFile ("Presets");
 }
@@ -81,7 +97,7 @@ void PresetManager::applyValues (const std::vector<Entry>& values)
 
         float target = rp->getDefaultValue();
         for (const auto& e : values)
-            if (e.id == rp->paramID)
+            if (e.id == rp->paramID && std::isfinite (e.value))       // "nan" / "inf" in a damaged file: default
                 target = rp->convertTo0to1 (e.value);
 
         rp->beginChangeGesture();
