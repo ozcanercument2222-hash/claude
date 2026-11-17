@@ -133,6 +133,8 @@ target_link_libraries(VSTMTune
 #
 #    VSTMTune_EngineTest : ses motoru testi (JUCE gerektirmez)
 #    VSTMTune_PluginTest : parametreler, state, presetler, arayuz ekran goruntuleri
+#    VSTMTune_WavProbe   : gercek WAV render + analiz kaydi (tests/vocal_metrics.py ile)
+#    VSTMTune_AuditProbe : denetim olcumleri S1-S15 (JUCE gerektirmez)
 # ------------------------------------------------------------------------------
 option(VSTM_BUILD_TESTS "Test programlarini da olustur" OFF)
 if(VSTM_BUILD_TESTS)
@@ -146,6 +148,12 @@ if(VSTM_BUILD_TESTS)
     target_compile_features(VSTMTune_EngineTest PRIVATE cxx_std_17)
     target_compile_options(VSTMTune_EngineTest PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
     target_link_options(VSTMTune_EngineTest PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/STACK:16777216>")
+
+    # denetim olcumleri S1-S15 (VSTM_TUNE_AUDIT.md): sentetik senaryolar -> JSONL + WAV, karar vermez
+    add_executable(VSTMTune_AuditProbe tests/audit_probe.cpp)
+    target_include_directories(VSTMTune_AuditProbe PRIVATE Source)
+    target_compile_features(VSTMTune_AuditProbe PRIVATE cxx_std_17)
+    target_compile_options(VSTMTune_AuditProbe PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 
     juce_add_console_app(VSTMTune_PluginTest PRODUCT_NAME "VSTMTune_PluginTest")
     target_sources(VSTMTune_PluginTest PRIVATE tests/plugin_test.cpp ${VSTM_PLUGIN_SOURCES})

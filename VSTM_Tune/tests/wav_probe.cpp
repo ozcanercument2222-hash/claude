@@ -9,7 +9,9 @@
 //
 //  CSV: her analiz adimi (~2.9 ms) icin zaman (giris zaman cizgisinde, saniye),
 //  voiced, giris perdesi, cikis perdesi (MIDI), hedef nota, sapma ve bayraklar.
-//  Cikis WAV'i 32-bit float, motor gecikmesi KORUNUR (host'taki gibi).
+//  Cikis WAV'i 32-bit float, motor gecikmesi KORUNUR (host'taki gibi); sona gecikme
+//  kadar sessizlik eklenir, boylece girisin son ornekleri de cikar (cikis = giris + gecikme).
+//  Desteklenen giris: PCM 16 / 24 / 32 bit ve 32-bit float; bozuk / kisa chunk reddedilir.
 //==============================================================================
 #include "dsp/TuneEngine.h"
 
@@ -49,24 +51,28 @@ bool readWav (const char* path, Wav& w)
     size_t pcmBytes = 0;
     while (pos + 8 <= b.size())
     {
-        const uint32_t size = rd32 (&b[pos + 4]);
-        const unsigned char* body = &b[pos + 8];
-        if (std::memcmp (&b[pos], "fmt ", 4) == 0)
+        const uint32_t size = rd32 (b.data() + pos + 4);
+        const size_t avail = b.size() - (pos + 8);                    // bytes really present after the header
+        const unsigned char* body = b.data() + pos + 8;
+        if (std::memcmp (b.data() + pos, "fmt ", 4) == 0)
         {
+            if (size < 16 || avail < 16) return false;                // truncated / malformed fmt chunk
             fmt = rd16 (body);
             w.channels = rd16 (body + 2);
             w.rate = rd32 (body + 4);
             bits = rd16 (body + 14);
-            if (fmt == 0xFFFE && size >= 26) fmt = rd16 (body + 24);   // WAVE_FORMAT_EXTENSIBLE sub-format
+            if (fmt == 0xFFFE && size >= 26 && avail >= 26) fmt = rd16 (body + 24);   // WAVE_FORMAT_EXTENSIBLE sub-format
         }
-        else if (std::memcmp (&b[pos], "data", 4) == 0)
+        else if (std::memcmp (b.data() + pos, "data", 4) == 0)
         {
             pcm = body;
-            pcmBytes = std::min ((size_t) size, b.size() - (pos + 8));
+            pcmBytes = std::min ((size_t) size, avail);
         }
-        pos += 8 + size + (size & 1);
+        pos += 8 + (size_t) size + (size & 1);
     }
-    if (! pcm || w.channels <= 0 || bits == 0) return false;
+    if (! pcm || w.channels <= 0 || w.rate < 8000.0 || w.rate > 768000.0) return false;
+    // supported: PCM 16 / 24 / 32 bit and 32-bit float (anything else is refused before any sample is read)
+    if (! ((fmt == 1 && (bits == 16 || bits == 24 || bits == 32)) || (fmt == 3 && bits == 32))) return false;
 
     const int bps = bits / 8;
     const size_t frames = pcmBytes / (size_t) (bps * w.channels);
@@ -148,6 +154,10 @@ int main (int argc, char** argv)
     e.prepare (w.rate, realtime);
     e.setParams (p);
     const int nc = std::min (2, w.channels);
+    const int latency = e.getLatencySamples();
+    const size_t inFrames = w.data[0].size();
+    for (auto& c : w.data)                                  // flush the engine's delay: the end of the input comes out too
+        c.resize (inFrames + (size_t) latency, 0.0f);
     const size_t frames = w.data[0].size();
 
     FILE* csv = csvPath ? std::fopen (csvPath, "w") : nullptr;
@@ -177,7 +187,7 @@ int main (int argc, char** argv)
     out.channels = nc;
     out.data.resize ((size_t) nc);
     if (! writeWav (argv[2], out)) { std::fprintf (stderr, "cannot write %s\n", argv[2]); return 4; }
-    std::printf ("rendered %zu frames @ %.0f Hz, latency %d samples (%.1f ms), hop %.2f ms\n",
-                 frames, w.rate, e.getLatencySamples(), latS * 1000.0, hopS * 1000.0);
+    std::printf ("rendered %zu frames (+%d flush) @ %.0f Hz, latency %d samples (%.1f ms), hop %.2f ms\n",
+                 inFrames, latency, w.rate, latency, latS * 1000.0, hopS * 1000.0);
     return 0;
 }
