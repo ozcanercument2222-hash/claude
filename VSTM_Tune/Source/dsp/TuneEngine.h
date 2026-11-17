@@ -25,7 +25,9 @@
 //      kaydirma kucukken (<= 0.5 yarim ses tam, >= 1.5 yarim ses hic): buyuk kaydirmada
 //      icerik zaten farklidir, ofset yalnizca zaman sicramasi olur.
 //
-//  Gecikme sabittir (REALTIME 20 ms, kapaliyken 40 ms) ve host'a bildirilir.
+//  Gecikme sabittir (REALTIME 20 ms, kapaliyken 40 ms) ve host'a bildirilir. Mod calarken
+//  degisirse motor sifirlanmaz: cikis 5 ms kisilir, sentez yeni gecikmenin zaman cizgisine
+//  tasinir, 5 ms'de geri acilir; giris gecmisi, perde analizi ve bulunan ton korunur.
 //  Motor blok boyutundan bagimsizdir: ayni giris her blok boyutunda ayni cikisi verir.
 //==============================================================================
 #include "DspCommon.h"
@@ -95,13 +97,22 @@ public:
         reset();
     }
 
-    void setRealtime (bool shouldBeRealtime)
+    /** REALTIME (20 ms) <-> HQ (40 ms) while audio runs. Called on the audio thread at a block
+        boundary. The output fades out (5 ms), the synthesis moves to the new output timeline and the
+        output fades back in (5 ms). The input history, pitch analysis, marks and the automatic key are
+        kept: no reset, no stretch of silence, no click. The new latency is in effect after the
+        fade-out; content shifts by the latency difference (that is what a latency change means). */
+    void setRealtime (bool shouldBeRealtime) noexcept
     {
         if (shouldBeRealtime == realtime)
             return;
         realtime = shouldBeRealtime;
-        latency = latencyFor (sr, realtime);
-        reset();
+        pendingLatency = latencyFor (sr, realtime);
+        if (switchState == 2)                               // fading in: fade out again from the gain reached
+            switchPos = switchFade - switchPos;
+        else if (switchState == 0)
+            switchPos = 0;
+        switchState = 1;
     }
 
     int getLatencySamples() const noexcept  { return latency; }
@@ -143,6 +154,10 @@ public:
         planValid = false;
         mixSmooth = params.mix;
         wetSmooth = params.active ? 1.0f : 0.0f;
+        switchState = 0;
+        switchPos = 0;
+        switchFade = std::max (1, (int) std::lround (sr * 0.005));
+        pendingLatency = latency;
         detectedKey.store (-1);
         currentNote.store (-1);
         currentVoiced.store (false);
@@ -207,6 +222,7 @@ public:
                 analysisHop();
 
             // ---- output (timeline position t = nIn - 1 - latency)
+            const float switchGain = switchState != 0 ? advanceSwitch() : 1.0f;   // REALTIME <-> HQ fade
             const int64_t t = nIn - 1 - latency;
             mixSmooth += (params.mix - mixSmooth) * smoothCoef;
             wetSmooth += (wetTarget - wetSmooth) * smoothCoef;
@@ -231,7 +247,7 @@ public:
                 const float wet = xf < 0.0f ? v + u : u + xf * (v - u);
                 v = u = 0.0f;
                 const float dry = in[(size_t) ch][ti];
-                channels[ch][i] = dry + wetGain * (wet - dry);
+                channels[ch][i] = (dry + wetGain * (wet - dry)) * switchGain;      // x 1.0 is exact: no change normally
             }
         }
     }
@@ -248,6 +264,60 @@ public:
 private:
     static constexpr int kRing = 1 << 16;
     static constexpr int64_t kMask = kRing - 1;
+
+    //------------------------------------------------------------ REALTIME <-> HQ
+    /** Gain of the next output sample while a latency switch runs:
+        state 1 = fading out on the old timeline, 2 = fading in on the new one. */
+    float advanceSwitch() noexcept
+    {
+        if (switchState == 1)
+        {
+            if (++switchPos < switchFade)
+                return 1.0f - (float) switchPos / (float) switchFade;
+            moveToLatency (pendingLatency);                 // output is silent at this very sample
+            switchState = 2;
+            switchPos = 0;
+            return 0.0f;
+        }
+        if (++switchPos < switchFade)
+            return (float) switchPos / (float) switchFade;
+        switchState = 0;
+        switchPos = 0;
+        return 1.0f;
+    }
+
+    /** Moves the synthesis to the output timeline of another latency. Analysis, marks, the input
+        history and the key are untouched; only what the old timeline had already scheduled ahead of
+        the output (grains, crossfade weights) is cleared, and grain placement restarts at the new
+        output position. */
+    void moveToLatency (int newLatency) noexcept
+    {
+        if (newLatency == latency)
+            return;
+        const int64_t tOld = nIn - 1 - latency;
+        const double reachOld = 8.0 * maxHalf();            // a grain never reaches further ahead (hOut <= 4 x hIn)
+        latency = newLatency;
+        const int64_t tNew = nIn - 1 - latency;
+        const int64_t from = std::min (tOld, tNew);
+        const int64_t to = std::max (tOld, tNew) + (int64_t) std::max (reachOld, 8.0 * maxHalf()) + 8;
+        for (int64_t k = from; k <= to; ++k)
+        {
+            const auto ki = (size_t) (k & kMask);
+            acc[0][ki] = acc[1][ki] = 0.0f;
+            accU[0][ki] = accU[1][ki] = 0.0f;
+            xfade[ki] = -1.0f;
+        }
+        sNext = (double) std::max<int64_t> (tNew, 0);
+        lastS = -1.0e9;
+        lastHOut = 0.0;
+        lastSrcOffset = 0.0;
+        lastGrainVoiced = false;
+        tailActive = false;
+        xfadeArmed = false;
+        tailNext = tailLast = tailOffset = 0.0;
+        xfadeEnd = -1;
+        planValid = false;
+    }
 
     /** NaN / Inf from a plugin before this one would stay in the analysis filters for good: they
         become silence. Absurd finite values are limited to +80 dBFS so no sum can overflow.
@@ -811,5 +881,8 @@ private:
     int64_t xfadeEnd = -1;
 
     float mixSmooth = 1.0f, wetSmooth = 1.0f;
+
+    // REALTIME <-> HQ switch: 0 = none, 1 = fading out (old latency), 2 = fading in (new latency)
+    int switchState = 0, switchPos = 0, switchFade = 240, pendingLatency = 882;
 };
 } // namespace vstm

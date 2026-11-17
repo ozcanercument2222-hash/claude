@@ -505,6 +505,78 @@ int main()
         check (finite && normal, "NaN parameters for 0.5 s: output finite, normal afterwards (" + detail + ")");
     }
 
+    // 12) REALTIME <-> HQ while audio runs (what processBlock does at a block boundary): no stretch of
+    //     silence, no click, the tuning and the automatic key are kept, the new latency is in effect.
+    //     Before: a full reset = 40 ms of exact zeros, a 5x sample step, the detected key forgotten.
+    {
+        const double f = midiToHz (57.40);
+        auto x = makeVoice (sr, 3.0, [&] (double) { return f; });
+        TuneEngine e;
+        e.prepare (sr, true);
+        e.setParams (baseParams());
+        auto y = x;
+        int latHQ = 0, latRT = 0;
+        for (size_t pos = 0; pos < y.size(); pos += 256)
+        {
+            if (pos == (size_t) (1.0 * sr) / 256 * 256) e.setRealtime (false);
+            if (pos == (size_t) (2.0 * sr) / 256 * 256) e.setRealtime (true);
+            if (pos == (size_t) (1.5 * sr) / 256 * 256) latHQ = e.getLatencySamples();
+            if (pos == (size_t) (2.5 * sr) / 256 * 256) latRT = e.getLatencySamples();
+            const int n = (int) std::min ((size_t) 256, y.size() - pos);
+            float* chans[2] = { y.data() + pos, nullptr };
+            e.process (chans, 1, n);
+        }
+        size_t run0 = 0, longest = 0;
+        bool finite = true;
+        for (size_t i = (size_t) (0.5 * sr); i < y.size(); ++i)
+        {
+            finite = finite && std::isfinite (y[i]);
+            run0 = y[i] == 0.0f ? run0 + 1 : 0;
+            longest = std::max (longest, run0);
+        }
+        auto maxStep = [&] (double a, double b)
+        {
+            double m = 0.0;
+            for (size_t i = (size_t) (a * sr) + 1; i < (size_t) (b * sr); ++i) m = std::max (m, (double) std::abs (y[i] - y[i - 1]));
+            return m;
+        };
+        const double steady = maxStep (0.6, 0.95);
+        const double atSwitch = std::max (maxStep (0.98, 1.10), maxStep (1.98, 2.10));
+        const double c1 = cents (measureHz (y, sr, (int) (sr * 1.5), (int) (sr * 0.2), 220.0), 220.0);
+        const double c2 = cents (measureHz (y, sr, (int) (sr * 2.6), (int) (sr * 0.2), 220.0), 220.0);
+        check (finite && longest < (size_t) (0.001 * sr) && atSwitch <= 1.5 * steady && latHQ == TuneEngine::latencyFor (sr, false)
+                   && latRT == TuneEngine::latencyFor (sr, true) && std::abs (c1) < 1.0 && std::abs (c2) < 1.0,
+               "REALTIME switch: longest zero run " + std::to_string (longest) + " samples, step " + std::to_string (atSwitch)
+                   + " vs steady " + std::to_string (steady) + ", latency " + std::to_string (latHQ) + " / " + std::to_string (latRT)
+                   + ", tuning " + std::to_string (c1) + " / " + std::to_string (c2) + " ct");
+
+        // the automatic key survives the switch (C major melody, switched at 3.0 s, after the key is found)
+        const double notes[] = { 60, 62, 64, 65, 67, 69, 71, 72, 67, 64, 60, 62, 64, 65, 67, 72 };
+        auto mel = makeVoice (sr, 5.6, [&] (double t)
+        {
+            const int i = std::min (15, (int) (t / 0.35));
+            return midiToHz (notes[i] + 0.18 * std::sin (i * 1.7));
+        });
+        TuneEngine k;
+        k.prepare (sr, true);
+        auto p = baseParams();
+        p.key = -1;
+        p.scale = kMajor;
+        k.setParams (p);
+        bool lost = false;
+        int before = -2;
+        for (size_t pos = 0; pos < mel.size(); pos += 512)
+        {
+            if (pos == (size_t) (3.0 * sr) / 512 * 512) { before = k.detectedKey.load(); k.setRealtime (false); }
+            const int n = (int) std::min ((size_t) 512, mel.size() - pos);
+            float* chans[2] = { mel.data() + pos, nullptr };
+            k.process (chans, 1, n);
+            if (before >= 0 && k.detectedKey.load() != before) lost = true;
+        }
+        check (before == 0 && ! lost, "REALTIME switch keeps the automatic key (C before, "
+                                          + std::to_string (k.detectedKey.load()) + " after)");
+    }
+
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASSED" : "FAILED", failures, failures == 1 ? "" : "s");
     return failures == 0 ? 0 : 1;
 }

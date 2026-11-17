@@ -39,7 +39,7 @@ Testle ölçülen davranış (48 kHz, sentetik vokal, A3 → C4 sıçraması, ±
 | **PITCH RANGE** | Düzeltilmiş sesi ±12 yarım ses transpoze eder. |
 | **MIX** | Orijinal ↔ düzeltilmiş ses karışımı. |
 | **AUTOTUNE ON** | Aç / kapat. DAW'ın bypass düğmesiyle senkron; kapalıyken ses gecikmesi korunur (takır yok). |
-| **REALTIME** | Açık: düşük gecikme (**20 ms**, kayıt / canlı için). Kapalı: yüksek kalite (**40 ms**, çok kalın sesler için). DAW gecikmeyi otomatik telafi eder. |
+| **REALTIME** | Açık: düşük gecikme (**20 ms**, kayıt / canlı için). Kapalı: yüksek kalite (**40 ms**, çok kalın sesler için). DAW gecikmeyi otomatik telafi eder. Çalarken değiştirilebilir: ses 5 ms kısılıp yeni gecikmeyle 5 ms'de geri açılır (sessizlik / tık yok, bulunan ton korunur). |
 | 〰 düğmesi | Perde ekranında ham giriş perdesini de gösterir. |
 
 **Perde ekranı:** dikey çizgi yazma kafasıdır, soldan sağa tarar (6 saniye). Mor eğri düzeltilmiş çıkış,
