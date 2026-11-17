@@ -1,0 +1,24 @@
+{
+  "juce_dir": "/path/to/JUCE",
+  "plugin_path": "/path/to/YourPlugin.vst3",
+  "pluginval_path": "pluginval",
+  "sample_rates": [
+    44100,
+    48000,
+    96000
+  ],
+  "block_sizes": [
+    64,
+    128,
+    256,
+    512,
+    1024
+  ],
+  "default_sample_rate": 48000,
+  "default_block_size": 512,
+  "render_directory": "artifacts/audio-runs",
+  "audio_perception": {
+    "status": "not_configured",
+    "note": "Connect a genuine audio-capable model/tool before claiming LISTENED."
+  }
+}
