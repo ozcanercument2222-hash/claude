@@ -5,7 +5,8 @@
 | Tarih | 17.11.2026 |
 | Denetlenen kod | `VSTM-Tune-Kaynak-Kod.zip` (SHA-256 `712d03fb…2b4`). Depodaki `VSTM_Tune/` + `.github/workflows/vstm-tune.yml` ile **birebir aynı** (`diff -rq`), commit `21ff3f6` |
 | Esas alınan belge | `VSTM_Tune_Gelistirme_Yol_Haritasi.txt` v1.0 |
-| Kaynak kodda değişiklik | **Yok.** Bu denetimde yalnızca bu dosya eklendi. Ölçüm araçları depo dışında, `artifacts/` altında tutuldu |
+| Kaynak kodda değişiklik | Denetimde **yok** (bu dosya `8124b64`'te eklendi). Sonrasında aynı gün P0-1 (kısmi), P0-2 ve P0-3 uygulandı: **Bölüm 15** |
+| Satır numaraları | Denetlenen sürüme (`21ff3f6`) göredir; sonraki commit'lerde kayabilir |
 
 ## Kanıt etiketleri
 
@@ -57,6 +58,8 @@
    - Çıkışta koruma (limiter) yok.
 
 **Öneri:** Bölüm 11'deki P0 sırasıyla ilerlenmeli. Önce test altyapısı ve iki küçük sağlamlık düzeltmesi (NaN/Inf ve REALTIME geçişi) gelmeli; bunlar küçük, ölçülebilir ve geri alınabilir. Gerçek vokal seti kullanıcıdan gelmeli ve bu iş hemen, paralel başlamalı.
+
+> **Güncelleme (17.11.2026, aynı gün):** Risk 1, 2 ve 5 düzeltildi ve testle kanıtlandı (`00bde73`, `154eddc`). Ölçüm aracı depoya alındı ve WavProbe sağlamlaştırıldı (`76f8594`). Normal girişte çıktı bit düzeyinde değişmedi. Testler: EngineTest 41/41, PluginTest 43/43. Ayrıntılar ve tamamlanma raporları **Bölüm 15**'te. Risk 3, 4, 6, 7 ve 8 açık.
 
 ---
 
@@ -427,17 +430,17 @@ Varsayılan ayar, 20 s melodi, 64 örneklik bloklar:
 
 | # | Risk | Önem | Kanıt | Yer |
 |---|---|---|---|---|
-| R1 | Tek bir NaN/Inf giriş örneği düzeltmeyi motor sıfırlanana kadar kapatıyor; 5 NaN örnek çıkışa geçiyor | **Yüksek** | MEASURED | `Source/dsp/TuneEngine.h:170-185`, `Source/dsp/DspCommon.h:43-49` |
-| R2 | NaN parametre (bozuk oturum/preset) kalıcı sessizlik ya da NaN çıkış üretiyor; değer düzelse de geçmiyor | **Yüksek** | MEASURED | `Source/PluginProcessor.cpp:49-65`, `Source/PresetManager.cpp:82-89`, `Source/dsp/TuneEngine.h:192,652` |
+| R1 | Tek bir NaN/Inf giriş örneği düzeltmeyi motor sıfırlanana kadar kapatıyor; 5 NaN örnek çıkışa geçiyor. **✅ Düzeltildi (`00bde73`, Bölüm 15.2)** | **Yüksek** | MEASURED | `Source/dsp/TuneEngine.h:170-185`, `Source/dsp/DspCommon.h:43-49` |
+| R2 | NaN parametre (bozuk oturum/preset) kalıcı sessizlik ya da NaN çıkış üretiyor; değer düzelse de geçmiyor. **✅ Düzeltildi (`00bde73`, Bölüm 15.2)** | **Yüksek** | MEASURED | `Source/PluginProcessor.cpp:49-65`, `Source/PresetManager.cpp:82-89`, `Source/dsp/TuneEngine.h:192,652` |
 | R3 | Gerçek vokal test seti fiilen yok: 6 RAVDESS klibi, 8 kHz bantlı, NC lisans, depo dışı, metadata yok. Önceki bir oturumda kullanılan 2:48'lik vokal stem'i (MP3, kaynak ayrıştırıcı çıktısı) da depoda değil | **Yüksek** | MEASURED / INSPECTED | `~/.cache/vstm-ear/testdata`, `artifacts/audio-runs/tune-listening/README.txt` |
 | R4 | İnsan dinlemesi, DAW testi ve macOS/AU derlemesi yok | **Yüksek** | CI / INSPECTED | `.github/workflows/vstm-tune.yml` |
-| R5 | REALTIME geçişinde 40 ms sessizlik + tık + Auto key sıfırlanması | Orta | MEASURED | `Source/dsp/TuneEngine.h:98-122`, `Source/PluginProcessor.cpp:92-94` |
+| R5 | REALTIME geçişinde 40 ms sessizlik + tık + Auto key sıfırlanması. **✅ Düzeltildi (`154eddc`, Bölüm 15.3)** | Orta | MEASURED | `Source/dsp/TuneEngine.h:98-122`, `Source/PluginProcessor.cpp:92-94` |
 | R6 | Yüksek seste legato yukarı oktavda algılayıcı eski oktavda kalıyor; alt oktav +31 dB, ekranda yanlış oktav | Orta | MEASURED (sentetik) | `Source/dsp/PitchDetector.h:119-136` |
 | R7 | Auto key: 1–2 notayla yanlış kesinlik, yavaş modülasyon takibi (>8 s), ilk tahminin yanlış olabilmesi; güven bilgisi yok | Orta | MEASURED (sentetik) | `Source/dsp/KeyDetector.h:29,59,84` |
 | R8 | Büyük transpoze / formant'ta −7,4…+2,6 dB seviye ve +5,9 dB tepe kayması; çıkış koruması yok | Orta | MEASURED (sentetik) | `Source/dsp/TuneEngine.h:528,545` |
 | R9 | CI test öncesi paket yüklüyor; başarısız testte yayın engeli, pluginval, WAV regresyonu ve sanitizer yok | Orta | INSPECTED | `.github/workflows/vstm-tune.yml:62-138` |
 | R10 | `setStateInformation` içinde dosya taraması ve snapshot yeniden kurulumu var; host bunu UI dışı iş parçacığından çağırırsa editör zamanlayıcısındaki `isDirty()` ile veri yarışı olabilir | Orta / Düşük | INSPECTED | `Source/PluginProcessor.cpp:127`, `Source/PresetManager.cpp:179-201`, `Source/PluginEditor.cpp:388-390` |
-| R11 | `vocal_metrics.py` depo kökündeki `tools/`'a bağımlı (zip'te yok); varsayılan 20 ms gecikme; pYIN tabanı +1…+4 ct; `out_vs_target` motorun kendi hedefini kullanıyor | Orta (QA) | MEASURED / INSPECTED | `tests/vocal_metrics.py:27,62,117` |
+| R11 | `vocal_metrics.py` depo kökündeki `tools/`'a bağımlı (zip'te yok); varsayılan 20 ms gecikme; pYIN tabanı +1…+4 ct; `out_vs_target` motorun kendi hedefini kullanıyor. (WavProbe'un WAV ayrıştırma açıkları `76f8594`'te kapatıldı; vocal_metrics maddeleri açık) | Orta (QA) | MEASURED / INSPECTED | `tests/vocal_metrics.py:27,62,117` |
 | R12 | Stereo bağlı ve mono toplam analizli: kanal içerikleri farklıysa yanlış düzeltme | Düşük–Orta | MEASURED (sentetik) | `Source/dsp/TuneEngine.h:170-177` |
 | R13 | REALTIME'da analiz 0–6 ms geç kalabiliyor; perde işaretleri büyük sıçramada gecikmeli algıyı izliyor (oturma 30–70 ms) | Düşük–Orta | INSPECTED + MEASURED | `Source/dsp/TuneEngine.h:322-375` |
 | R14 | MIX %50'de 6,3 dB vuruntu (doğrusal geçiş, kaçınılmaz olabilir) | Düşük | MEASURED (sentetik) | `Source/dsp/TuneEngine.h:215` |
@@ -462,9 +465,9 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 | Madde | Durum | Gerekçe / kanıt |
 |---|---|---|
 | **1.1** Gerçek vokal test veri seti | **GELİŞTİRİLECEK** | Yalnızca 6 RAVDESS klibi: 8 kHz bantlı, NC lisans, depo dışı, metadata yok (MEASURED). Ses aralığı, stil, mikrofon çeşitliliği yok. Commit `faf17eb`'deki ölçümlerde kullanılan 2:48'lik stem (MP3, ayrıştırıcı çıktısı) depoda değil; kayıplı formatta, hakları belirsiz |
-| **1.2** WAV test hattı otomasyonu | KISMEN MEVCUT | WavProbe + vocal_metrics var. Tek komutluk matris, JSON/CSV toplama, önceki sürümle regresyon raporu, otomatik gecikme ve WAV hata denetimi yok. Bu denetimdeki `vocals/run_baseline.sh` bir başlangıç |
+| **1.2** WAV test hattı otomasyonu | KISMEN MEVCUT | WavProbe + vocal_metrics var. Tek komutluk matris, JSON/CSV toplama, önceki sürümle regresyon raporu ve otomatik gecikme yok. Bu denetimdeki `vocals/run_baseline.sh` bir başlangıç. *Güncelleme:* WavProbe WAV hata denetimi ve kuyruk (flush) eklendi, `VSTMTune_AuditProbe` depoda (`76f8594`) |
 | **1.3** Bağımsız perde doğrulama | KISMEN MEVCUT | engine_test ölçümü oktav hatasına kör; pYIN+YIN tabanı +1…+4 ct (MEASURED); oktav hatası, voiced FP/FN ve jitter metriği yok |
-| **1.4** Gerçek zamanlı kararlılık | KISMEN MEVCUT | Örnekleme hızı, blok, stereo (aynı içerik), 10 dk ve otomasyon ✓ (MEASURED). **NaN/Inf ✗, REALTIME geçişi ✗** (MEASURED). Host içinde preset/bypass/yeniden başlatma NOT TESTED |
+| **1.4** Gerçek zamanlı kararlılık | KISMEN MEVCUT | Örnekleme hızı, blok, stereo (aynı içerik), 10 dk ve otomasyon ✓ (MEASURED). Denetimde NaN/Inf ✗ ve REALTIME geçişi ✗ idi; **ikisi de düzeltildi ve testle doğrulandı** (`00bde73`, `154eddc`). Host içinde preset/bypass/yeniden başlatma NOT TESTED |
 | **2.1** F0 doğruluğu | KISMEN MEVCUT | Sentetikte doğru; **soprano legato oktavında takılma** (MEASURED); gerçek vokalde referanslı doğruluk yok |
 | **2.2** Güven sistemi | KISMEN MEVCUT | Clarity yalnızca voicing ve ton histogramında; birleşik güven, güvene göre yumuşatma ve UI göstergesi yok |
 | **2.3** Voiced / unvoiced | MEVCUT – TEST EDİLECEK | Histerezis, başlangıç, köprü, U→V çapraz geçiş var; sentetikte FP yok (MEASURED). Tam bantlı gerçek ünsüzlerde NOT TESTED |
@@ -478,7 +481,7 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 | **4.2** Formant | KISMEN MEVCUT | Perde korunuyor; seviye −7,4…+2,6 dB (MEASURED); doğallık ve metaliklik dinlenmedi |
 | **4.3** Vibrato | KISMEN MEVCUT | Var olan vibratoyu ölçekliyor (MEASURED); vibrato analizi ve **vibrato ekleme yok** |
 | **4.4** Seviye ve spektrum | KISMEN MEVCUT | 0 st'de seviye korunuyor; büyük kaydırmada kayma; limiter / true-peak yok; MIX doğrusal (%50'de vuruntu) |
-| **4.5** Gecikme | MEVCUT – TEST EDİLECEK | Bildirilen = ölçülen ✓; mod değişiminde kesinti ✗; DAW PDC NOT TESTED |
+| **4.5** Gecikme | MEVCUT – TEST EDİLECEK | Bildirilen = ölçülen ✓; mod değişiminde kesinti denetimde ✗ idi, **düzeltildi** (5 ms kısma/açma, `154eddc`); DAW PDC NOT TESTED |
 | **5.1** Auto Key doğruluğu | KISMEN MEVCUT | Örnek melodilerde doğru; yanlış kesinlik, yavaş modülasyon (MEASURED); güven ve alternatif yok |
 | **5.2** Kullanıcı kontrolü | MEVCUT – TEST EDİLECEK | Auto ile sabit ton ayrı; algılama parametreyi ezmiyor; "Auto · A" gösteriliyor; "bulunan tonu sabitle" eylemi yok |
 | **5.3** Dizi kapsamı | KISMEN MEVCUT | 13 dizi maskesi incelemeyle doğru (Hicaz = 0,1,4,5,7,8,10); dizi başına otomatik test, UI nota haritası ve Custom Scale yok |
@@ -492,14 +495,14 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 | **7.3** Kontroller | KISMEN MEVCUT | Sürükleme, Shift, tekerlek, çift tık, yazarak giriş, sağ tık var; ok tuşları doğrulanmadı; 768×512'de küçük yazılar; etiket çakışması (R16) |
 | **7.4** Ölçekleme | KISMEN MEVCUT | 768–1536 sabit oran; Linux ekran görüntüleri ✓; Windows/macOS DPI NOT TESTED |
 | **7.5** Dil desteği | MEVCUT – TEST EDİLECEK | 7 dil, 92 metin tam; Kiril/CJK için yazı tipi düşüşü (Linux ✓, diğerleri NOT TESTED) |
-| **8.1** Parametre uyumluluğu | MEVCUT – TEST EDİLECEK | Sabit kimlikler, version hint 1; **NaN temizleme yok**; yumuşatma yalnızca mix ve bypass'ta |
-| **8.2** Oturum geri yükleme | KISMEN MEVCUT | Gidiş-dönüş, bozuk, eski ve yabancı oturum ✓ (MEASURED); **NaN ✗**; `version` okunmuyor; iş parçacığı riski (R10) |
-| **8.3** Preset sistemi | KISMEN MEVCUT | 14 fabrika + kullanıcı ✓; bozuk dosya ✓, **NaN ✗**; Transparent, Fast Rap ve Balanced Tune kategorileri yok; preset Key/Scale'i değiştiriyor; geçiş anlık |
+| **8.1** Parametre uyumluluğu | MEVCUT – TEST EDİLECEK | Sabit kimlikler, version hint 1; NaN temizleme denetimde yoktu, **eklendi** (`00bde73`); yumuşatma yalnızca mix ve bypass'ta |
+| **8.2** Oturum geri yükleme | KISMEN MEVCUT | Gidiş-dönüş, bozuk, eski ve yabancı oturum ✓; **NaN artık ✓** (PluginTest 3b, `00bde73`); `version` okunmuyor; iş parçacığı riski (R10) |
+| **8.3** Preset sistemi | KISMEN MEVCUT | 14 fabrika + kullanıcı ✓; bozuk dosya ✓, **NaN artık ✓**, kaydet/üzerine yaz/sil otomatik testte (PluginTest 3c); Transparent, Fast Rap ve Balanced Tune kategorileri yok; preset Key/Scale'i değiştiriyor; geçiş anlık |
 | **8.4** A/B ve undo | GELİŞTİRİLECEK | UndoManager yok, A/B yok |
 | **9** Host uyumluluğu | KISMEN MEVCUT | JUCE VST3 host'unda yükleme: Linux (MEASURED) ve Windows (CI) ✓; DAW matrisi NOT TESTED; **macOS/AU hiç derlenmedi** (CI); pluginval yok |
-| **10.1** Ses iş parçacığı | KISMEN MEVCUT | Bellek ayırma ve kilit yok (INSPECTED), denormal ✓; **NaN/Inf ✗**; TSan yok |
+| **10.1** Ses iş parçacığı | KISMEN MEVCUT | Bellek ayırma ve kilit yok (INSPECTED), denormal ✓; **NaN/Inf artık ✓** (`00bde73`); REALTIME geçişinde ~2 MB'lık tam sıfırlama yerine yalnızca eski zaman çizgisinin ilerisi temizleniyor (48 kHz'de ~9 400 konum; `154eddc`); TSan yok |
 | **10.2** CPU | KISMEN MEVCUT | Bu denetimde ölçüldü; depoda benchmark yok |
-| **10.3** Bellek | KISMEN MEVCUT | Örnek başına sabit ~2,1 MB; sızıntı testi yok; ayrıştırma güvenli (NaN hariç) |
+| **10.3** Bellek | KISMEN MEVCUT | Örnek başına sabit ~2,1 MB; sızıntı testi yok; oturum ve preset ayrıştırma güvenli (NaN dahil, `00bde73`); WavProbe ayrıştırıcısı ASan altında temiz (`76f8594`) |
 | **10.4** Kod kalitesi | KISMEN MEVCUT | 0 uyarı (GCC 13); sanitizer ve statik analiz yok |
 | **11.1** Gelişmiş tuning | KISMEN MEVCUT | Transpoze ±12 ve giriş perdesi gösterimi var; **A4 = 440 sabit** (`DspCommon.h:19-20`); MIDI hedefi ve dizi dışı nota seçenekleri yok |
 | **11.2** İş akışı | KISMEN MEVCUT | Sıfırlama ve preset klasörünü açma var; favori, son kullanılan, A/B, undo, kopyala/yapıştır yok; kısa yardım yalnızca ROBOTISM "i" balonu |
@@ -522,16 +525,16 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 | Standalone açılış ve ses G/Ç | ❌ NOT TESTED |
 | Örnekleme hızı ve blok testleri | ✅ motor (MEASURED); host ❌ |
 | Gecikme host'a doğru bildiriliyor | ✅ (JUCE host); DAW PDC ❌ |
-| Oturum kaydet/yükle | ✅ (NaN hariç) |
-| Preset kaydet/yükle | ✅ (NaN hariç) |
+| Oturum kaydet/yükle | ✅ bozuk / eski / NaN oturum dahil (PluginTest 3b) |
+| Preset kaydet/yükle | ✅ bozuk / NaN dosya, kaydet / üzerine yaz / sil dahil (PluginTest 3c) |
 | Tüm parametrelerde host otomasyonu | ⚠️ yalnızca sayı ve stres (motor); DAW ❌ |
 | Gerçek vokal perde doğruluğu ölçüldü | ⚠️ 8 kHz bantlı 6 klip |
 | ROBOTISM tüm aralıkta dinlendi | ❌ |
 | Sibilans ve ünsüz geçişleri | ❌ |
 | Formant ve vibrato gerçek vokalde | ❌ |
-| Click/pop/thump testleri | ⚠️ ölçüm var, dinleme yok; REALTIME geçişi ❌ |
+| Click/pop/thump testleri | ⚠️ ölçüm var, dinleme yok; REALTIME geçişi ✅ (EngineTest 12) |
 | CPU ve bellek stresi | ⚠️ CPU ve 10 dk ✓; sızıntı ❌ |
-| Ses iş parçacığı güvenliği | ⚠️ inceleme ✓; NaN ❌; TSan ❌ |
+| Ses iş parçacığı güvenliği | ⚠️ inceleme ✓; NaN / Inf ✅ (EngineTest 10, 11); TSan ❌ |
 | DAW uyumluluk matrisi | ❌ |
 | UI çözünürlük ve DPI | ⚠️ yalnızca Linux |
 | Çeviriler | ✅ tablo tam; görsel kontrol yalnızca Linux |
@@ -550,7 +553,7 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 - Parametre kimlikleri ve oturum formatı değişmemeli.
 - Sıralama gerekçesi: 1–3 küçük ve ölçülebilir, sonraki her şeyin önünü açar. 4 kullanıcıya bağlı, hemen ve paralel başlamalı. 5–8'in kabulü gerçek veri setine bağlı.
 
-### P0-1 Test altyapısını depoya al (1.2, 1.3)
+### P0-1 Test altyapısını depoya al (1.2, 1.3) — **kısmen yapıldı** (`76f8594`: madde 1 ve 6; 2–5 açık)
 
 **Dosyalar:** `tests/wav_probe.cpp`, `tests/vocal_metrics.py`, yeni `tests/run_vocal_matrix.py`, `tests/engine_test.cpp`, `CMakeLists.txt`.
 
@@ -567,7 +570,7 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 
 **Kabul:** Tek komut. Başarısız metrikler dosya, parametre ve zaman damgasıyla raporlanır. Ölçüm aracı hatası belgelenir.
 
-### P0-2 Sayısal sağlamlık: NaN/Inf (1.4, 10.1) — **en yüksek değer / en küçük değişiklik**
+### P0-2 Sayısal sağlamlık: NaN/Inf (1.4, 10.1) — ✅ **yapıldı** (`00bde73`, Bölüm 15.2)
 
 **Dosyalar ve işler:**
 1. `Source/PluginProcessor.cpp:49-65` (`readParams`): Her değer `std::isfinite` + aralık kırpma; NaN ise varsayılan.
@@ -586,7 +589,7 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 - NaN parametre gelince çıkış sonlu; geçerli değer gelince ≤ 0,1 s içinde normal davranış.
 - Mevcut 69 test (37 + 32) geçmeye devam eder; blok bağımsızlığı (S5) korunur.
 
-### P0-3 REALTIME geçişi kesintisiz / tıksız (4.5, 1.4)
+### P0-3 REALTIME geçişi kesintisiz / tıksız (4.5, 1.4) — ✅ **yapıldı** (`154eddc`, Bölüm 15.3)
 
 **Dosyalar:** `Source/dsp/TuneEngine.h:98-122` (`setRealtime` / `reset`), `Source/PluginProcessor.cpp:92-94`.
 
@@ -720,7 +723,9 @@ VSTM_Tune/build-audit/VSTMTune_EngineTest
 HOME=$(mktemp -d) xvfb-run -a VSTM_Tune/build-audit/VSTMTune_PluginTest_artefacts/Release/VSTMTune_PluginTest goruntuler \
       --vst3 "VSTM_Tune/build-audit/VSTMTune_artefacts/Release/VST3/VSTM Tune.vst3"
 
-# denetim ölçümleri (depo kökünden)
+# denetim ölçümleri (depo kökünden). 76f8594'ten beri aynı program depoda: VSTM_Tune/tests/audit_probe.cpp
+VSTM_Tune/build-audit/VSTMTune_AuditProbe <klasor> [S1 ... S15]
+# denetim anındaki kopyası:
 R=artifacts/audio-runs/2026-11-17_vstm-tune-audit
 g++ -std=c++17 -O2 -I VSTM_Tune/Source $R/harness/audit_engine.cpp -o $R/harness/audit_engine
 $R/harness/audit_engine $R/out            # tüm senaryolar; tek senaryo: $R/harness/audit_engine $R/out S2
@@ -745,3 +750,84 @@ Hepsi `artifacts/audio-runs/2026-11-17_vstm-tune-audit/` altında, yerel ve git 
 | `harness/state_test/`, `state_preset_test.log` | Oturum / preset sağlamlık testi |
 | `analysis/independent_pitch.{py,json}` | pYIN doğrulaması, oktav ve alt oktav analizi |
 | `packs/` | İnsan kör A/B dinleme paketleri |
+
+---
+
+## 15. Uygulanan P0 düzeltmeleri (17.11.2026, denetimden sonra)
+
+Kullanıcı onayıyla (“Herşey için iznim var”) yapıldı. Her adım ayrı commit; önce test yazıldı ve düzeltmesiz kodda **kaldığı** kaydedildi, sonra düzeltme uygulandı. Kanıt dosyaları: `artifacts/audio-runs/2026-11-17_p0-fixes/` (yerel, git dışı).
+
+### 15.1 Ölçüm aracı depoda + WavProbe sağlamlığı (P0-1, kısmi) — `76f8594`
+
+| Alan | |
+|---|---|
+| Görev | Denetim ölçümlerini depoya almak; WavProbe'un WAV ayrıştırma açıklarını kapatmak |
+| Değiştirilen dosyalar | `tests/audit_probe.cpp` (yeni, hedef `VSTMTune_AuditProbe`), `tests/wav_probe.cpp`, `CMakeLists.txt`, `README.md` |
+| Sorunun mevcut davranışı | Ölçüm programı depo dışındaydı. WavProbe: kısa `fmt` chunk'ta **dosya sınırı dışına okuma** (ASan: heap-buffer-overflow), 1–7 bit PCM'de **sıfıra bölme** (UBSan), 0 Hz dosyayı "0 Hz'de render" ediyordu; çıkışın son 20/40 ms'si kesiliyordu (MEASURED) |
+| Yapılan değişiklik | AuditProbe hedefi (S1–S15, JSONL + WAV). WavProbe: chunk / `fmt` uzunluğu, 8–768 kHz, yalnız PCM 16/24/32 ve float32 kabul; çıkışın sonuna gecikme kadar sessizlik (flush) |
+| Neden bu yöntem | Test araçlarında davranışı değiştirmeyen en küçük düzeltme; ölçümler tek komutla yeniden üretilebilir |
+| Derleme sonucu | Başarılı, proje kaynaklarında 0 uyarı |
+| Çalıştırılan testler | AuditProbe S2/S3/S5/S15; WavProbe 6 vokal × 2 ayar; ASan + UBSan altında 3 bozuk WAV (eski / yeni) |
+| Test sonucu | AuditProbe değerleri denetimle birebir. 12 render önceki sürümle **bit düzeyinde aynı** (+960 örnek kuyruk). Bozuk dosyaların üçü de temiz hata ile reddediliyor (eskisi: taşma / sıfıra bölme / anlamsız render) |
+| Gerçek vokal test sonucu | 6 RAVDESS × 2 ayar: fark 0 |
+| Önceki sürümle fark | Yalnızca WavProbe çıkışı gecikme kadar uzun (girişin sonu artık kesilmiyor) |
+| CPU / latency etkisi | Yok (test araçları) |
+| Bilinen sınırlamalar | P0-1'in 2–5. maddeleri açık: `vocal_metrics.py` bağımsızlığı ve gecikmeyi WavProbe'dan alması, oktav hatası / voiced FP-FN / jitter metrikleri, `run_vocal_matrix.py` |
+| Geri alma noktası | `git revert 76f8594` (öncesi `8124b64`) |
+
+### 15.2 NaN / Inf koruması (P0-2) — `00bde73`
+
+| Alan | |
+|---|---|
+| Görev | R1 ve R2: bozuk giriş ya da bozuk değer eklentiyi kalıcı olarak bozmasın |
+| Değiştirilen dosyalar | `Source/dsp/TuneEngine.h`, `Source/PluginProcessor.h/.cpp`, `Source/PresetManager.h/.cpp`, `tests/engine_test.cpp`, `tests/plugin_test.cpp`, `README.md` |
+| Sorunun mevcut davranışı | Tek NaN/Inf giriş örneği → düzeltme motor sıfırlanana kadar yok, 5 NaN çıkış örneği. 0,5 s NaN parametre → `amount`, `formant`, `transpose`, `retune`, `robotism`: **kalıcı sessizlik**; `mix`: **kalıcı NaN**. Oturum / preset'teki `nan` → NaN ses (MEASURED) |
+| Yapılan değişiklik | **Motor:** NaN/Inf giriş örneği 0, ±1e4 (+80 dBFS) dışı sınırlanır; `setParams` sayı olmayan değerde son geçerli değeri tutar, değerleri güvenli aralıklara kırpar; tanecik zamanlayıcısının yeniden eşitlenmesi NaN'ı da yakalar; MIX / bypass yumuşatması takılmaz. **Processor:** canlı okumada sayı olmayan değer → parametrenin varsayılanı (key/scale/range aralığa kırpılır); oturum yüklenince NaN/Inf parametreler varsayılana döner; `uiScale` NaN ise 0,75. **Presetler:** dosyadaki NaN/Inf değer atlanır (varsayılan). Testler için `PresetManager::setUserPresetFolderOverride` |
+| Neden bu yöntem | Üç bağımsız katman: kaynakta (oturum / preset) değer düzelir, okumada varsayılan kullanılır, motor her durumda son geçerli değerde kalır. Normal yolda yalnızca birer karşılaştırma eklenir; parametre kimlikleri ve oturum formatı değişmedi |
+| Derleme sonucu | Başarılı, 0 uyarı (ilk denemedeki bir `-Wshadow` uyarısı giderildi) |
+| Çalıştırılan testler | EngineTest (+2: NaN / Inf / 1e30 giriş; 6 parametrede 0,5 s NaN), PluginTest (+11: bozuk ve eski oturum, bozuk preset dosyaları, kullanıcı preseti kaydet / üzerine yaz / yükle / sil), AuditProbe S1–S15, WavProbe 12 render, VST3 2 render, CPU A/B |
+| Test sonucu | **Düzeltmeden önce:** EngineTest 2 FAIL, PluginTest 4 FAIL. **Sonra:** EngineTest 39/39, PluginTest 43/43 (VST3 ve ekran görüntüleri dahil). S2: non-finite çıkış 5 → 0, düzeltme 563/563 adımda sürüyor; S15: dört parametrede de çıkış sonlu, seviye 0,0 dB, perde 0,00 ct |
+| Gerçek vokal test sonucu | 6 RAVDESS × 2 ayar ve 2 VST3 render: **bit düzeyinde aynı** |
+| Önceki sürümle fark | Normal girişte yok. AuditProbe'da S2 ve S15 dışındaki 42 ölçüm birebir aynı |
+| CPU / latency etkisi | Latency değişmedi. CPU: aynı derleme bayraklarıyla, yapılandırma başına 3 koşu medyanı −0,08 puan; aynı programın koşudan koşuya oynaması 0,54 puan → **ölçülebilir fark yok** (sanal makine) |
+| Bilinen sınırlamalar | +80 dBFS üstü giriş sınırlanır (gerçek seste oluşmaz). Motor kırpma aralıkları plugin aralıklarını kapsar; yalnızca WavProbe gibi doğrudan kullanımda formant/transpoze ±24 st, Vibrato Scale 0–4 ile sınırlı |
+| Geri alma noktası | `git revert 00bde73` (öncesi `76f8594`) |
+
+### 15.3 REALTIME geçişi kesintisiz ve tıksız (P0-3) — `154eddc`
+
+| Alan | |
+|---|---|
+| Görev | R5: çalarken REALTIME ↔ HQ değişince ses kesilmesin, tık olmasın, bulunan ton kaybolmasın |
+| Değiştirilen dosyalar | `Source/dsp/TuneEngine.h`, `tests/engine_test.cpp`, `README.md` |
+| Sorunun mevcut davranışı | Motor tamamen sıfırlanıyordu: **40 ms tam sessizlik** (1920 örnek @ 48 kHz), geçişte örnek adımı 0,155 (sabit durumda 0,029), Auto key siliniyordu; ses iş parçacığında ~2 MB tampon temizleniyordu (MEASURED) |
+| Yapılan değişiklik | `setRealtime` sıfırlamıyor: çıkış 5 ms kısılır, tam sessiz örnekte sentez yeni gecikmenin zaman çizgisine taşınır (yalnızca eski çizginin ilerisi temizlenir) ve 5 ms'de geri açılır. Giriş geçmişi, perde analizi, işaretler ve ton korunur. Geçiş sürerken yeniden değişirse ulaşılan kazançtan devam eder |
+| Neden bu yöntem | En küçük ve güvenli değişiklik. İki zaman çizgisini aynı anda sentezleyip çapraz geçmek daha karmaşık ve CPU'da pahalı olurdu; gecikme değişimi içerikte zaten bir sıçrama demek, kısa kısma bunu tıksız yapıyor |
+| Derleme sonucu | Başarılı, 0 uyarı |
+| Çalıştırılan testler | EngineTest (+2: geçiş ve "bulunan ton korunur"), PluginTest (43, VST3 dahil), AuditProbe S1–S15, WavProbe 12 render, VST3 2 render |
+| Test sonucu | **Önce:** 2 FAIL (1920 örnek sıfır, adım 0,155 / 0,029, ton bir süre kayıp). **Sonra:** EngineTest 41/41; en uzun sıfır dizisi **1 örnek**, geçişte adım **0,0293** (sabit 0,0294), yeni gecikme yürürlükte (1920 / 960), perde 0,00 ct, ton korunuyor. S3: 40 ms → 0,02 ms |
+| Gerçek vokal test sonucu | Geçiş olmayan 12 render ve 2 VST3 render bit düzeyinde aynı |
+| Önceki sürümle fark | Yalnızca geçiş anında. İçerik gecikme farkı kadar kayar (RT→HQ'da 20 ms tekrar, HQ→RT'de 20 ms atlanır); bu, 10 ms'lik V biçimli kısmanın içinde kalıyor |
+| CPU / latency etkisi | Geçiş yokken her örnekte tek bir dal; geçişte sınırlı temizlik (48 kHz'de ~9 400 konum). Bildirilen gecikme parametre değişince hemen, motordaki geçiş 5 ms sonra |
+| Bilinen sınırlamalar | Geçiş anındaki 20 ms tekrar / atlama **dinlenmedi**; DAW'da (PDC yeniden hesaplama) denenmedi |
+| Geri alma noktası | `git revert 154eddc` (öncesi `00bde73`) |
+
+### 15.4 Engellenen ve açık işler
+
+- **pluginval: ENGELLİ.**
+  - Önceki oturumdan kalan `pluginval.zip`, resmi v1.0.4 Linux sürümüyle aynı (SHA-256 `c01c49d8…b55352`; GitHub'dan indirilip karşılaştırıldı).
+  - Bu ikiliyi çalıştırma isteği otomatik izin denetimi tarafından reddedildi. Aşmaya çalışılmadı.
+  - Çalıştırmak için kullanıcının bir izin kuralı eklemesi ya da kendi makinesinde `pluginval --strictness-level 10 --validate "VSTM Tune.vst3"` komutunu çalıştırması gerekiyor (bayraklar `pluginval --help` ile doğrulanmalı).
+- **macOS CI:** İş hâlâ runner almıyor (Bölüm 0, madde 4).
+- **Kullanıcı girdisi gerektirenler:** gerçek vokal veri seti (P0-4) ve insan dinlemesi. P0-5…P0-8'in kabulü bunlara bağlı.
+- **P0-1'in kalan maddeleri:** Bölüm 15.1'de listelendi.
+
+### 15.5 Güncel test durumu
+
+| | Denetim (`21ff3f6`) | Şimdi (`154eddc`) |
+|---|---|---|
+| EngineTest | 37/37 | **41/41** |
+| PluginTest (`--vst3`, ekran görüntüleri) | 32/32 | **43/43** |
+| AuditProbe S2 (NaN/Inf giriş) | düzeltme kalıcı kayıp | düzeltme sürüyor, non-finite 0 |
+| AuditProbe S3 (REALTIME geçişi) | 40 ms sessizlik, adım ×5 | 0,02 ms, adım ≤ sabit durum |
+| AuditProbe S15 (NaN parametre) | kalıcı sessizlik / NaN | normal |
+| Normal girişte çıktı | – | bit düzeyinde aynı |
