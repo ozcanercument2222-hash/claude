@@ -9,7 +9,9 @@ What it can and cannot hear is recorded by `calibrate`; see docs/vstm-audio-rd/E
 Method (chosen by calibration, see EAR.md): every clip is judged ON ITS OWN with
 short, plain questions. Long checklists ("any distortion, clicks, noise...?") and
 two-clip comparisons in one prompt made this model answer "clean" even for heavily
-clipped audio, so they are not used.
+clipped audio, so they are not used. Each clip is also judged in several "views"
+(the same audio after 0/10/30 ms of leading silence): a single answer can flip
+between 10/10 and 1/10 on such a shift, so only unanimous views count as robust.
 
   describe   one clip  -> quality score 1-10 + short description (+ optional yes/no question)
   compare    two clips -> each judged separately, then the answers are compared
@@ -160,10 +162,51 @@ class Ear:
     def describe(self, y):
         return self.ask(y, PROMPT_DESCRIBE)
 
+    def rate_views(self, y, n):
+        rs = [self.rate(v) for v in views(y, n)]
+        return {"scores": [r["score"] for r in rs], "responses": [r["response"] for r in rs]}
+
+    def yesno_views(self, y, question, n):
+        rs = [self.yesno(v, question) for v in views(y, n)]
+        return {"answers": [r["answer"] for r in rs], "responses": [r["response"] for r in rs]}
+
     def yesno(self, y, question):
         r = self.ask(y, PROMPT_YESNO.format(question=question))
         m = re.match(r"\W*(yes|no)\b", r["response"], re.I)
         return {**r, "answer": m.group(1).lower() if m else None}
+
+
+VIEW_PADS_MS = (0, 10, 30, 50, 70)
+
+
+def views(y, n):
+    """The same clip with 0/10/30/... ms of leading silence (inaudible change)."""
+    return [np.concatenate([np.zeros(int(EAR_SR * ms / 1000)), y]) for ms in VIEW_PADS_MS[:max(1, n)]]
+
+
+def score_verdict(sa, sb):
+    """Robust only if every view of one clip scores >= 2 below every view of the other."""
+    if None in sa or None in sb:
+        return "inconclusive (unparsed score)"
+    if max(sb) <= min(sa) - 2:
+        return "b worse (robust)"
+    if max(sa) <= min(sb) - 2:
+        return "a worse (robust)"
+    if len(set(sa)) == 1 and sa == sb:
+        return "no difference"
+    if len(set(sa)) > 1 or len(set(sb)) > 1:
+        return "inconclusive (scores unstable across views)"
+    return "no clear difference (<2 points)"
+
+
+def answer_verdict(aa, ab):
+    if all(x == "no" for x in aa) and all(x == "yes" for x in ab):
+        return "b: yes, a: no (robust)"
+    if all(x == "yes" for x in aa) and all(x == "no" for x in ab):
+        return "a: yes, b: no (robust)"
+    if len(set(aa)) == 1 and aa == ab:
+        return f"no difference (both {aa[0]})"
+    return "inconclusive (answers unstable across views)"
 
 
 def parse_score(text):
@@ -186,12 +229,13 @@ def cmd_describe(args):
     ear = Ear(args.n_predict, args.threads, not args.no_cache)
     y = prepare(args.wav, args.start, args.dur)
     out = {"evidence": EVIDENCE, "file": args.wav, "start_s": args.start,
-           "duration_s": round(len(y) / EAR_SR, 2), "rating": ear.rate(y),
-           "description": ear.describe(y)}
+           "duration_s": round(len(y) / EAR_SR, 2), "views": args.views,
+           "rating": ear.rate_views(y, args.views), "description": ear.describe(y)}
     q = resolve_question(args.question)
     if q:
-        out["question"] = ear.yesno(y, q)
-    out["caveat"] = "AI model perception at 16 kHz mono; not human listening. See EAR.md calibration."
+        out["question"] = {"text": q, **ear.yesno_views(y, q, args.views)}
+    out["caveat"] = ("AI model perception at 16 kHz mono; not human listening. Answers that differ "
+                     "across views are not evidence. See EAR.md calibration.")
     print(json.dumps(out, indent=2))
 
 
@@ -199,26 +243,19 @@ def cmd_compare(args):
     ear = Ear(args.n_predict, args.threads, not args.no_cache)
     ya = prepare(args.a, args.start, args.dur)
     yb = prepare(args.b, args.start, args.dur)
-    ra, rb = ear.rate(ya), ear.rate(yb)
+    ra, rb = ear.rate_views(ya, args.views), ear.rate_views(yb, args.views)
     res = {"evidence": EVIDENCE, "a": args.a, "b": args.b, "start_s": args.start,
-           "rating": {"a": ra, "b": rb}}
-    verdicts = []
-    if ra["score"] is not None and rb["score"] is not None:
-        d = ra["score"] - rb["score"]
-        verdicts.append("b worse" if d >= 2 else "a worse" if d <= -2 else "no clear difference")
+           "views": args.views, "rating": {"a": ra, "b": rb},
+           "verdict": {"score": score_verdict(ra["scores"], rb["scores"])}}
     q = resolve_question(args.question)
     if q:
-        qa, qb = ear.yesno(ya, q), ear.yesno(yb, q)
+        qa, qb = ear.yesno_views(ya, q, args.views), ear.yesno_views(yb, q, args.views)
         res["question"] = {"text": q, "a": qa, "b": qb}
-        if qa["answer"] and qb["answer"] and qa["answer"] != qb["answer"]:
-            verdicts.append(f"question: a={qa['answer']}, b={qb['answer']}")
-        else:
-            verdicts.append("question: no difference")
+        res["verdict"]["question"] = answer_verdict(qa["answers"], qb["answers"])
     if args.describe:
         res["description"] = {"a": ear.describe(ya), "b": ear.describe(yb)}
-    res["verdict"] = verdicts
-    res["caveat"] = ("Score differences under 2 are noise. Trust a verdict only for artifact "
-                     "classes this ear detected in calibration (EAR.md).")
+    res["caveat"] = ("Only '(robust)' verdicts are evidence, and only for artifact classes this ear "
+                     "detected in calibration (EAR.md). 'inconclusive' is not a pass.")
     print(json.dumps(res, indent=2))
 
 
@@ -269,36 +306,41 @@ def cmd_calibrate(args):
     if args.only:
         cases = {k: v for k, v in cases.items() if any(s.lower() in k.lower() for s in args.only)}
 
+    n = args.views
     clean = normalize(to_ear(y, sr), EAR_SR)
-    base = ear.rate(clean)
+    base = ear.rate_views(clean, n)
     log = open(args.log, "a") if args.log else None
     results = []
     for name, (yd, qkey) in cases.items():
         yd = normalize(to_ear(yd, sr), EAR_SR)
-        r = ear.rate(yd)
-        row = {"case": name, "score_clean": base["score"], "score_case": r["score"], "rating": r}
-        d = (base["score"] or 0) - (r["score"] or 0)
+        r = ear.rate_views(yd, n)
+        row = {"case": name, "scores_clean": base["scores"], "scores_case": r["scores"], "rating": r}
+        v = score_verdict(base["scores"], r["scores"])
         if name.startswith("near-null"):
-            row["rating_outcome"] = "correct (no change)" if abs(d) < 2 else f"false alarm ({d:+d})"
+            row["rating_outcome"] = "correct (no change)" if v == "no difference" else f"false alarm: {v}"
         else:
-            row["rating_outcome"] = "detected" if d >= 2 else "missed"
+            row["rating_outcome"] = ("detected" if v == "b worse (robust)" else
+                                     "unstable" if v.startswith("inconclusive") else "missed")
         if qkey:
             q = QUESTIONS[qkey]
-            qc, qd = ear.yesno(clean, q), ear.yesno(yd, q)
+            qc, qd = ear.yesno_views(clean, q, n), ear.yesno_views(yd, q, n)
             row["question"] = {"key": qkey, "text": q, "clean": qc, "case": qd}
-            if qc["answer"] == "yes":
-                row["question_outcome"] = "unusable (says yes on clean)"
-            elif qd["answer"] == "yes":
+            yes = sum(a == "yes" for a in qd["answers"])
+            if any(a != "no" for a in qc["answers"]):
+                row["question_outcome"] = "unusable (not 'no' on clean)"
+            elif yes == len(qd["answers"]):
                 row["question_outcome"] = "detected"
+            elif yes:
+                row["question_outcome"] = f"partial ({yes}/{len(qd['answers'])})"
             else:
                 row["question_outcome"] = "missed"
         results.append(row)
         if log:
             log.write(json.dumps(row) + "\n")
             log.flush()
-        print(f"[calibrate] {name}: rating {base['score']}->{r['score']} {row['rating_outcome']}"
+        print(f"[calibrate] {name}: scores {base['scores']}->{r['scores']} {row['rating_outcome']}"
               + (f" | {qkey}: {row['question_outcome']}" if qkey else ""), file=sys.stderr, flush=True)
-    summary = {r["case"]: {"rating": f"{r['score_clean']}->{r['score_case']} {r['rating_outcome']}",
+    summary = {r["case"]: {"rating": f"{r['scores_clean']}->{r['scores_case']} {r['rating_outcome']}",
                            "question": r.get("question_outcome")} for r in results}
     print(json.dumps({"evidence": f"{EVIDENCE} calibration", "clean": args.wav,
                       "clean_rating": base, "summary": summary, "results": results}, indent=2))
@@ -309,6 +351,9 @@ def main():
     p.add_argument("--threads", type=int, default=None)
     p.add_argument("--n-predict", type=int, default=80)
     p.add_argument("--no-cache", action="store_true")
+    p.add_argument("--views", type=int, default=3,
+                   help="judge each clip this many times with 0/10/30/50/70 ms leading silence; "
+                        "only unanimous answers count (default 3; 1 = fast but unreliable)")
     sub = p.add_subparsers(dest="cmd", required=True)
     qhelp = "yes/no question, or a preset key: " + ", ".join(QUESTIONS)
 
