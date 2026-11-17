@@ -1,0 +1,147 @@
+# VSTM Tune - otomatik derleme
+#
+# VSTM_Tune/ altindaki her degisiklikte (veya Actions sayfasindan elle "Run workflow" ile)
+# Windows, macOS ve Linux'ta plugin derlenir, testler calistirilir ve derlenmis dosyalar
+# indirilebilir paket olarak yuklenir:
+#
+#   GitHub -> Actions -> "VSTM Tune derle" -> en ustteki calisma -> sayfanin altindaki "Artifacts"
+#
+#     VSTM-Tune-Windows : VSTM Tune.vst3 + VSTM Tune.exe (Standalone)
+#     VSTM-Tune-macOS   : VSTM Tune.vst3 + VSTM Tune.component (AU) + VSTM Tune.app (Apple Silicon + Intel)
+#     VSTM-Tune-Linux   : VSTM Tune.vst3 + VSTM_Tune_Standalone
+name: VSTM Tune derle
+
+on:
+  push:
+    paths:
+      - 'VSTM_Tune/**'
+      - '.github/workflows/vstm-tune.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: vstm-tune-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows, os: windows-latest }
+          # macOS makine kapasitesi sorunlu saatlerde is 15 dk'da iptal olabilir: "Re-run failed jobs".
+          - { name: macOS,   os: macos-15 }
+          - { name: Linux,   os: ubuntu-22.04 }
+
+    defaults:
+      run:
+        working-directory: VSTM_Tune
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux bagimliliklari
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxext-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev xvfb
+
+      - name: Yapilandir
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DVSTM_BUILD_TESTS=ON -DVSTM_COPY_AFTER_BUILD=OFF
+
+      - name: Derle
+        run: cmake --build build --config Release --parallel 4
+
+      # Once paketle ve yukle: testlerden biri takilsa bile derlenmis dosyalar indirilebilir olsun
+      - name: Paketle
+        shell: bash
+        run: |
+          R=build/VSTMTune_artefacts/Release
+          P=paket/VSTM-Tune-$RUNNER_OS
+          mkdir -p "$P"
+          cp -R "$R/VST3/VSTM Tune.vst3" "$P/"
+          cp README.md "$P/"
+          cp Resources/fonts/OFL-Inter.txt "$P/"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "$R/Standalone/VSTM Tune.exe" "$P/"
+            printf '%s\r\n' \
+              "VSTM Tune - Windows (64 bit)" "" \
+              "KURULUM" \
+              "  1) 'VSTM Tune.vst3' klasorunu oldugu gibi su klasorun icine kopyala:" \
+              "       C:\\Program Files\\Common Files\\VST3" \
+              "  2) DAW'i yeniden baslat ve plugin taramasi yap." \
+              "" \
+              "VSTM Tune.exe: DAW olmadan calisan surum (Standalone)." \
+              "" \
+              "Windows 'bilinmeyen yayinci' uyarisi verirse: Ek bilgi -> Yine de calistir." \
+              "(Dosyalar imzalanmamistir.)" > "$P/KURULUM.txt"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            cp -R "$R/AU/VSTM Tune.component" "$P/"
+            cp -R "$R/Standalone/VSTM Tune.app" "$P/"
+            printf '%s\n' \
+              "VSTM Tune - macOS (Apple Silicon + Intel, macOS 11 ve ustu)" "" \
+              "KURULUM" \
+              "  VSTM Tune.vst3       ->  ~/Library/Audio/Plug-Ins/VST3/" \
+              "  VSTM Tune.component  ->  ~/Library/Audio/Plug-Ins/Components/   (Logic / GarageBand)" \
+              "  Sonra DAW'i yeniden baslat ve plugin taramasi yap." \
+              "" \
+              "macOS 'dogrulanamadi / hasarli' derse (dosyalar Apple tarafindan onaylanmamistir):" \
+              "  Terminal'de, dosyalari kopyaladiktan sonra:" \
+              "    xattr -cr ~/Library/Audio/Plug-Ins/VST3/VSTM\\ Tune.vst3" \
+              "    xattr -cr ~/Library/Audio/Plug-Ins/Components/VSTM\\ Tune.component" \
+              "  veya Sistem Ayarlari -> Gizlilik ve Guvenlik -> 'Yine de izin ver'." \
+              "" \
+              "VSTM Tune.app: DAW olmadan calisan surum (Standalone)." > "$P/KURULUM.txt"
+          else
+            cp "$R/Standalone/VSTM Tune" "$P/VSTM_Tune_Standalone"
+            printf '%s\n' \
+              "VSTM Tune - Linux (x86_64)" "" \
+              "KURULUM" \
+              "  'VSTM Tune.vst3' klasorunu ~/.vst3/ icine kopyala, DAW'da plugin taramasi yap." \
+              "  VSTM_Tune_Standalone: chmod +x VSTM_Tune_Standalone && ./VSTM_Tune_Standalone" > "$P/KURULUM.txt"
+          fi
+
+      - name: macOS paketini ziple
+        if: runner.os == 'macOS'
+        run: cd paket && ditto -c -k --keepParent VSTM-Tune-macOS VSTM-Tune-macOS.zip && rm -rf VSTM-Tune-macOS
+
+      - name: Yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: VSTM-Tune-${{ runner.os }}
+          path: VSTM_Tune/paket/
+          if-no-files-found: error
+
+      - name: Ses motoru testi
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then build/Release/VSTMTune_EngineTest.exe; else build/VSTMTune_EngineTest; fi
+
+      - name: Plugin testi (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          xvfb-run -a build/VSTMTune_PluginTest_artefacts/Release/VSTMTune_PluginTest goruntuler \
+            --vst3 "build/VSTMTune_artefacts/Release/VST3/VSTM Tune.vst3"
+
+      - name: Plugin testi (Windows / macOS)
+        if: runner.os != 'Linux'
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          build/VSTMTune_PluginTest_artefacts/Release/VSTMTune_PluginTest goruntuler \
+            --vst3 "build/VSTMTune_artefacts/Release/VST3/VSTM Tune.vst3"
+
+      - name: Ekran goruntuleri
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vstm-tune-arayuz-${{ runner.os }}
+          path: VSTM_Tune/goruntuler/
+          if-no-files-found: ignore
