@@ -103,6 +103,7 @@ public:
         std::fill (monoLp.begin(), monoLp.end(), 0.0f);
         aa1.reset(); aa2.reset();
         detector.reset();
+        tracker.reset();
         keys.reset();
         corrector.reset();
 
@@ -224,7 +225,7 @@ private:
     //------------------------------------------------------------------ analysis
     void analysisHop() noexcept
     {
-        const auto r = detector.analyse (monoLp.data(), (int) kMask, nIn);
+        const auto r = tracker.process (detector.analyse (monoLp.data(), (int) kMask, nIn));
         const double dt = hop / sr;
 
         float inMidi = lastInMidi;
@@ -580,6 +581,7 @@ private:
     int64_t nIn = 0;
 
     PitchDetector detector;
+    PitchTracker tracker;
     KeyDetector keys;
     PitchCorrector corrector;
     bool curVoiced = false;

@@ -227,4 +227,100 @@ private:
     bool wasVoiced = false;
     double lastPeriod = 0.0;
 };
+//==============================================================================
+/** Cleans up the raw detector output before it drives the correction.
+
+    Real vocals (and vocal stems from a separator) give short, wrong estimates at
+    harmonic ratios: an octave, an octave + fifth, a fifth, mostly 5-20 ms long and
+    mostly at the start / end of a sung phrase. In a hard-tune setting each of those
+    becomes an audible "blip" to a wrong note. Rules:
+      - a phrase only starts after 3 agreeing estimates (~9 ms),
+      - a jump of more than 4.5 semitones is only accepted once it has lasted ~20 ms
+        (a real leap); shorter jumps are ignored and the last good pitch is held,
+      - a 1-2 hop unvoiced dropout inside a phrase is bridged. */
+class PitchTracker
+{
+public:
+    void reset() noexcept
+    {
+        voiced = false;
+        period = 0.0;
+        onsetCount = pendingCount = gapCount = 0;
+    }
+
+    PitchDetector::Result process (PitchDetector::Result r) noexcept
+    {
+        if (! r.voiced || r.period <= 1.0)
+        {
+            onsetCount = 0;
+            pendingCount = 0;
+            if (voiced && ++gapCount <= kMaxGap)
+            {
+                r.voiced = true;               // bridge a tiny dropout
+                r.period = period;
+                return r;
+            }
+            voiced = false;
+            r.voiced = false;
+            return r;
+        }
+        gapCount = 0;
+
+        if (! voiced)
+        {
+            if (onsetCount > 0 && semitones (onsetPeriod, r.period) < 1.5)
+                ++onsetCount;
+            else
+                onsetCount = 1;
+            onsetPeriod = r.period;
+
+            if (onsetCount < kOnsetHops)
+            {
+                r.voiced = false;
+                return r;
+            }
+            voiced = true;
+            period = r.period;
+            pendingCount = 0;
+            return r;
+        }
+
+        if (semitones (period, r.period) <= kMaxStep)
+        {
+            period = r.period;
+            pendingCount = 0;
+            return r;
+        }
+
+        // a big jump: accept only if it persists
+        if (pendingCount > 0 && semitones (pendingPeriod, r.period) < 1.5)
+            ++pendingCount;
+        else
+            pendingCount = 1;
+        pendingPeriod = r.period;
+
+        if (pendingCount >= kLeapHops)
+        {
+            period = r.period;
+            pendingCount = 0;
+            return r;
+        }
+
+        r.period = period;                      // hold the last trusted pitch
+        return r;
+    }
+
+private:
+    static double semitones (double a, double b) noexcept { return std::abs (12.0 * std::log2 (a / b)); }
+
+    static constexpr int kOnsetHops = 3;
+    static constexpr int kLeapHops = 7;
+    static constexpr int kMaxGap = 2;
+    static constexpr double kMaxStep = 4.5;
+
+    bool voiced = false;
+    double period = 0.0, onsetPeriod = 0.0, pendingPeriod = 0.0;
+    int onsetCount = 0, pendingCount = 0, gapCount = 0;
+};
+
 } // namespace vstm

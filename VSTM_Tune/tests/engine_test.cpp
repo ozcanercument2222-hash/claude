@@ -319,6 +319,41 @@ int main()
         check (e.detectedKey.load() == 0, "Auto key finds C major (got " + std::to_string (e.detectedKey.load()) + ")");
     }
 
+    // 8b) automatic key when the melody sits on the 2nd degree (D minor sung mostly on E)
+    {
+        const double notes[] = { 64, 64, 65, 64, 62, 64, 67, 65, 64, 64, 69, 64, 62, 70, 64, 72, 64, 65, 64, 62 };
+        auto f0 = [&] (double t)
+        {
+            const int i = std::min (19, (int) (t / 0.3));
+            return midiToHz (notes[i] - 12.0 + 0.15 * std::sin (i * 1.3));
+        };
+        auto x = makeVoice (sr, 6.0, f0);
+        TuneEngine e;
+        e.prepare (sr, true);
+        auto p = baseParams();
+        p.key = -1;
+        p.scale = kMinor;
+        e.setParams (p);
+        run (e, x, 512);
+        check (e.detectedKey.load() == 2, "Auto key finds D minor even when E is the most sung note (got " + std::to_string (e.detectedKey.load()) + ")");
+    }
+
+    // 8c) pitch tracker: short harmonic-ratio errors are ignored, real leaps accepted
+    {
+        PitchTracker tr;
+        auto est = [] (double hz) { PitchDetector::Result r; r.voiced = true; r.period = 48000.0 / hz; r.clarity = 0.9f; return r; };
+        bool onsetOk = ! tr.process (est (220.0)).voiced && ! tr.process (est (220.0)).voiced && tr.process (est (220.0)).voiced;
+        bool spikeHeld = true;
+        for (double hz : { 440.0, 440.0, 660.0, 110.0, 440.0 })            // 5-hop burst of octave / fifth errors
+            spikeHeld = spikeHeld && std::abs (tr.process (est (hz)).period - 48000.0 / 220.0) < 1e-6;
+        PitchDetector::Result last;
+        for (int i = 0; i < 8; ++i) last = tr.process (est (440.0));     // a real octave leap
+        const bool leapAccepted = std::abs (last.period - 48000.0 / 440.0) < 1e-6;
+        PitchDetector::Result gap; gap.voiced = false;
+        const bool bridged = tr.process (gap).voiced;
+        check (onsetOk && spikeHeld && leapAccepted && bridged, "pitch tracker: 3-hop onset, spikes held, 20 ms leap accepted, dropouts bridged");
+    }
+
     // 9) silence in, silence out; no NaN
     {
         std::vector<float> x ((size_t) sr, 0.0f);

@@ -65,16 +65,23 @@ public:
         double profile[12];
         makeProfile (scale, profile);
 
+        // score = how much of the sung material belongs to the scale (dominant term)
+        //       + profile correlation (decides between keys that share the same notes)
+        const uint16_t mask = scaleMask (scale);
         double scores[12];
         int best = 0;
         for (int tonic = 0; tonic < 12; ++tonic)
         {
-            scores[tonic] = correlate (tonic, profile);
+            double inside = 0.0;
+            for (int i = 0; i < 12; ++i)
+                if ((mask >> i) & 1u)
+                    inside += hist[(tonic + i) % 12];
+            scores[tonic] = inside / total + 0.15 * correlate (tonic, profile);
             if (scores[tonic] > scores[best])
                 best = tonic;
         }
 
-        if (current < 0 || (best != current && scores[best] > scores[current] + 0.06))
+        if (current < 0 || (best != current && scores[best] > scores[current] + 0.03))
             current = best;
         return current;
     }
