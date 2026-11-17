@@ -15,6 +15,16 @@
 //                                                            |
 //    giris (L ornek gecikmeli, "dry") --------------------> MIX / bypass --> cikis
 //
+//  voiced <-> unvoiced gecisleri (iki farkli tanecik turu: perdeye senkron ve sabit 4 ms):
+//    - unvoiced -> voiced: unvoiced (zamana hizali) akis 4 ms daha surer ve voiced akisla
+//      capraz gecis yapar; ilk voiced taneciginin eksik yukselen kenari duyulmaz. Eskiden
+//      iki tur arka arkaya dikiliyordu: bir periyotluk genlik cukuru asimetrik glottal
+//      darbeyi yarim birakip DC'li bir tik / alcak frekans "gumlemesi" yapiyordu.
+//    - voiced -> unvoiced: unvoiced tanecikler son voiced taneciginin kaynak ofsetini
+//      devralir ve yarilayarak sondurur (iki kopya faz disi ust uste binmez). Yalniz
+//      kaydirma kucukken (<= 0.5 yarim ses tam, >= 1.5 yarim ses hic): buyuk kaydirmada
+//      icerik zaten farklidir, ofset yalnizca zaman sicramasi olur.
+//
 //  Gecikme sabittir (REALTIME 20 ms, kapaliyken 40 ms) ve host'a bildirilir.
 //  Motor blok boyutundan bagimsizdir: ayni giris her blok boyutunda ayni cikisi verir.
 //==============================================================================
@@ -71,6 +81,8 @@ public:
 
         for (auto& b : in)  b.assign ((size_t) kRing, 0.0f);
         for (auto& b : acc) b.assign ((size_t) kRing, 0.0f);
+        for (auto& b : accU) b.assign ((size_t) kRing, 0.0f);
+        xfade.assign ((size_t) kRing, -1.0f);
         monoLp.assign ((size_t) kRing, 0.0f);
         marks.assign ((size_t) kMarkRing, Mark {});
 
@@ -100,6 +112,8 @@ public:
     {
         for (auto& b : in)  std::fill (b.begin(), b.end(), 0.0f);
         for (auto& b : acc) std::fill (b.begin(), b.end(), 0.0f);
+        for (auto& b : accU) std::fill (b.begin(), b.end(), 0.0f);
+        std::fill (xfade.begin(), xfade.end(), -1.0f);
         std::fill (monoLp.begin(), monoLp.end(), 0.0f);
         aa1.reset(); aa2.reset();
         detector.reset();
@@ -120,6 +134,12 @@ public:
         sNext = 0.0;
         lastS = -1.0e9;
         lastGrainVoiced = false;
+        lastSrcOffset = 0.0;
+        lastHOut = 0.0;
+        tailActive = false;
+        xfadeArmed = false;
+        tailNext = tailLast = tailOffset = 0.0;
+        xfadeEnd = -1;
         planValid = false;
         mixSmooth = params.mix;
         wetSmooth = params.active ? 1.0f : 0.0f;
@@ -183,10 +203,14 @@ public:
             placeGrains (t);
 
             const size_t ti = (size_t) (t & kMask);
+            const float xf = xfade[ti];          // < 0: plain sum, else unvoiced -> voiced crossfade
+            xfade[ti] = -1.0f;
             for (int ch = 0; ch < nc; ++ch)
             {
-                const float wet = acc[(size_t) ch][ti];
-                acc[(size_t) ch][ti] = 0.0f;
+                float& v = acc[(size_t) ch][ti];
+                float& u = accU[(size_t) ch][ti];
+                const float wet = xf < 0.0f ? v + u : u + xf * (v - u);
+                v = u = 0.0f;
                 const float dry = in[(size_t) ch][ti];
                 channels[ch][i] = dry + wetGain * (wet - dry);
             }
@@ -210,7 +234,7 @@ private:
 
     struct Mark { double pos = 0.0; float period = 0.0f; bool voiced = false; };
     struct Rec  { double time = 0.0; float inMidi = 0.0f, outMidi = 0.0f, pass = 1.0f; bool voiced = false; };
-    struct Plan { bool voiced = false; double s = 0.0, src = 0.0, hIn = 1.0, hOut = 1.0, spacing = 1.0; float gain = 1.0f; };
+    struct Plan { bool voiced = false; double s = 0.0, src = 0.0, hIn = 1.0, hOut = 1.0, spacing = 1.0, shiftSt = 0.0, period = 0.0; float gain = 1.0f; };
 
     void applyRange()
     {
@@ -458,6 +482,17 @@ private:
             else if (m.pos > sNext) break;
         }
 
+        // unvoiced -> voiced: the first voiced grain must lie after the last unvoiced grain, so
+        // it can sit exactly on its source mark (in phase with the crossfaded unvoiced stream)
+        if (chosen >= 0 && markAt (chosen).voiced && ! lastGrainVoiced)
+        {
+            while (chosen < markCount && markAt (chosen).pos <= lastS + 0.5)
+                ++chosen;
+            if (chosen >= markCount || ! markAt (chosen).voiced
+                || markAt (chosen).pos + std::min ((double) markAt (chosen).period, hCap) + 3.0 > (double) nIn)
+                chosen = -1;                     // not yet: one more unvoiced grain
+        }
+
         if (chosen >= 0 && markAt (chosen).voiced)
         {
             const Mark& m = markAt (chosen);
@@ -488,15 +523,22 @@ private:
             out.hIn = hIn;
             out.hOut = hIn / phi;
             out.spacing = spacing;
+            out.shiftSt = std::abs (12.0 * std::log2 (period / spacing));
+            out.period = period;
             out.gain = (float) std::clamp (spacing / out.hOut, 0.25, 4.0);
             return true;
         }
 
-        // unvoiced (or nothing analysed yet): time-aligned grains, 50 % overlap
+        // unvoiced (or nothing analysed yet): time-aligned grains, 50 % overlap. Right after a
+        // voiced stretch the source offset of the last voiced grain is inherited and halved
+        // with every grain, so the two grain types do not overlap out of phase.
         const double hIn = unvoicedHop;
+        const double offset = lastGrainVoiced ? lastSrcOffset : 0.5 * lastSrcOffset;
         out.voiced = false;
+        out.period = 0.0;
+        out.shiftSt = 0.0;
         out.s = sNext;
-        out.src = std::min (sNext, (double) nIn - hIn - 3.0);
+        out.src = std::min (sNext + (std::abs (offset) < 0.5 ? 0.0 : offset), (double) nIn - hIn - 3.0);
         out.hIn = hIn;
         out.hOut = hIn / phi;
         out.spacing = out.hOut;
@@ -504,8 +546,109 @@ private:
         return true;
     }
 
+    /** unvoiced -> voiced: keep the time-aligned unvoiced grid running past the first voiced
+        grain and crossfade (raised cosine, one unvoiced hop long) from the complete unvoiced
+        stream to the complete voiced stream. Called again when the plan is remade: the tail
+        grid keeps its phase, only its length and the crossfade weights follow the new plan. */
+    void armCrossfade (const Plan& p, int64_t t) noexcept
+    {
+        const double hU = unvoicedHop / std::pow (2.0, params.formant / 12.0);
+        if (! xfadeArmed)
+        {
+            xfadeArmed = true;
+            tailNext = lastS + hU;                     // next centre on the unvoiced grid
+            tailOffset = 0.5 * lastSrcOffset;          // continue the grid's own offset
+        }
+        const double start = std::max (p.s, (double) t);
+        const double end = start + hU;
+        tailLast = lastS + hU * std::ceil ((end - lastS) / hU - 1.0e-9);
+        tailActive = tailNext <= tailLast + 0.5;
+
+        for (int64_t k = t; k <= xfadeEnd; ++k)        // drop weights of an earlier plan
+            xfade[(size_t) (k & kMask)] = -1.0f;
+        const auto k0 = std::max ((int64_t) std::ceil (p.s - p.hOut), t);
+        const auto k1 = (int64_t) std::floor (tailLast + hU);
+        for (int64_t k = k0; k <= k1; ++k)
+        {
+            const double x = (double) k;
+            float w = 1.0f;
+            if (x < start)       w = 0.0f;
+            else if (x < end)    w = (float) (0.5 - 0.5 * std::cos (kPi * (x - start) / hU));
+            xfade[(size_t) (k & kMask)] = w;
+        }
+        xfadeEnd = k1;
+    }
+
+    /** the remade plan is unvoiced after all: the main stream continues the tail grid */
+    void resumeTailGrid (Plan& p, int64_t t) noexcept
+    {
+        p.s = tailNext;
+        p.src = std::min (tailNext + (std::abs (tailOffset) < 0.5 ? 0.0 : tailOffset), (double) nIn - unvoicedHop - 3.0);
+        cancelCrossfade (t);
+    }
+
+    void cancelCrossfade (int64_t t) noexcept
+    {
+        tailActive = false;
+        xfadeArmed = false;
+        for (int64_t k = t; k <= xfadeEnd; ++k)
+            xfade[(size_t) (k & kMask)] = -1.0f;
+        xfadeEnd = -1;
+    }
+
+    /** voiced -> unvoiced while the unvoiced -> voiced handover is still running: the main
+        stream continues the running unvoiced grid (same phase and offset, no doubled grains)
+        and the output fades back from the voiced to the complete unvoiced stream. */
+    void resumeUnvoiced (Plan& p, int64_t t) noexcept
+    {
+        const double hU = p.hOut;
+        const double next = tailActive ? tailNext : tailLast + hU;
+        p.s = next;
+        p.src = std::min (next + (std::abs (tailOffset) < 0.5 ? 0.0 : tailOffset), (double) nIn - unvoicedHop - 3.0);
+        tailActive = false;
+        xfadeArmed = false;
+
+        const float now = xfade[(size_t) (t & kMask)];
+        const float x0 = now < 0.0f ? 1.0f : now;
+        const auto fadeEnd = (int64_t) std::floor ((double) t + hU);
+        const auto k1 = std::max ({ fadeEnd, (int64_t) std::ceil (lastS + lastHOut), xfadeEnd });
+        for (int64_t k = t; k <= k1; ++k)
+        {
+            float w = 0.0f;
+            if (k < fadeEnd)
+                w = x0 * (float) (0.5 + 0.5 * std::cos (kPi * (double) (k - t) / hU));
+            xfade[(size_t) (k & kMask)] = w;
+        }
+        xfadeEnd = k1;
+    }
+
+    /** extra time-aligned unvoiced grains for a running crossfade */
+    void placeTailGrains (int64_t t) noexcept
+    {
+        const double phi = std::pow (2.0, params.formant / 12.0);
+        const double hU = unvoicedHop / phi;
+        while (tailActive && tailNext - hU <= (double) t)
+        {
+            Plan g;
+            g.voiced = false;
+            g.s = tailNext;
+            g.src = std::min (tailNext + (std::abs (tailOffset) < 0.5 ? 0.0 : tailOffset),
+                              (double) nIn - unvoicedHop - 3.0);
+            tailOffset *= 0.5;
+            g.hIn = unvoicedHop;
+            g.hOut = hU;
+            g.spacing = hU;
+            g.gain = 1.0f;
+            addGrain (g, t);
+            tailNext += hU;
+            if (tailNext > tailLast + 0.5)
+                tailActive = false;
+        }
+    }
+
     void placeGrains (int64_t t) noexcept
     {
+        placeTailGrains (t);
         if (sNext < (double) t - 4.0 * maxHalf())       // fell behind (should not happen): resync
         {
             sNext = (double) t;
@@ -518,12 +661,44 @@ private:
             {
                 makePlan (plan);
                 planValid = true;
+                // decided right after the previous grain, i.e. before any of the handover
+                // region has been output: schedule the crossfade now. The plan is remade on
+                // every analysis hop, so an armed handover is updated, never restarted.
+                if (! lastGrainVoiced && lastS > -1.0e8)
+                {
+                    if (plan.voiced)
+                        armCrossfade (plan, t);
+                    else if (xfadeArmed)
+                        resumeTailGrid (plan, t);    // voicing flipped back before the switch
+                }
             }
             if (plan.s - plan.hOut > (double) t)
                 return;
 
+            if (plan.voiced && ! lastGrainVoiced)
+                xfadeArmed = false;              // handover grain placed; the tail runs on
+            if (! plan.voiced && lastGrainVoiced)
+            {
+                if (xfadeEnd >= t)
+                    resumeUnvoiced (plan, t);    // a voiced blip shorter than the handover
+                else
+                    cancelCrossfade (t);
+            }
             addGrain (plan, t);
+            lastHOut = plan.hOut;
             lastS = plan.s;
+            // phase continuity only helps while the voiced grains are close to the source pitch
+            // (correction); after a large shift the inherited offset is just a time jump
+            lastSrcOffset = plan.src - plan.s;
+            if (plan.voiced)
+            {
+                // a whole number of periods does not change the phase of periodic content:
+                // keep the smallest equivalent offset (|offset| <= T/2), so the decay over the
+                // following unvoiced grains makes small time steps
+                if (plan.period > 1.0)
+                    lastSrcOffset -= plan.period * std::round (lastSrcOffset / plan.period);
+                lastSrcOffset *= std::clamp (1.5 - plan.shiftSt, 0.0, 1.0);
+            }
             sNext = plan.s + plan.spacing;
             lastGrainVoiced = plan.voiced;
             planValid = false;
@@ -550,9 +725,10 @@ private:
             for (int ch = 0; ch < nc; ++ch)
             {
                 const auto& b = in[(size_t) ch];
+                auto& dst = p.voiced ? acc[(size_t) ch] : accU[(size_t) ch];
                 const float x = hermite (b[(size_t) ((i0 - 1) & kMask)], b[(size_t) (i0 & kMask)],
                                          b[(size_t) ((i0 + 1) & kMask)], b[(size_t) ((i0 + 2) & kMask)], fr);
-                acc[(size_t) ch][ko] += w * x;
+                dst[ko] += w * x;
             }
         }
     }
@@ -574,7 +750,7 @@ private:
     double unvoicedHop = 176.0;
     Params params;
 
-    std::vector<float> in[2], acc[2], monoLp;
+    std::vector<float> in[2], acc[2], accU[2], xfade, monoLp;
     Biquad aa1, aa2;
     int decPhase = 0;
     int numCh = 2;
@@ -598,8 +774,11 @@ private:
 
     Plan plan;
     bool planValid = false;
-    double sNext = 0.0, lastS = -1.0e9;
+    double sNext = 0.0, lastS = -1.0e9, lastHOut = 0.0, lastSrcOffset = 0.0;
     bool lastGrainVoiced = false;
+    bool tailActive = false, xfadeArmed = false;
+    double tailNext = 0.0, tailLast = 0.0, tailOffset = 0.0;
+    int64_t xfadeEnd = -1;
 
     float mixSmooth = 1.0f, wetSmooth = 1.0f;
 };

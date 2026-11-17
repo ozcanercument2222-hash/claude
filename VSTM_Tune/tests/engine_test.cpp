@@ -224,6 +224,49 @@ int main()
             for (size_t i = 0; i < a.size(); ++i) diff = std::max (diff, std::abs (a[i] - b[i]));
             check (diff < 1.0e-6f, "block size independent (max diff " + std::to_string (diff) + ")");
         }
+
+        // 5b) unvoiced -> voiced handover: no level dip at vowel onsets. Consonant noise, then a
+        //     vowel sung 40 ct sharp, hard-tuned. The old grain hand-over left one period at
+        //     ~65 % level (-3.5 dB) after the onset: half a glottal pulse missing = a thump.
+        {
+            const double f = midiToHz (57.4);
+            std::vector<float> x;
+            std::mt19937 rng (3);
+            std::normal_distribution<double> noise (0.0, 1.0);
+            std::vector<int> onsets;
+            for (int r = 0; r < 6; ++r)
+            {
+                for (int i = 0; i < (int) (sr * 0.06); ++i)
+                    x.push_back ((float) (0.01 * noise (rng)));
+                onsets.push_back ((int) x.size());
+                const auto v = makeVoice (sr, 0.25 + 0.013 * r, [&] (double) { return f; });
+                x.insert (x.end(), v.begin(), v.end());
+            }
+            x.resize (x.size() + (size_t) (sr * 0.1), 0.0f);
+
+            TuneEngine e;
+            e.prepare (sr, true);
+            auto p = baseParams();
+            p.robotism = 0.0f;
+            e.setParams (p);
+            const auto y = run (e, x, 256);
+            const int L = e.getLatencySamples();
+            const int w = (int) (sr / f);                       // one period
+            double worst = 1.0e9;
+            for (const int o : onsets)
+                for (int k = o + w; k < o + (int) (0.03 * sr); k += w / 4)
+                {
+                    double ei = 0.0, eo = 0.0;
+                    for (int j = 0; j < w; ++j)
+                    {
+                        ei += (double) x[(size_t) (k + j)] * x[(size_t) (k + j)];
+                        eo += (double) y[(size_t) (k + j + L)] * y[(size_t) (k + j + L)];
+                    }
+                    worst = std::min (worst, std::sqrt (eo / ei));
+                }
+            check (worst > 0.85, "no level dip after vowel onsets (worst one-period ratio "
+                                 + std::to_string (20.0 * std::log10 (worst)) + " dB)");
+        }
     }
 
     const double sr = 48000.0;

@@ -76,6 +76,11 @@ giriş (gecikmeli, "dry") ──────────────────
   seçilir (Robotik 14 ms, Dengeli 22 ms, İnsansı 52 ms); sesin yeni notaya açıkça vardığı sıçramalarda (≥ 1.5 yarım ses) hemen.
   İki notanın tam ortasında söylenen seste hedefin her 3–10 ms'de bir gidip gelmesi ("trill") böylece önlenir:
   gerçek vokallerde 40 ms'den kısa nota bölümleri 3–10 kat azaldı.
+- **Hece başlarında "güm" yok:** ünsüzden ünlüye geçişte (unvoiced → voiced) zamana hizalı unvoiced akış 4 ms daha
+  sürer ve perdeye senkron voiced akışla çapraz geçiş yapar. Eskiden iki tanecik türü arka arkaya dikiliyordu;
+  ünlünün ilk periyodu %50–70 seviyeye düşüyor, yarım kalan glottal darbe alçak frekanslı bir tık yapıyordu.
+  Ölçüm (6 gerçek vokal, 540 geçiş): bu geçişlerdeki tık medyanı düzeltme modlarında 12–19 dB düştü,
+  −45 dBFS'i aşan tıklar yarıya indi (40 → 22).
 - Düzeltme 0 iken plugin şeffaftır (çıkış = giriş, 61 dB SNR) ve dry sinyalle örneğine kadar hizalıdır; MIX'te faz kayması olmaz.
 - Motor blok boyutundan bağımsızdır (64 veya 1013 örneklik bloklar bit-bit aynı çıkışı verir), ses iş parçacığında kilit / bellek ayırma yoktur.
 - Arayüz 1536 × 1024'lük vektörel bir tuval üzerinde çizilir ve ölçeklenir (her boyutta ve HiDPI'da keskin);
@@ -107,8 +112,8 @@ cmake --build build --config Release
 ```
 
 - **EngineTest:** hard-tune doğruluğu, seviye, şeffaflık + gecikme hizası, ±12 / +7 transpoze, formant, blok boyutu
-  bağımsızlığı, Robotik / İnsansı geçiş süresi ve vibrato, iki nota arasında nota titremesi olmaması, otomatik ton
-  (C majör), sessizlik.
+  bağımsızlığı, ünlü başlangıcında genlik çukuru olmaması, Robotik / İnsansı geçiş süresi ve vibrato, iki nota
+  arasında nota titremesi olmaması, otomatik ton (C majör), sessizlik.
 - **WavProbe + vocal_metrics.py:** gerçek bir kaydı motordan geçirir, her analiz adımını (voiced, perde, hedef nota)
   CSV'ye yazar ve ölçer: nota titremesi, çıkış–hedef sapması, cent dağılımı, 20–150 Hz patlamaları, seviye.
   ```bash
@@ -125,10 +130,10 @@ cmake --build build --config Release
   DAW'da kontrol edilecekler: Windows HiDPI ölçekleme, Ableton / FL Studio / Logic'te pencere boyutlandırma,
   otomasyon yazıları, aynı plugin'den iki pencere.
 - Monofonik vokal içindir (akor / koro düzeltmez). Çok kalın bas seslerde REALTIME'ı kapat veya ⚙ → Vocal range → Bass.
-- **Perde kaydırırken 20–150 Hz'de düşük seviyeli enerji:** TD-PSOLA sentezi, düzeltme ya da transpoze uygulandığında
-  (±0.5 yarım seste bile) sesli bölümlerde kuru seste olmayan düşük frekanslı enerji üretir. Gerçek vokallerde tepe
-  ≈ −43 dBFS (temel frekans bandının ~25–35 dB altında), −12 st transpozede ≈ −30 dBFS. Düzeltme kapalıyken yoktur.
-  Ölçülerek doğrulandı; insan kulağıyla değerlendirilmedi. Sentez çekirdeğinde ayrı bir çalışma gerektirir.
+- **Büyük transpozede düşük seviyeli alçak frekans:** düzeltme modlarında (Robotik / Dengeli / İnsansı) 20–150 Hz'de
+  kalan enerji ≈ −47 dBFS'tir; geniş transpozede TD-PSOLA geçici bölgelerde hâlâ alçak frekanslı enerji üretir
+  (−3 st ≈ −42 dBFS, −12 st ≈ −30 dBFS tepe). Düzeltme kapalıyken yoktur. Ölçülerek doğrulandı; insan kulağıyla
+  değerlendirilmedi.
 
 ## Lisanslar
 
