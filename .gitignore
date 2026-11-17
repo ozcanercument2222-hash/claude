@@ -8,3 +8,5 @@ build-*/
 out/
 CMakeUserPresets.json
 artifacts/
+__pycache__/
+*.pyc
