@@ -18,7 +18,13 @@
   "default_block_size": 512,
   "render_directory": "artifacts/audio-runs",
   "audio_perception": {
-    "status": "not_configured",
-    "note": "Connect a genuine audio-capable model/tool before claiming LISTENED."
+    "status": "local_model",
+    "tool": "tools/ear.py",
+    "setup": "tools/setup_ear.sh",
+    "model": "Qwen2.5-Omni-7B Q4_K_M + mmproj Q8_0 (llama.cpp llama-mtmd-cli)",
+    "home": "${VSTM_EAR_HOME:-~/.cache/vstm-ear}",
+    "evidence_label": "LISTENED-MODEL",
+    "calibration": "docs/vstm-audio-rd/EAR.md",
+    "note": "AI model perception at 16 kHz mono. Not human listening; human packs via tools/audio_view.py pack."
   }
 }
