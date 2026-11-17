@@ -3,17 +3,29 @@
 
 using namespace vui;
 namespace ids = vstm::ids;
+using vstm::i18n::tr;
+using vstm::i18n::trf;
 
 namespace
 {
-const juce::String insansi  = juce::String (juce::CharPointer_UTF8 ("\xc4\xb0nsans\xc4\xb1"));
-const juce::String dahaDogal = juce::String (juce::CharPointer_UTF8 ("(Daha Do\xc4\x9f" "al)"));
+// the hero knob's vertical axis on the design canvas: titles and captions are centred on it
+constexpr float kKnobAxis = 769.0f;
+constexpr float kCaptionOffset = 236.0f;           // Robotik / Insansi captions, symmetric about the axis
 
-/** Tracked UPPERCASE label, left aligned at x, optically centred on y. */
-void label (juce::Graphics& g, const juce::String& text, float x, float y, float size = 17.0f, float tracking = 0.13f,
+juce::Font titleFont()                             { return font (24.0f, Weight::medium, 0.43f); }
+juce::Font sectionFont (float size = 17.0f, float tracking = 0.13f) { return font (size, Weight::semibold, tracking); }
+
+/** Tracked UPPERCASE label at x (left edge or centre), optically centred on y, shrunk to fit maxWidth. */
+void label (juce::Graphics& g, const juce::String& text, float x, float y, float maxWidth, float size = 17.0f, float tracking = 0.13f,
             juce::Justification j = juce::Justification::left, juce::Colour c = col::label)
 {
-    drawText (g, text, { x, y }, font (size, Weight::semibold, tracking), c, j);
+    drawText (g, text, { x, y }, fitted (sectionFont (size, tracking), text, maxWidth), c, j);
+}
+
+/** A caption line centred on its axis (both lines of a caption share the axis). */
+void caption (juce::Graphics& g, const juce::String& text, float axis, float y, float size, float maxWidth, juce::Colour c)
+{
+    drawText (g, text, { axis, y }, fitted (font (size), text, maxWidth), c, juce::Justification::centred);
 }
 
 /** Outline of the big card: left card + right card joined by a band, with the knob notch on top
@@ -115,30 +127,34 @@ void Canvas::drawBackground (juce::Graphics& g)
     }
     {
         juce::Graphics::ScopedSaveState ss (g);
-        g.excludeClipRegion (juce::Rectangle<int> (660, 698, 232, 26));       // gap for "PARAMETERS"
+        // gap in the card edge for the PARAMETERS tab title, as wide as the title in this language
+        const float w = textWidth (fitted (sectionFont (16.5f, 0.15f), tr ("PARAMETERS"), 400.0f), tr ("PARAMETERS"));
+        g.excludeClipRegion (juce::Rectangle<float> (kKnobAxis + 0.5f - w * 0.5f - 16.0f, 698.0f, w + 32.0f, 26.0f).toNearestInt());
         g.setColour (col::cardEdge.withAlpha (0.9f));
         g.strokePath (card, juce::PathStrokeType (1.2f));
     }
 
     // card labels and separators
-    label (g, "KEY", 99.0f, 380.0f);
-    label (g, "SCALE", 99.0f, 504.0f);
-    label (g, "PITCH CORRECTION", 99.0f, 633.0f);
-    label (g, "RETUNE SPEED", 1173.0f, 380.0f);
-    label (g, "HUMANIZE", 1174.0f, 566.0f);
+    label (g, tr ("KEY"), 99.0f, 380.0f, 288.0f);
+    label (g, tr ("SCALE"), 99.0f, 504.0f, 288.0f);
+    label (g, tr ("PITCH CORRECTION"), 99.0f, 633.0f, 288.0f);
+    label (g, tr ("RETUNE SPEED"), 1173.0f, 380.0f, 268.0f);
+    label (g, tr ("HUMANIZE"), 1174.0f, 566.0f, 268.0f);
     g.setGradientFill (juce::ColourGradient (col::hairline.brighter (0.15f), 96.0f, 0.0f, col::hairline.withAlpha (0.0f), 415.0f, 0.0f, false));
     g.fillRect (96.0f, 603.0f, 318.0f, 1.0f);
     g.setColour (col::hairline.brighter (0.1f));
     g.fillRect (1172.0f, 527.0f, 268.0f, 1.0f);
 
-    // hero title and side captions
-    drawText (g, "ROBOTISM", { 786.5f, 297.0f }, font (24.0f, Weight::medium, 0.43f), juce::Colour (0xffc9c6d2));
-    drawText (g, "Robotik", { 553.0f, 330.0f }, font (23.5f), juce::Colour (0xffc9c7d1));
-    drawText (g, "(Daha Yapay)", { 536.0f, 356.0f }, font (17.0f), juce::Colour (0xff8c8a95));
-    drawText (g, insansi, { 1005.0f, 330.0f }, font (23.5f), juce::Colour (0xffc9c7d1));
-    drawText (g, dahaDogal, { 1008.0f, 356.0f }, font (17.0f), juce::Colour (0xff8c8a95));
+    // hero title on the knob's axis; the side captions symmetric about it, each pair on one axis.
+    // Widths are limited by the halo around the knob (captions must stay outside it).
+    drawText (g, tr ("ROBOTISM"), { kKnobAxis, 297.0f }, titleFont(), juce::Colour (0xffc9c6d2));
+    const float leftAxis = kKnobAxis - kCaptionOffset, rightAxis = kKnobAxis + kCaptionOffset;
+    caption (g, tr ("Robotic"),           leftAxis,  330.0f, 23.5f, 200.0f, juce::Colour (0xffc9c7d1));
+    caption (g, tr ("(More artificial)"), leftAxis,  356.0f, 17.0f, 154.0f, juce::Colour (0xff8c8a95));
+    caption (g, tr ("Human"),             rightAxis, 330.0f, 23.5f, 200.0f, juce::Colour (0xffc9c7d1));
+    caption (g, tr ("(More natural)"),    rightAxis, 356.0f, 17.0f, 154.0f, juce::Colour (0xff8c8a95));
 
-    label (g, "PARAMETERS", 775.0f, 711.0f, 16.5f, 0.15f, juce::Justification::centred, juce::Colour (0xffaeacb7));
+    label (g, tr ("PARAMETERS"), kKnobAxis + 0.5f, 711.0f, 400.0f, 16.5f, 0.15f, juce::Justification::centred, juce::Colour (0xffaeacb7));
 
     // footer bar
     {
@@ -213,20 +229,20 @@ void PresetBar::showMenu()
     presets.refreshUserPresets();
     juce::PopupMenu m;
     const int current = presets.getCurrentIndex();
-    m.addSectionHeader ("Factory");
+    m.addSectionHeader (tr ("Factory"));
     for (int i = 0; i < presets.getNumFactoryPresets(); ++i)
         m.addItem (i + 1, presets.getPresetName (i), true, i == current);
     if (presets.getNumPresets() > presets.getNumFactoryPresets())
     {
-        m.addSectionHeader ("User");
+        m.addSectionHeader (tr ("User"));
         for (int i = presets.getNumFactoryPresets(); i < presets.getNumPresets(); ++i)
             m.addItem (i + 1, presets.getPresetName (i), true, i == current);
     }
     m.addSeparator();
-    m.addItem (10001, "Save preset...");
+    m.addItem (10001, tr ("Save preset..."));
     if (current >= presets.getNumFactoryPresets())
-        m.addItem (10002, "Delete \"" + presets.getCurrentName() + "\"");
-    m.addItem (10003, "Open preset folder");
+        m.addItem (10002, trf ("Delete \"%1\"", presets.getCurrentName()));
+    m.addItem (10003, tr ("Open preset folder"));
 
     juce::Component::SafePointer<PresetBar> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMinimumWidth (getWidth()).withStandardItemHeight (32),
@@ -257,18 +273,19 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
       sizeButton (icons::windowIcon(), 2.2f),
       settingsButton (icons::gear(), 2.1f),
       display (p.engine),
-      keySelector (param (ids::key), "Key: the tonic notes are snapped to. Auto listens to the singing and finds it."),
-      scaleSelector (param (ids::scale), "Scale: which notes are allowed. Chromatic = all 12 notes."),
-      correction (param (ids::correction), ValueSlider::Align::centre, "Pitch Correction: how much of the distance to the target note is corrected."),
-      retune (param (ids::retune), ValueSlider::Align::left, "Retune Speed: how fast the pitch is pulled to the note. 0 ms = instant (robotic)."),
-      humanize (param (ids::humanize), ValueSlider::Align::left, "Humanize: relaxes the correction on long, sustained notes so they keep their natural movement."),
+      keySelector (param (ids::key), tr ("Key: the tonic notes are snapped to. Auto listens to the singing and finds it.")),
+      scaleSelector (param (ids::scale), tr ("Scale: which notes are allowed. Chromatic = all 12 notes.")),
+      // all three value boxes centre their value (no text that sits left in one box and centred in another)
+      correction (param (ids::correction), ValueSlider::Align::centre, tr ("Pitch Correction: how much of the distance to the target note is corrected.")),
+      retune (param (ids::retune), ValueSlider::Align::centre, tr ("Retune Speed: how fast the pitch is pulled to the note. 0 ms = instant (robotic).")),
+      humanize (param (ids::humanize), ValueSlider::Align::centre, tr ("Humanize: relaxes the correction on long, sustained notes so they keep their natural movement.")),
       robotAttachment (param (ids::robotism), robot),
-      vibratoKnob (param (ids::vibrato), "SCALE", "Vibrato Scale: depth of the natural vibrato and pitch movement (100% = as sung)."),
-      formantKnob (param (ids::formant), "FORMANT", "Formant: shifts the vocal character (throat size) in semitones without changing the pitch."),
-      transposeKnob (param (ids::transpose), "PITCH RANGE", "Pitch Range: transposes the corrected voice by up to 12 semitones up or down."),
-      mixKnob (param (ids::mix), "MIX", "Mix: blend between the original and the tuned voice."),
-      autotuneToggle (param (ids::bypass), true, true, "AUTOTUNE ON", "AUTOTUNE OFF"),
-      realtimeToggle (param (ids::realtime), false, false, "REALTIME", "REALTIME"),
+      vibratoKnob (param (ids::vibrato), tr ("knob.vibrato"), tr ("Vibrato Scale: depth of the natural vibrato and pitch movement (100% = as sung).")),
+      formantKnob (param (ids::formant), tr ("FORMANT"), tr ("Formant: shifts the vocal character (throat size) in semitones without changing the pitch.")),
+      transposeKnob (param (ids::transpose), tr ("PITCH RANGE"), tr ("Pitch Range: transposes the corrected voice by up to 12 semitones up or down.")),
+      mixKnob (param (ids::mix), tr ("MIX"), tr ("Mix: blend between the original and the tuned voice.")),
+      autotuneToggle (param (ids::bypass), true, true, tr ("AUTOTUNE ON"), tr ("AUTOTUNE OFF")),
+      realtimeToggle (param (ids::realtime), false, false, tr ("REALTIME"), tr ("REALTIME")),
       waveButton (icons::pulse(), 1.7f, true)
 {
     setLookAndFeel (&lnf);
@@ -295,15 +312,19 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
     retune.setLayout ({ 1, 2, 272, 59 }, { 7, 62, 260, 34 });
     humanize.setBounds (1170, 584, 276, 100);
     humanize.setLayout ({ 2, 2, 271, 59 }, { 7, 59, 260, 34 });
-    robot.setBounds (554, 275, 430, 430);
-    infoButton.setBounds (913, 279, 40, 36);
+    robot.setBounds (juce::roundToInt (kKnobAxis) - 215, 275, 430, 430);
+    // the "i" pill follows the title, which is centred on the knob axis
+    infoButton.setBounds (juce::roundToInt (kKnobAxis + textWidth (titleFont(), tr ("ROBOTISM")) * 0.5f + 18.0f), 279, 40, 36);
     vibratoKnob.setBounds (450, 731, 160, 172);
     formantKnob.setBounds (611, 731, 160, 172);
     transposeKnob.setBounds (770, 731, 160, 172);
     mixKnob.setBounds (929, 731, 160, 172);
-    autotuneToggle.setBounds (30, 940, 260, 50);
-    waveButton.setBounds (1294, 943, 44, 44);
-    realtimeToggle.setBounds (1345, 940, 160, 50);
+    // footer: toggles as wide as their text in this language, the input-pitch button left of REALTIME
+    autotuneToggle.setBounds (30, 940, juce::jlimit (260, 600, juce::roundToInt (autotuneToggle.preferredWidth())), 50);
+    const int rtWidth = juce::jlimit (160, 420, juce::roundToInt (realtimeToggle.preferredWidth()));
+    realtimeToggle.setBounds (1505 - rtWidth, 940, rtWidth, 50);
+    const float rtText = realtimeToggle.preferredWidth() - 70.0f;        // the REALTIME text itself
+    waveButton.setBounds (juce::roundToInt (1505.0f - 54.0f - rtText - 18.0f - 44.0f), 943, 44, 44);
 
     // separators in the scale menu: | Chromatic | Major .. Melodic | Pentatonics, Blues | modes | Hicaz
     scaleSelector.separatorsAfter = { vstm::kChromatic, vstm::kMelodicMinor, vstm::kBlues, vstm::kMixolydian };
@@ -316,7 +337,7 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
         return k >= 0 ? juce::String (juce::CharPointer_UTF8 ("\xc2\xb7 ")) + vstm::noteName (k) : juce::String();
     };
 
-    robot.setTooltip ("ROBOTISM: turn left for the hard, robotic effect; turn right for natural, human transitions.");
+    robot.setTooltip (tr ("ROBOTISM: turn left for the hard, robotic effect; turn right for natural, human transitions."));
     robot.onContextMenu = [this] { showHostMenu (param (ids::robotism)); };
     for (auto* k : { &vibratoKnob, &formantKnob, &transposeKnob, &mixKnob })
         k->knob.onContextMenu = [this, k] { showHostMenu (k->getParameter()); };
@@ -324,19 +345,19 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
     retune.slider.onContextMenu = [this] { showHostMenu (param (ids::retune)); };
     humanize.slider.onContextMenu = [this] { showHostMenu (param (ids::humanize)); };
 
-    infoButton.setTooltip ("What does ROBOTISM do?");
+    infoButton.setTooltip (tr ("What does ROBOTISM do?"));
     infoButton.onClick = [this] { showRobotismInfo(); };
-    saveButton.setTooltip ("Save preset");
+    saveButton.setTooltip (tr ("Save preset"));
     saveButton.onClick = [this] { askPresetName(); };
     presetBar.onSaveRequest = [this] { askPresetName(); };
-    sizeButton.setTooltip ("Window size");
+    sizeButton.setTooltip (tr ("Window size"));
     sizeButton.onClick = [this] { showSizeMenu(); };
-    settingsButton.setTooltip ("Settings");
+    settingsButton.setTooltip (tr ("Settings"));
     settingsButton.onClick = [this] { showSettingsMenu(); };
-    waveButton.setTooltip ("Show the raw input pitch in the display");
+    waveButton.setTooltip (tr ("Show the raw input pitch in the display"));
     waveButton.onClick = [this] { display.showInput = ! display.showInput; waveButton.lit = display.showInput; waveButton.repaint(); display.repaint(); };
-    autotuneToggle.setTooltip ("Turn the tuning on / off (follows the host's bypass).");
-    realtimeToggle.setTooltip ("REALTIME on: low latency (20 ms) for tracking and live use.\nOff: high quality (40 ms), better for deep voices; the host compensates the delay.");
+    autotuneToggle.setTooltip (tr ("Turn the tuning on / off (follows the host's bypass)."));
+    realtimeToggle.setTooltip (tr ("REALTIME on: low latency (20 ms) for tracking and live use.\nOff: high quality (40 ms), better for deep voices; the host compensates the delay."));
 
     // window size: fixed aspect, 768..1536 wide
     const float s = juce::jlimit (0.5f, 1.0f, audio.uiScale.load());
@@ -396,7 +417,7 @@ void VSTMTuneEditor::showHostMenu (juce::RangedAudioParameter& p)
         }
 
     juce::PopupMenu m;
-    m.addItem (1, "Reset to default (" + p.getText (p.getDefaultValue(), 32) + ")");
+    m.addItem (1, trf ("Reset to default (%1)", p.getText (p.getDefaultValue(), 32)));
     juce::Component::SafePointer<VSTMTuneEditor> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options(), [&p, safe] (int r)
     {
@@ -411,9 +432,10 @@ void VSTMTuneEditor::showSizeMenu()
 {
     juce::PopupMenu m;
     const int widths[] = { 768, 960, 1152, 1344, 1536 };
-    const char* names[] = { "Small (768 x 512)", "Compact (960 x 640)", "Default (1152 x 768)", "Large (1344 x 896)", "Full (1536 x 1024)" };
+    const char* names[] = { "Small", "Compact", "Default", "Large", "Full" };
     for (int i = 0; i < 5; ++i)
-        m.addItem (i + 1, names[i], true, std::abs (getWidth() - widths[i]) < 4);
+        m.addItem (i + 1, tr (names[i]) + " (" + juce::String (widths[i]) + " x " + juce::String (widths[i] * 2 / 3) + ")",
+                   true, std::abs (getWidth() - widths[i]) < 4);
     juce::Component::SafePointer<VSTMTuneEditor> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&sizeButton), [safe, widths] (int r)
     {
@@ -432,11 +454,11 @@ void VSTMTuneEditor::showSettingsMenu()
         voice.addItem (100 + i, names[i], true, i == current);
 
     juce::PopupMenu m;
-    m.addSubMenu ("Vocal range", voice);
-    m.addItem (2, "Show input pitch", true, display.showInput);
+    m.addSubMenu (tr ("Vocal range"), voice);
+    m.addItem (2, tr ("Show input pitch"), true, display.showInput);
     m.addSeparator();
-    m.addItem (3, "Reset all parameters");
-    m.addItem (4, "About VSTM Tune");
+    m.addItem (3, tr ("Reset all parameters"));
+    m.addItem (4, tr ("About VSTM Tune"));
 
     juce::Component::SafePointer<VSTMTuneEditor> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&settingsButton), [safe] (int r)
@@ -454,39 +476,38 @@ void VSTMTuneEditor::showSettingsMenu()
         else if (r == 3) ed.audio.presets.loadPreset (0);
         else if (r == 4)
             juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::NoIcon, "VSTM Tune 1.0.0",
-                "Real-time vocal pitch correction.\n\n"
-                "Pitch tracking: YIN with sub-sample refinement\n"
-                "Shifting: pitch-synchronous overlap-add (formant-preserving)\n"
-                "Latency: " + juce::String (ed.audio.getLatencySamples()) + " samples\n\n"
-                "Font: Inter (SIL Open Font License 1.1)", "OK", &ed);
+                trf ("about.text", juce::String (ed.audio.getLatencySamples())), tr ("OK"), &ed);
     });
 }
 
 void VSTMTuneEditor::showRobotismInfo()
 {
     auto text = std::make_unique<juce::Label>();
-    text->setText (juce::String (juce::CharPointer_UTF8 (
-        "ROBOTISM - tek d\xc3\xbc\xc4\x9fmeyle karakter\n\n"
-        "\xe2\x97\x80  Robotik (sola): notalar an\xc4\xb1nda ve basamak gibi oturur, vibrato d\xc3\xbcmd\xc3\xbcz olur. "
-        "Klasik robotik autotune efekti.\n\n"
-        "\xe2\x96\xb6  \xc4\xb0nsans\xc4\xb1 (sa\xc4\x9f" "a): d\xc3\xbczeltme yumu\xc5\x9f" "ar, notalar aras\xc4\xb1 ge\xc3\xa7i\xc5\x9f "
-        "S-e\xc4\x9frisiyle kayar, vibrato ve do\xc4\x9f" "al kay\xc4\xb1\xc5\x9flar korunur. Duyulmayan, do\xc4\x9f" "al d\xc3\xbczeltme.\n\n"
-        "Ortada: RETUNE SPEED ve HUMANIZE ayarlar\xc4\xb1 oldu\xc4\x9fu gibi uygulan\xc4\xb1r.")), juce::dontSendNotification);
+    const auto info = tr ("robotism.info");
+    text->setText (info, juce::dontSendNotification);
     text->setFont (font (15.0f));
     text->setColour (juce::Label::textColourId, col::text);
     text->setJustificationType (juce::Justification::topLeft);
     text->setBorderSize ({ 10, 12, 10, 12 });
-    text->setSize (380, 250);
+    {
+        // as tall as the text needs in this language
+        juce::AttributedString as;
+        as.append (info, font (15.0f), col::text);
+        as.setWordWrap (juce::AttributedString::byWord);
+        juce::TextLayout layout;
+        layout.createLayout (as, 380.0f - 24.0f);
+        text->setSize (380, juce::jlimit (150, 520, juce::roundToInt (layout.getHeight() * 1.08f) + 24));
+    }
     juce::CallOutBox::launchAsynchronously (std::move (text), canvas.getLocalArea (&infoButton, infoButton.getLocalBounds()), &canvas);
 }
 
 void VSTMTuneEditor::askPresetName()
 {
-    auto* w = new juce::AlertWindow ("Save preset", "Name of the new preset:", juce::MessageBoxIconType::NoIcon, this);
+    auto* w = new juce::AlertWindow (tr ("Save preset"), tr ("Name of the new preset:"), juce::MessageBoxIconType::NoIcon, this);
     w->setLookAndFeel (&lnf);
-    w->addTextEditor ("name", audio.presets.isFactoryPreset (audio.presets.getCurrentIndex()) ? "My Preset" : audio.presets.getCurrentName());
-    w->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
-    w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    w->addTextEditor ("name", audio.presets.isFactoryPreset (audio.presets.getCurrentIndex()) ? tr ("My Preset") : audio.presets.getCurrentName());
+    w->addButton (tr ("Save"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+    w->addButton (tr ("Cancel"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
     juce::Component::SafePointer<VSTMTuneEditor> safe (this);
     w->enterModalState (true, juce::ModalCallbackFunction::create ([safe, w] (int result)
     {

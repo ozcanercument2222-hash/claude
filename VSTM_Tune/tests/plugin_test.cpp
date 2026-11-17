@@ -159,6 +159,10 @@ int main (int argc, char* argv[])
         else shotDir = juce::File::getCurrentWorkingDirectory().getChildFile (arg);
     }
 
+    // the checks below are written against the English texts; section 1b covers the other languages
+    using vstm::i18n::Lang;
+    vstm::i18n::setCurrent (Lang::english);
+
     //--------------------------------------------------------------------------
     std::printf ("\n=== 1) Parameters ===\n");
     {
@@ -167,18 +171,63 @@ int main (int argc, char* argv[])
         CHECK (text (vstm::ids::key) == "Auto" && text (vstm::ids::scale) == "Major", "defaults: Key Auto, Scale Major");
         CHECK (text (vstm::ids::correction) == "100%" && text (vstm::ids::retune) == "15 ms" && text (vstm::ids::humanize) == "35%",
                "defaults: %s / %s / %s", text (vstm::ids::correction).toRawUTF8(), text (vstm::ids::retune).toRawUTF8(), text (vstm::ids::humanize).toRawUTF8());
-        CHECK (text (vstm::ids::robotism) == "Dengeli", "robotism default text: %s", text (vstm::ids::robotism).toRawUTF8());
+        CHECK (text (vstm::ids::robotism) == "Balanced", "robotism default text: %s", text (vstm::ids::robotism).toRawUTF8());
         setParam (p, vstm::ids::robotism, 0.0f);
         const auto robotText = text (vstm::ids::robotism);
         setParam (p, vstm::ids::robotism, 80.0f);
         const auto humanText = text (vstm::ids::robotism);
-        CHECK (robotText == "Robotik 100%" && humanText.endsWith ("60%"), "robotism text: \"%s\" / \"%s\"", robotText.toRawUTF8(), humanText.toRawUTF8());
+        CHECK (robotText == "Robotic 100%" && humanText == "Human 60%", "robotism text: \"%s\" / \"%s\"", robotText.toRawUTF8(), humanText.toRawUTF8());
         auto* r = p.apvts.getParameter (vstm::ids::robotism);
-        CHECK (std::abs (r->convertFrom0to1 (r->getValueForText ("Robotik 40%")) - 30.0f) < 0.01f, "robotism parses its own text");
+        CHECK (std::abs (r->convertFrom0to1 (r->getValueForText ("Robotic 40%")) - 30.0f) < 0.01f, "robotism parses its own text");
         CHECK (text (vstm::ids::formant) == "0.0" && text (vstm::ids::transpose) == "0 st" && text (vstm::ids::mix) == "100%" && text (vstm::ids::vibrato) == "100%",
                "PARAMETERS row: %s / %s / %s / %s", text (vstm::ids::vibrato).toRawUTF8(), text (vstm::ids::formant).toRawUTF8(),
                text (vstm::ids::transpose).toRawUTF8(), text (vstm::ids::mix).toRawUTF8());
         CHECK (p.getBypassParameter() == p.apvts.getParameter (vstm::ids::bypass), "host bypass is the AUTOTUNE ON switch");
+    }
+
+    //--------------------------------------------------------------------------
+    std::printf ("\n=== 1b) Languages ===\n");
+    {
+        namespace i18n = vstm::i18n;
+        const auto missing = i18n::firstIncompleteEntry();
+        CHECK (missing.isEmpty(), "%d texts, every one in all 7 languages %s", i18n::numEntries(), missing.toRawUTF8());
+
+        struct Case { const char* code; Lang expect; };
+        const Case cases[] = { { "tr-TR", Lang::turkish }, { "de_DE", Lang::german }, { "fr-CA", Lang::french }, { "it", Lang::italian },
+                               { "ru-RU", Lang::russian }, { "zh-Hans-CN", Lang::chinese }, { "zh_TW", Lang::chinese }, { "en-GB", Lang::english },
+                               { "pt-BR", Lang::english }, { "ja-JP", Lang::english }, { "", Lang::english } };
+        bool mapped = true;
+        for (const auto& c : cases)
+            mapped = mapped && i18n::fromCode (c.code) == c.expect;
+        CHECK (mapped, "OS language codes: tr/de/fr/it/ru/zh map to themselves, anything else to English");
+
+        // every language: parameter texts come out in that language and are read back in any language
+        bool texts = true, parse = true, distinct = true;
+        juce::StringArray titles;
+        for (int l = 0; l < i18n::kNumLangs; ++l)
+        {
+            i18n::setCurrent ((Lang) l);
+            VSTMTuneProcessor p;
+            auto* rb = p.apvts.getParameter (vstm::ids::robotism);
+            texts = texts && rb->getCurrentValueAsText() == i18n::tr ("Balanced")
+                          && p.apvts.getParameter (vstm::ids::scale)->getCurrentValueAsText() == i18n::tr ("Major")
+                          && p.apvts.getParameter (vstm::ids::key)->getCurrentValueAsText() == i18n::tr ("Auto");
+            const auto robotic40 = rb->getText (rb->convertTo0to1 (30.0f), 64);   // "Robotik 40%", "机械 40%", ...
+            const auto human60 = rb->getText (rb->convertTo0to1 (80.0f), 64);
+            for (int other = 0; other < i18n::kNumLangs; ++other)
+            {
+                i18n::setCurrent ((Lang) other);
+                parse = parse && std::abs (rb->convertFrom0to1 (rb->getValueForText (robotic40)) - 30.0f) < 0.01f
+                              && std::abs (rb->convertFrom0to1 (rb->getValueForText (human60)) - 80.0f) < 0.01f;
+            }
+            titles.addIfNotAlreadyThere (i18n::tr ("PITCH CORRECTION", (Lang) l));
+        }
+        distinct = titles.size() == i18n::kNumLangs;
+        i18n::setCurrent (Lang::english);
+        CHECK (texts, "defaults read Balanced / Major / Auto in each language");
+        CHECK (parse, "robotism text typed in any language is understood in every language");
+        CHECK (distinct, "card labels really are translated (%d different texts for PITCH CORRECTION)", titles.size());
+        CHECK (i18n::tr ("no such key") == "no such key" && i18n::tr ("knob.vibrato") == "SCALE", "unknown keys fall back to their text");
     }
 
     //--------------------------------------------------------------------------
@@ -303,6 +352,24 @@ int main (int argc, char* argv[])
             savePng (*ed, shotDir.getChildFile ("06_bypass.png"), 1.0f);
             setParam (p, vstm::ids::bypass, 0.0f);
             pump (80);
+
+            // the editor in every UI language (07_lang_tr.png, ...)
+            for (int l = 0; l < vstm::i18n::kNumLangs; ++l)
+            {
+                vstm::i18n::setCurrent ((Lang) l);
+                VSTMTuneProcessor q;
+                q.setPlayConfigDetails (2, 2, kFs, 512);
+                q.prepareToPlay (kFs, 512);
+                auto voice = referenceMelody();
+                processSeconds (q, voice, 9.1);
+                std::unique_ptr<juce::AudioProcessorEditor> le (q.createEditor());
+                auto* led = dynamic_cast<VSTMTuneEditor*> (le.get());
+                led->getDisplay().pump();
+                le->setSize (1536, 1024);
+                pump (120);
+                savePng (*le, shotDir.getChildFile (juce::String ("07_lang_") + vstm::i18n::code ((Lang) l) + ".png"), 1.0f);
+            }
+            vstm::i18n::setCurrent (Lang::english);
         }
     }
 

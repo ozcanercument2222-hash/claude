@@ -12,6 +12,7 @@
 //  yeniden cizim yapilmaz.
 //==============================================================================
 #include "Theme.h"
+#include "Lang.h"
 #include "dsp/TuneEngine.h"
 #include "dsp/Scales.h"
 
@@ -25,7 +26,7 @@ public:
         setOpaque (true);
         resetColumns();
         startTimerHz (60);
-        setTitle ("Pitch display");
+        setTitle (vstm::i18n::tr ("Pitch display"));
     }
 
     bool showInput = false;
@@ -99,7 +100,7 @@ public:
         }
 
         if (! hasData)
-            drawText (g, "Sing or play audio to see the pitch", { plot.getCentreX(), b.getCentreY() }, font (15.0f), col::faint);
+            drawText (g, vstm::i18n::tr ("Sing or play audio to see the pitch"), { plot.getCentreX(), b.getCentreY() }, font (15.0f), col::faint);
 
         g.setColour (juce::Colour (0xff26252c));
         g.strokePath (frame, juce::PathStrokeType (1.0f));

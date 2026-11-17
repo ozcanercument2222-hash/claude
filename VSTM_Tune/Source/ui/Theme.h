@@ -74,6 +74,16 @@ inline float textWidth (const juce::Font& f, const juce::String& s)
     return s.isEmpty() ? 0.0f : w - f.getExtraKerningFactor() * f.getHeight();
 }
 
+/** f shrunk (never grown) so that s fits into maxWidth: translations are longer or shorter than
+    the English text the layout was drawn with. */
+inline juce::Font fitted (juce::Font f, const juce::String& s, float maxWidth)
+{
+    const float w = textWidth (f, s);
+    if (maxWidth > 0.0f && w > maxWidth)
+        f = f.withHeight (f.getHeight() * maxWidth / w);
+    return f;
+}
+
 /** Text whose cap height is optically centred on anchor.y; x is the left edge, centre or right edge. */
 inline void drawText (juce::Graphics& g, const juce::String& text, juce::Point<float> anchor, const juce::Font& f,
                       juce::Colour c, juce::Justification just = juce::Justification::centred)

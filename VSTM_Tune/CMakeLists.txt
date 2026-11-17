@@ -89,6 +89,8 @@ set(VSTM_PLUGIN_SOURCES
     Source/PluginEditor.cpp
     Source/PluginEditor.h
     Source/Parameters.h
+    Source/Lang.cpp
+    Source/Lang.h
     Source/PresetManager.cpp
     Source/PresetManager.h
     Source/ui/Theme.h

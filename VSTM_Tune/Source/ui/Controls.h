@@ -9,6 +9,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "Theme.h"
 #include "Icons.h"
+#include "../Lang.h"
 
 namespace vui
 {
@@ -108,7 +109,7 @@ public:
 
     void drawPopupMenuSectionHeader (juce::Graphics& g, const juce::Rectangle<int>& area, const juce::String& name) override
     {
-        drawText (g, name.toUpperCase(), { (float) area.getX() + 14.0f, (float) area.getCentreY() + 2.0f },
+        drawText (g, vstm::i18n::upper (name), { (float) area.getX() + 14.0f, (float) area.getCentreY() + 2.0f },
                   font (12.0f, Weight::semibold, 0.12f), col::dim, juce::Justification::left);
     }
 
@@ -367,7 +368,7 @@ public:
     void paint (juce::Graphics& g) override
     {
         const float cx = (float) getWidth() * 0.5f;
-        drawText (g, label, { cx, 120.0f }, font (15.8f, Weight::medium, 0.05f), col::label);
+        drawText (g, label, { cx, 120.0f }, fitted (font (15.8f, Weight::medium, 0.05f), label, (float) getWidth() - 12.0f), col::label);
         if (! editor.isShowing())
             drawText (g, param.getCurrentValueAsText(), { cx, 151.0f }, font (23.0f), col::text);
     }
@@ -572,14 +573,13 @@ public:
         const auto choices = param.getAllValueStrings();
         const int idx = juce::roundToInt (param.convertFrom0to1 (param.getValue()));
         const auto text = choices[juce::jlimit (0, choices.size() - 1, idx)];
-        const auto f = font (22.5f);
+        const auto s = suffix ? suffix() : juce::String();
+        const auto fs = font (17.0f);
+        const float room = r.getWidth() - 25.0f - 62.0f - (s.isNotEmpty() ? textWidth (fs, s) + 10.0f : 0.0f);
+        const auto f = fitted (font (22.5f), text, room);       // long scale names in some languages
         drawText (g, text, { r.getX() + 25.0f, r.getCentreY() }, f, col::text, juce::Justification::left);
-        if (suffix)
-        {
-            const auto s = suffix();
-            if (s.isNotEmpty())
-                drawText (g, s, { r.getX() + 25.0f + textWidth (f, text) + 10.0f, r.getCentreY() }, font (17.0f), col::accentText.withAlpha (0.9f), juce::Justification::left);
-        }
+        if (s.isNotEmpty())
+            drawText (g, s, { r.getX() + 25.0f + textWidth (f, text) + 10.0f, r.getCentreY() }, fs, col::accentText.withAlpha (0.9f), juce::Justification::left);
         icons::drawCentred (g, icons::chevronDown(), { r.getRight() - 36.0f, r.getCentreY() }, isMouseOver() ? col::text : col::label, 2.2f);
     }
 
@@ -691,6 +691,13 @@ public:
 
     bool isOn() const { return (param.getValue() > 0.5f) != invert; }
 
+    /** Width this toggle needs for its longer text plus the dot and margins (layout follows the language). */
+    float preferredWidth() const
+    {
+        const auto f = labelFont();
+        return juce::jmax (textWidth (f, textOn), textWidth (f, textOff)) + (leftDot ? 55.0f + 16.0f : 54.0f + 16.0f);
+    }
+
     void paint (juce::Graphics& g) override
     {
         const auto r = getLocalBounds().toFloat();
@@ -702,7 +709,7 @@ public:
         if (on) fillGlowCircle (g, { dotX, cy }, 5.6f, juce::Colour (0xffb59bfd), 0.9f);
         else { g.setColour (dotC); g.fillEllipse (dotX - 5.6f, cy - 5.6f, 11.2f, 11.2f); }
 
-        const auto f = font (leftDot ? 16.6f : 14.6f, Weight::medium, 0.14f);
+        const auto f = labelFont();
         auto tc = on ? (leftDot ? col::accentText : juce::Colour (0xff8f8d98)) : col::faint;
         if (over) tc = tc.brighter (0.25f);
         const auto& text = on ? textOn : textOff;
@@ -721,6 +728,8 @@ public:
     }
 
 private:
+    juce::Font labelFont() const { return font (leftDot ? 16.6f : 14.6f, Weight::medium, 0.14f); }
+
     juce::RangedAudioParameter& param;
     bool invert, leftDot;
     juce::String textOn, textOff;
