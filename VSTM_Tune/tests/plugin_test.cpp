@@ -529,6 +529,40 @@ int main (int argc, char* argv[])
             CHECK (ed != nullptr && ed->getWidth() == 1152 && ed->getHeight() == 768, "editor %d opens at 1152 x 768", round + 1);
         }
 
+        {
+            // The custom scale call-out: opened twice, then the plugin window is closed while it is open.
+            // In a221b41 the editor deleted a box that JUCE's launchAsynchronously owns (it is a member of
+            // JUCE's own callback object): heap corruption, the PluginTest crashed on Windows CI. Must not crash.
+            std::function<void (juce::Component&, std::vector<juce::CallOutBox*>&)> findBoxes = [&] (juce::Component& c, std::vector<juce::CallOutBox*>& out)
+            {
+                if (auto* b = dynamic_cast<juce::CallOutBox*> (&c))
+                    out.push_back (b);
+                for (auto* child : c.getChildren())
+                    findBoxes (*child, out);
+            };
+            auto boxesIn = [&] (juce::Component& c) { std::vector<juce::CallOutBox*> v; findBoxes (c, v); return v; };
+
+            std::unique_ptr<juce::AudioProcessorEditor> base (p.createEditor());
+            auto* ed = dynamic_cast<VSTMTuneEditor*> (base.get());
+            ed->showCustomScaleEditor();
+            pump (30);
+            ed->showCustomScaleEditor();
+            pump (30);
+            const auto open = boxesIn (*ed);
+            if (! open.empty())
+                open.front()->exitModalState (0);      // what a click outside the box does
+            pump (100);
+            const size_t afterDismiss = boxesIn (*ed).size();
+            ed->showCustomScaleEditor();
+            pump (30);
+            base.reset();                               // plugin window closed while the box is open
+            pump (300);
+            CHECK (open.size() == 1 && afterDismiss == 0,
+                   "custom scale call-out: opened twice -> %d box, a click outside removes it (%d left), window closed while it is open -> no crash",
+                   (int) open.size(), (int) afterDismiss);
+            setParam (p, vstm::ids::customScale, 0.0f);
+        }
+
         if (shotDir != juce::File())
         {
             shotDir.createDirectory();

@@ -61,7 +61,7 @@
 
 > **Güncelleme (17.11.2026, aynı gün):** Risk 1, 2 ve 5 düzeltildi ve testle kanıtlandı (`00bde73`, `154eddc`). Ölçüm aracı depoya alındı ve WavProbe sağlamlaştırıldı (`76f8594`). Normal girişte çıktı bit düzeyinde değişmedi. Testler: EngineTest 41/41, PluginTest 43/43. Ayrıntılar ve tamamlanma raporları **Bölüm 15**'te. Risk 3, 4, 6, 7 ve 8 açık.
 >
-> **Güncelleme (18.11.2026):** Risk 6 (oktav) ve 7 (Auto Key güveni) giderildi. Risk 8'de seviye dengelendi (±12 st transpoze / formant'ta 145 kaydın 144'ü ±1 dB içinde); yan etki olarak yukarı kaydırmada seviye eşitlenmiş tepe kuyruğu ve 20–150 Hz olayları arttı (Bölüm 16.2). ROBOTISM eğrisi dört ses tipinde kalibre edildi; Custom Scale ve Adaptive (deneysel) eklendi; 145 gerçek kayıtla (14 VocalSet şarkıcısından 137 kayıt, kullanıcının kuru rap vokali, bir vokal stem'i, 6 RAVDESS klibi) kapsamlı ölçüm yapıldı. Testler: EngineTest 58/58, PluginTest 49/49. Risk 3 kısmen (CC BY lisanslı gerçek set var, insan dinlemesi yok), risk 4 açık (DAW test kiti hazır, hiçbir DAW'da çalıştırılmadı). Ayrıntılar **Bölüm 16**'da.
+> **Güncelleme (18.11.2026):** Risk 6 (oktav) ve 7 (Auto Key güveni) giderildi. Risk 8'de seviye dengelendi (±12 st transpoze / formant'ta 145 kaydın 144'ü ±1 dB içinde); yan etki olarak yukarı kaydırmada seviye eşitlenmiş tepe kuyruğu ve 20–150 Hz olayları arttı (Bölüm 16.2). ROBOTISM eğrisi dört ses tipinde kalibre edildi; Custom Scale ve Adaptive (deneysel) eklendi; 145 gerçek kayıtla (14 VocalSet şarkıcısından 137 kayıt, kullanıcının kuru rap vokali, bir vokal stem'i, 6 RAVDESS klibi) kapsamlı ölçüm yapıldı. Testler: EngineTest 58/58, PluginTest 50/50. Windows CI'da yakalanan bir editör çökmesi (özel dizi balonu) düzeltildi (Bölüm 16.11). Risk 3 kısmen (CC BY lisanslı gerçek set var, insan dinlemesi yok), risk 4 açık (DAW test kiti hazır, hiçbir DAW'da çalıştırılmadı). Ayrıntılar **Bölüm 16**'da.
 
 ---
 
@@ -990,7 +990,7 @@ karelerde wet − dry medyanı) çıkarıldı; yani kazancın kendisi değil, ka
 | Gerçek vokal test sonucu | 145 kayıt, Adaptive kapalı → açık: seviye aynı; 20–150 Hz patlama varsayılan 429 → 417, natural 442 → 405, hard 425 → 412; zarf sıçraması varsayılan 774 → 789, natural 702 → 695, hard 871 → 804. Hedef sapması metriği Adaptive'de karşılaştırılamaz (vibrato bilerek korunuyor) |
 | Önceki sürümle fark | Varsayılan ayarda yok (özel dizi ve Adaptive kapalı; motor bit düzeyinde aynı) |
 | CPU / latency etkisi | Latency yok; CPU farkı ölçüm gürültüsünde (S8) |
-| Bilinen sınırlamalar | Adaptive deneysel; eşikler sentetik testlerle seçildi, dinlenmedi (paketler `adaptive_vibrato_f2`, `adaptive_user`). Klavye düzenleyicisi (CallOutBox) yalnızca Linux'ta bileşen olarak ekran görüntüsüyle denendi; DAW içinde ve HiDPI'da NOT TESTED. Özel dizi kullanıcı presetine yazılıyor (preset bypass / realtime / range dışındaki bütün parametreleri tutuyor, INSPECTED); fabrika preseti yüklenince özel dizi kapanır ve notalar varsayılana döner (R15 ile aynı davranış); yeni parametreler için preset gidiş-dönüşü ayrıca otomatik test edilmedi |
+| Bilinen sınırlamalar | Adaptive deneysel; eşikler sentetik testlerle seçildi, dinlenmedi (paketler `adaptive_vibrato_f2`, `adaptive_user`). Klavye düzenleyicisinin balonu (CallOutBox) `a221b41`'de editör kapanırken ya da yeniden açılırken JUCE'un sahip olduğu kutuyu siliyordu: Windows CI'da PluginTest çöktü; düzeltildi (16.11). Balon Linux'ta ekran görüntüsüyle denendi; DAW içinde ve HiDPI'da NOT TESTED. Özel dizi kullanıcı presetine yazılıyor (preset bypass / realtime / range dışındaki bütün parametreleri tutuyor, INSPECTED); fabrika preseti yüklenince özel dizi kapanır ve notalar varsayılana döner (R15 ile aynı davranış); yeni parametreler için preset gidiş-dönüşü ayrıca otomatik test edilmedi |
 | Geri alma noktası | `git revert a221b41` |
 
 ### 16.6 Gerçek vokallerle kapsamlı test — son durum (`a221b41` ↔ başlangıç `f6e3a46`)
@@ -1070,7 +1070,7 @@ Sonuçlar gelirse USER-REPORTED olarak bu belgeye eklenmeli ve ölçümün önü
 | | Başlangıç (`f6e3a46`) | Şimdi (`a221b41`) |
 |---|---|---|
 | EngineTest | 41/41 | **58/58** (+4 oktav sıçrama, +6 Auto Key, seviye, özel dizi, +3 Adaptive) |
-| PluginTest (`--vst3`, ekran görüntüleri) | 43/43 | **49/49** (3d: özel dizi / Adaptive, 1.0 uyumluluğu) |
+| PluginTest (`--vst3`, ekran görüntüleri) | 43/43 | **50/50** (3d: özel dizi / Adaptive, 1.0 uyumluluğu; 4: özel dizi balonunun ömrü, 16.11) |
 | AuditProbe | S1–S15 | S1–**S16**; S1 soprano oktav 311 → 0, S11 tek / iki nota kilitlenmiyor, S12 seviye ≤ 0,27 dB |
 | Gerçek vokal matrisi | – | 145 kayıt × 10 ayar iki derlemede (+3 Adaptive ayarı); seviye eşitlenmiş tepe / LF analizi |
 | Normal girişte çıktı | – | değişti (oktav ve refine kararları); transpoze / formant 0 ve Adaptive kapalıyken seviye / Adaptive kodu devre dışı |
@@ -1087,6 +1087,24 @@ gidiş-dönüşü (otomatik test).
 3. Seviye dengelemesinin tepe kuyruğu ve 20–150 Hz olayları (16.2, önerilen adımlar); P0-8'in limiter maddesi.
 4. Bas aralığında çok geniş / hızlı vibrato (16.1) ve hızlı bas kaymalarında voicing düşmesi.
 5. Kaba hata artışının gerçek kayıtta doğrulanması (elle etiketlenmiş kısa bir referans parçası).
+
+### 16.11 CI'da yakalanan çökme: özel dizi balonunun ömrü — (bu commit)
+
+| Alan | |
+|---|---|
+| Görev | `a221b41`'in CI çalıştırmasında (44269571703) Windows'ta PluginTest'in çökmesi |
+| Değiştirilen dosyalar | `Source/PluginEditor.h/.cpp`, `tests/plugin_test.cpp` |
+| Sorunun mevcut davranışı | Windows'ta PluginTest hiçbir çıktı yazamadan çıkış kodu 127 ile sonlandı (derleme, EngineTest ve Linux'taki bütün testler geçti; 18 ekran görüntüsünün hepsi yazılmıştı). Neden (INSPECTED, JUCE 8 kaynağı): `CallOutBox::launchAsynchronously` kutuyu JUCE'un kendi geri çağırma nesnesinin **üyesi** olarak oluşturur ve kendisi siler; editör bu kutuyu `delete` ile siliyordu (kutu açıkken editör kapanınca ve düzenleyici yeniden açılınca): ayrıca ayrılmamış bir nesneyi serbest bırakma, yığın bozulması. Linux testinde kutu, JUCE'un ön plan denetimiyle 200 ms içinde kendiliğinden kapandığı için hata görünmüyordu. Kutuyu iki kez açıp editörü kapatan deterministik test Linux'ta da çöktü: `free(): invalid pointer`, çıkış 134 (MEASURED). Gerçek kullanımda özel dizi düzenleyicisi açıkken eklenti penceresini kapatmak ya da düzenleyiciyi yeniden açmak DAW'ı çökertebilirdi |
+| Yapılan değişiklik | Kutu ve içeriği editörün üyeleri (`std::unique_ptr`): editörle birlikte, önce kutu sonra içerik siliniyor. Dışarı tıklama kutunun modal durumunu bitiriyor; kutuyu, editör hâlâ varsa ve kutu hâlâ açık olan kutuysa editör siliyor. İçerik algılanan tonu editör yerine doğrudan motordan okuyor |
+| Neden bu yöntem | JUCE'un sahiplik kuralına uyan en küçük değişiklik; kutunun ömrü editörün ömrüne bağlandı, editör kapanınca yetim modal kutu kalmıyor |
+| Derleme sonucu | Başarılı, 0 uyarı |
+| Çalıştırılan testler | PluginTest (+1), EngineTest, ekran görüntüleri (önceki koşuyla piksel karşılaştırması) |
+| Test sonucu | **Önce:** yeni test `free(): invalid pointer` ile çöktü. **Sonra:** iki kez açınca tek kutu, modal durum bitince kutu siliniyor (0 kaldı), kutu açıkken editör kapanıyor, çökme yok. PluginTest **50/50**, EngineTest 58/58 |
+| Gerçek vokal test sonucu | Uygulanamaz (yalnızca editör; ses yolu değişmedi) |
+| Önceki sürümle fark | `08_custom_scale.png` artık açık balonu da gösteriyor (önce Linux'ta 200 ms'de kapanıyordu); diğer ekran görüntüleri piksel düzeyinde aynı |
+| CPU / latency etkisi | Yok |
+| Bilinen sınırlamalar | Windows'ta düzeltmenin CI sonucu bu commit'in çalıştırmasında görülecek. ROBOTISM "i" bilgi balonu hâlâ `launchAsynchronously` kullanıyor: kutu açıkken editör kapanırsa yetim kalıyor ve aynı eklenti DLL'indeki başka bir VSTM Tune penceresinde ilk tıklamayı yutabilir (INSPECTED; çökme değil, eski davranış) |
+| Geri alma noktası | Bu commit'in `git revert`'ü (çökmeyi geri getirir) |
 
 ### 16.10 Yeniden üretme
 

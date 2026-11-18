@@ -395,8 +395,7 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
 
 VSTMTuneEditor::~VSTMTuneEditor()
 {
-    if (auto* open = scaleCallout.getComponent())       // its content refers to this editor
-        delete open;
+    closeScaleEditor();
     tooltips.setLookAndFeel (nullptr);
     setLookAndFeel (nullptr);
 }
@@ -474,11 +473,30 @@ void VSTMTuneEditor::setCustomScale (bool on)
 
 void VSTMTuneEditor::openScaleEditor()
 {
-    auto content = std::make_unique<vui::ScaleNoteEditor> (audio.apvts, [this] { return audio.engine.detectedKey.load(); });
-    content->setLookAndFeel (&lnf);
-    if (auto* open = scaleCallout.getComponent())
-        delete open;
-    scaleCallout = &juce::CallOutBox::launchAsynchronously (std::move (content), scaleSelector.getBoundsInParent(), &canvas);
+    closeScaleEditor();
+    auto& engine = audio.engine;
+    scaleContent = std::make_unique<vui::ScaleNoteEditor> (audio.apvts, [&engine] { return engine.detectedKey.load(); });
+    scaleContent->setLookAndFeel (&lnf);
+    scaleCallout = std::make_unique<juce::CallOutBox> (*scaleContent, scaleSelector.getBoundsInParent(), &canvas);
+
+    // A click outside ends the box's modal state (CallOutBox::inputAttemptWhenModal); then it is deleted
+    // here, if this editor still exists and the box is still the open one (not replaced in between).
+    juce::Component::SafePointer<VSTMTuneEditor> self (this);
+    juce::Component::SafePointer<juce::CallOutBox> box (scaleCallout.get());
+    scaleCallout->enterModalState (true, juce::ModalCallbackFunction::create ([self, box] (int)
+    {
+        if (auto* ed = self.getComponent())
+            if (box != nullptr && box.getComponent() == ed->scaleCallout.get())
+                ed->closeScaleEditor();
+    }), false);
+}
+
+void VSTMTuneEditor::closeScaleEditor()
+{
+    scaleCallout.reset();                   // the box first: the content is its child
+    if (scaleContent != nullptr)
+        scaleContent->setLookAndFeel (nullptr);
+    scaleContent.reset();
 }
 
 void VSTMTuneEditor::showHostMenu (juce::RangedAudioParameter& p)

@@ -63,6 +63,8 @@ public:
     vui::PitchDisplay& getDisplay() { return display; }
     vui::RobotKnob& getRobotKnob() { return robot; }
     void showCustomScaleEditor() { setCustomScale (true); openScaleEditor(); }
+    /** Closes the custom scale call-out if it is open. */
+    void closeScaleEditor();
 
 private:
     void timerCallback() override;
@@ -95,7 +97,11 @@ private:
     bool lastActive = true;
     int lastDetectedKey = -2;
     bool lastCustom = false;
-    juce::Component::SafePointer<juce::CallOutBox> scaleCallout;
+    // The custom scale call-out and its content are owned here and deleted with the editor.
+    // (CallOutBox::launchAsynchronously owns its box inside a JUCE object: the editor can neither
+    // delete that box nor be sure it is gone before the editor itself is.)
+    std::unique_ptr<vui::ScaleNoteEditor> scaleContent;
+    std::unique_ptr<juce::CallOutBox> scaleCallout;
     static constexpr float kSureKey = 0.5f;      // Auto key confidence below this shows "?"
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VSTMTuneEditor)
