@@ -60,6 +60,8 @@
 **Öneri:** Bölüm 11'deki P0 sırasıyla ilerlenmeli. Önce test altyapısı ve iki küçük sağlamlık düzeltmesi (NaN/Inf ve REALTIME geçişi) gelmeli; bunlar küçük, ölçülebilir ve geri alınabilir. Gerçek vokal seti kullanıcıdan gelmeli ve bu iş hemen, paralel başlamalı.
 
 > **Güncelleme (17.11.2026, aynı gün):** Risk 1, 2 ve 5 düzeltildi ve testle kanıtlandı (`00bde73`, `154eddc`). Ölçüm aracı depoya alındı ve WavProbe sağlamlaştırıldı (`76f8594`). Normal girişte çıktı bit düzeyinde değişmedi. Testler: EngineTest 41/41, PluginTest 43/43. Ayrıntılar ve tamamlanma raporları **Bölüm 15**'te. Risk 3, 4, 6, 7 ve 8 açık.
+>
+> **Güncelleme (18.11.2026):** Risk 6 (oktav) ve 7 (Auto Key güveni) giderildi. Risk 8'de seviye dengelendi (±12 st transpoze / formant'ta 145 kaydın 144'ü ±1 dB içinde); yan etki olarak yukarı kaydırmada seviye eşitlenmiş tepe kuyruğu ve 20–150 Hz olayları arttı (Bölüm 16.2). ROBOTISM eğrisi dört ses tipinde kalibre edildi; Custom Scale ve Adaptive (deneysel) eklendi; 145 gerçek kayıtla (14 VocalSet şarkıcısından 137 kayıt, kullanıcının kuru rap vokali, bir vokal stem'i, 6 RAVDESS klibi) kapsamlı ölçüm yapıldı. Testler: EngineTest 58/58, PluginTest 49/49. Risk 3 kısmen (CC BY lisanslı gerçek set var, insan dinlemesi yok), risk 4 açık (DAW test kiti hazır, hiçbir DAW'da çalıştırılmadı). Ayrıntılar **Bölüm 16**'da.
 
 ---
 
@@ -432,15 +434,15 @@ Varsayılan ayar, 20 s melodi, 64 örneklik bloklar:
 |---|---|---|---|---|
 | R1 | Tek bir NaN/Inf giriş örneği düzeltmeyi motor sıfırlanana kadar kapatıyor; 5 NaN örnek çıkışa geçiyor. **✅ Düzeltildi (`00bde73`, Bölüm 15.2)** | **Yüksek** | MEASURED | `Source/dsp/TuneEngine.h:170-185`, `Source/dsp/DspCommon.h:43-49` |
 | R2 | NaN parametre (bozuk oturum/preset) kalıcı sessizlik ya da NaN çıkış üretiyor; değer düzelse de geçmiyor. **✅ Düzeltildi (`00bde73`, Bölüm 15.2)** | **Yüksek** | MEASURED | `Source/PluginProcessor.cpp:49-65`, `Source/PresetManager.cpp:82-89`, `Source/dsp/TuneEngine.h:192,652` |
-| R3 | Gerçek vokal test seti fiilen yok: 6 RAVDESS klibi, 8 kHz bantlı, NC lisans, depo dışı, metadata yok. Önceki bir oturumda kullanılan 2:48'lik vokal stem'i (MP3, kaynak ayrıştırıcı çıktısı) da depoda değil | **Yüksek** | MEASURED / INSPECTED | `~/.cache/vstm-ear/testdata`, `artifacts/audio-runs/tune-listening/README.txt` |
-| R4 | İnsan dinlemesi, DAW testi ve macOS/AU derlemesi yok | **Yüksek** | CI / INSPECTED | `.github/workflows/vstm-tune.yml` |
+| R3 | Gerçek vokal test seti fiilen yok: 6 RAVDESS klibi, 8 kHz bantlı, NC lisans, depo dışı, metadata yok. Önceki bir oturumda kullanılan 2:48'lik vokal stem'i (MP3, kaynak ayrıştırıcı çıktısı) da depoda değil. **Kısmen giderildi (Bölüm 16):** 145 kayıt (VocalSet CC BY 4.0'dan 137), manifestle; depo dışında, insan dinlemesi yok | **Yüksek** | MEASURED / INSPECTED | `~/.cache/vstm-ear/testdata`, `artifacts/audio-runs/tune-listening/README.txt` |
+| R4 | İnsan dinlemesi, DAW testi ve macOS/AU derlemesi yok. *18.11:* DAW test kiti hazır (`daw_test/`, Bölüm 16.7), çalıştırılmadı; 14 kör A/B paketi dinlenmedi | **Yüksek** | CI / INSPECTED | `.github/workflows/vstm-tune.yml` |
 | R5 | REALTIME geçişinde 40 ms sessizlik + tık + Auto key sıfırlanması. **✅ Düzeltildi (`154eddc`, Bölüm 15.3)** | Orta | MEASURED | `Source/dsp/TuneEngine.h:98-122`, `Source/PluginProcessor.cpp:92-94` |
-| R6 | Yüksek seste legato yukarı oktavda algılayıcı eski oktavda kalıyor; alt oktav +31 dB, ekranda yanlış oktav | Orta | MEASURED (sentetik) | `Source/dsp/PitchDetector.h:119-136` |
-| R7 | Auto key: 1–2 notayla yanlış kesinlik, yavaş modülasyon takibi (>8 s), ilk tahminin yanlış olabilmesi; güven bilgisi yok | Orta | MEASURED (sentetik) | `Source/dsp/KeyDetector.h:29,59,84` |
-| R8 | Büyük transpoze / formant'ta −7,4…+2,6 dB seviye ve +5,9 dB tepe kayması; çıkış koruması yok | Orta | MEASURED (sentetik) | `Source/dsp/TuneEngine.h:528,545` |
+| R6 | Yüksek seste legato yukarı oktavda algılayıcı eski oktavda kalıyor; alt oktav +31 dB, ekranda yanlış oktav. **✅ Düzeltildi (`647a26a`, Bölüm 16.1)**; bas aralığında çok geniş vibratoda yeni sınır (16.1) | Orta | MEASURED (sentetik) | `Source/dsp/PitchDetector.h:119-136` |
+| R7 | Auto key: 1–2 notayla yanlış kesinlik, yavaş modülasyon takibi (>8 s), ilk tahminin yanlış olabilmesi; güven bilgisi yok. **✅ Güven mekanizması (`82ad66e`, Bölüm 16.3)**; yalnız 2 notayla belli olan zayıf modülasyon bilinçli olarak izlenmiyor | Orta | MEASURED (sentetik) | `Source/dsp/KeyDetector.h:29,59,84` |
+| R8 | Büyük transpoze / formant'ta −7,4…+2,6 dB seviye ve +5,9 dB tepe kayması; çıkış koruması yok. **✅ Seviye dengelendi (`e887480`, Bölüm 16.2)**; tanecik patlamaları sınırlandı, kaldırılmadı; yukarı kaydırmada seviye eşitlenmiş tepe kuyruğu ve 20–150 Hz olayları arttı, limiter yok | Orta | MEASURED (sentetik) | `Source/dsp/TuneEngine.h:528,545` |
 | R9 | CI test öncesi paket yüklüyor; başarısız testte yayın engeli, pluginval, WAV regresyonu ve sanitizer yok | Orta | INSPECTED | `.github/workflows/vstm-tune.yml:62-138` |
 | R10 | `setStateInformation` içinde dosya taraması ve snapshot yeniden kurulumu var; host bunu UI dışı iş parçacığından çağırırsa editör zamanlayıcısındaki `isDirty()` ile veri yarışı olabilir | Orta / Düşük | INSPECTED | `Source/PluginProcessor.cpp:127`, `Source/PresetManager.cpp:179-201`, `Source/PluginEditor.cpp:388-390` |
-| R11 | `vocal_metrics.py` depo kökündeki `tools/`'a bağımlı (zip'te yok); varsayılan 20 ms gecikme; pYIN tabanı +1…+4 ct; `out_vs_target` motorun kendi hedefini kullanıyor. (WavProbe'un WAV ayrıştırma açıkları `76f8594`'te kapatıldı; vocal_metrics maddeleri açık) | Orta (QA) | MEASURED / INSPECTED | `tests/vocal_metrics.py:27,62,117` |
+| R11 | `vocal_metrics.py` depo kökündeki `tools/`'a bağımlı (zip'te yok); varsayılan 20 ms gecikme; pYIN tabanı +1…+4 ct; `out_vs_target` motorun kendi hedefini kullanıyor. (WavProbe'un WAV ayrıştırma açıkları `76f8594`'te kapatıldı; vocal_metrics maddeleri açık. *18.11:* yeni ölçüm hattı `pitch_eval.py` + `run_vocal_matrix.py` gecikmeyi WavProbe'dan alıyor, oktav / kaba hata ve voiced ölçüyor, `778423b`) | Orta (QA) | MEASURED / INSPECTED | `tests/vocal_metrics.py:27,62,117` |
 | R12 | Stereo bağlı ve mono toplam analizli: kanal içerikleri farklıysa yanlış düzeltme | Düşük–Orta | MEASURED (sentetik) | `Source/dsp/TuneEngine.h:170-177` |
 | R13 | REALTIME'da analiz 0–6 ms geç kalabiliyor; perde işaretleri büyük sıçramada gecikmeli algıyı izliyor (oturma 30–70 ms) | Düşük–Orta | INSPECTED + MEASURED | `Source/dsp/TuneEngine.h:322-375` |
 | R14 | MIX %50'de 6,3 dB vuruntu (doğrusal geçiş, kaçınılmaz olabilir) | Düşük | MEASURED (sentetik) | `Source/dsp/TuneEngine.h:215` |
@@ -450,7 +452,7 @@ Varsayılan ayar, 20 s melodi, 64 örneklik bloklar:
 | R18 | Oturum `version` alanı okunmuyor; ileride göç yolu yok | Düşük | INSPECTED | `Source/PluginProcessor.cpp:113,118-130` |
 | R19 | Undo ve A/B yok | Düşük | INSPECTED | `Source/PluginProcessor.cpp:11` |
 | R20 | Mutlak voicing kapısı (−56 dBFS); çok sessiz kayıtta düzeltme kesilebilir | Düşük | INSPECTED | `Source/dsp/PitchDetector.h:149,168` |
-| R21 | ROBOTISM %0–10 ölü bölge | Düşük | MEASURED | `Source/dsp/PitchCorrector.h:150` |
+| R21 | ROBOTISM %0–10 ölü bölge. **✅ Yeniden eşlendi (`a43973a`, Bölüm 16.4)** | Düşük | MEASURED | `Source/dsp/PitchCorrector.h:150` |
 | R22 | `placeTailGrains` her çıkış örneğinde `std::pow` hesaplıyor (gereksiz CPU) | Düşük | INSPECTED | `Source/dsp/TuneEngine.h:628` |
 | R23 | Editör kapalıyken perde kuyruğu ~12 s eski veriyle doluyor; açılınca bir anda çiziliyor | Düşük | INSPECTED | `Source/ui/PitchDisplay.h:142-201` |
 | R24 | "AUTOTUNE" ifadesi (arayüz, README). "Auto-Tune" Antares Audio Technologies'in tescilli markası; ticari üründe hukuki kontrol gerekli | Hukuki | INSPECTED | `Source/Lang.cpp` ("AUTOTUNE ON/OFF"), `README.md` |
@@ -464,31 +466,31 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 
 | Madde | Durum | Gerekçe / kanıt |
 |---|---|---|
-| **1.1** Gerçek vokal test veri seti | **GELİŞTİRİLECEK** | Yalnızca 6 RAVDESS klibi: 8 kHz bantlı, NC lisans, depo dışı, metadata yok (MEASURED). Ses aralığı, stil, mikrofon çeşitliliği yok. Commit `faf17eb`'deki ölçümlerde kullanılan 2:48'lik stem (MP3, ayrıştırıcı çıktısı) depoda değil; kayıplı formatta, hakları belirsiz |
-| **1.2** WAV test hattı otomasyonu | KISMEN MEVCUT | WavProbe + vocal_metrics var. Tek komutluk matris, JSON/CSV toplama, önceki sürümle regresyon raporu ve otomatik gecikme yok. Bu denetimdeki `vocals/run_baseline.sh` bir başlangıç. *Güncelleme:* WavProbe WAV hata denetimi ve kuyruk (flush) eklendi, `VSTMTune_AuditProbe` depoda (`76f8594`) |
-| **1.3** Bağımsız perde doğrulama | KISMEN MEVCUT | engine_test ölçümü oktav hatasına kör; pYIN+YIN tabanı +1…+4 ct (MEASURED); oktav hatası, voiced FP/FN ve jitter metriği yok |
+| **1.1** Gerçek vokal test veri seti | **KISMEN MEVCUT** (18.11) | Yalnızca 6 RAVDESS klibi: 8 kHz bantlı, NC lisans, depo dışı, metadata yok (MEASURED). Ses aralığı, stil, mikrofon çeşitliliği yok. Commit `faf17eb`'deki ölçümlerde kullanılan 2:48'lik stem (MP3, ayrıştırıcı çıktısı) depoda değil; kayıplı formatta, hakları belirsiz. *Güncelleme (18.11):* 145 kayıt: VocalSet (CC BY 4.0) 14 şarkıcıdan 137 kayıt, 12 teknik; manifest; depo dışında (Bölüm 16). Farklı mikrofon / oda ve insan dinlemesi yok |
+| **1.2** WAV test hattı otomasyonu | KISMEN MEVCUT | WavProbe + vocal_metrics var. Tek komutluk matris, JSON/CSV toplama, önceki sürümle regresyon raporu ve otomatik gecikme yok. Bu denetimdeki `vocals/run_baseline.sh` bir başlangıç. *Güncelleme:* WavProbe WAV hata denetimi ve kuyruk (flush) eklendi, `VSTMTune_AuditProbe` depoda (`76f8594`). *Güncelleme (18.11):* `run_vocal_matrix.py`: manifest → ayar matrisi → kayıt başına JSON → özet → önceki sürümle tablo (`778423b`); otomatik eşik / PASS-FAIL yok |
+| **1.3** Bağımsız perde doğrulama | KISMEN MEVCUT | engine_test ölçümü oktav hatasına kör; pYIN+YIN tabanı +1…+4 ct (MEASURED); oktav hatası, voiced FP/FN ve jitter metriği yok. *Güncelleme (18.11):* `pitch_eval.py` oktav altı / üstü, kaba hata, voiced bulma / yanlış voiced ölçüyor; gerçeği bilinen sentetik karşılaştırma (`vibcheck/`); jitter yok |
 | **1.4** Gerçek zamanlı kararlılık | KISMEN MEVCUT | Örnekleme hızı, blok, stereo (aynı içerik), 10 dk ve otomasyon ✓ (MEASURED). Denetimde NaN/Inf ✗ ve REALTIME geçişi ✗ idi; **ikisi de düzeltildi ve testle doğrulandı** (`00bde73`, `154eddc`). Host içinde preset/bypass/yeniden başlatma NOT TESTED |
-| **2.1** F0 doğruluğu | KISMEN MEVCUT | Sentetikte doğru; **soprano legato oktavında takılma** (MEASURED); gerçek vokalde referanslı doğruluk yok |
-| **2.2** Güven sistemi | KISMEN MEVCUT | Clarity yalnızca voicing ve ton histogramında; birleşik güven, güvene göre yumuşatma ve UI göstergesi yok |
+| **2.1** F0 doğruluğu | KISMEN MEVCUT | Sentetikte doğru; **soprano legato oktavında takılma** (MEASURED); gerçek vokalde referanslı doğruluk yok. *Güncelleme (18.11):* oktav takılması düzeltildi; gerçek sette oktav hatası %0,81 → %0,21; bas aralığında çok geniş vibratoda yeni sınır (Bölüm 16.1) |
+| **2.2** Güven sistemi | KISMEN MEVCUT | Clarity yalnızca voicing ve ton histogramında; birleşik güven, güvene göre yumuşatma ve UI göstergesi yok. *Güncelleme (18.11):* Auto Key güveni ve göstergesi (16.3); Adaptive açıkken clarity'ye göre düzeltme yumuşatma (16.5, deneysel) |
 | **2.3** Voiced / unvoiced | MEVCUT – TEST EDİLECEK | Histerezis, başlangıç, köprü, U→V çapraz geçiş var; sentetikte FP yok (MEASURED). Tam bantlı gerçek ünsüzlerde NOT TESTED |
 | **2.4** Algılayıcı performansı | KISMEN MEVCUT | Motorun toplam CPU'su ölçüldü (MEASURED); modül bazlı profil ve önce/sonra raporu yok |
 | **3.1** ROBOTISM ana kontrolü | MEVCUT – TEST EDİLECEK | Sürekli ve monoton (MEASURED tablo), değer yazısı var; dinleme yok |
-| **3.2** ROBOTISM eğri kalibrasyonu | KISMEN MEVCUT | Formüle dayalı; 9 nokta sentetik ölçüldü; algısal kalibrasyon ve ses aralığı tutarlılığı yok; %0–10 ölü bölge |
+| **3.2** ROBOTISM eğri kalibrasyonu | KISMEN MEVCUT | Formüle dayalı; 9 nokta sentetik ölçüldü; algısal kalibrasyon ve ses aralığı tutarlılığı yok; %0–10 ölü bölge. *Güncelleme (18.11):* ölü bölge kalktı, dört ses tipinde ölçüldü (S16), gerçek vokal taraması; algısal kalibrasyon yok (16.4) |
 | **3.3** Nota seçimi ve histerezis | MEVCUT – TEST EDİLECEK | 15–35 ct histerezis, 14–52 ms bekleme, "vardı" kuralı; key/scale değişiminde hemen geçiş (glide yalnızca İnsansı tarafta) |
 | **3.4** Retune ve geçiş | MEVCUT – TEST EDİLECEK | Geçiş 24–262 ms (MEASURED); kısa nota, rap ve uzun nota gerçek örneklerle NOT TESTED |
 | **3.5** Amount | MEVCUT – TEST EDİLECEK | 0 şeffaf, 100 tam (MEASURED). Vibrato Scale ≠ %100 iken amount 0'da da perde değişiyor (`PitchCorrector.h:89,166`, tasarım gereği; belgelenmeli) |
 | **4.1** Geçiş artefaktları | KISMEN MEVCUT | U→V düzeltmesi var (commit `232651d`); gerçek vokalde LF patlaması 0–8/dosya (MEASURED); büyük transpozede LF bilinen sınır |
-| **4.2** Formant | KISMEN MEVCUT | Perde korunuyor; seviye −7,4…+2,6 dB (MEASURED); doğallık ve metaliklik dinlenmedi |
+| **4.2** Formant | KISMEN MEVCUT | Perde korunuyor; seviye −7,4…+2,6 dB (MEASURED); doğallık ve metaliklik dinlenmedi. *Güncelleme (18.11):* seviye ±0,3 dB (sentetik), gerçek sette 144/145 ±1 dB (16.2) |
 | **4.3** Vibrato | KISMEN MEVCUT | Var olan vibratoyu ölçekliyor (MEASURED); vibrato analizi ve **vibrato ekleme yok** |
-| **4.4** Seviye ve spektrum | KISMEN MEVCUT | 0 st'de seviye korunuyor; büyük kaydırmada kayma; limiter / true-peak yok; MIX doğrusal (%50'de vuruntu) |
+| **4.4** Seviye ve spektrum | KISMEN MEVCUT | 0 st'de seviye korunuyor; büyük kaydırmada kayma; limiter / true-peak yok; MIX doğrusal (%50'de vuruntu). *Güncelleme (18.11):* kaydırmada seviye dengeli; yukarı kaydırmada tepe kuyruğu ve 20–150 Hz olayları arttı; limiter hâlâ yok (16.2) |
 | **4.5** Gecikme | MEVCUT – TEST EDİLECEK | Bildirilen = ölçülen ✓; mod değişiminde kesinti denetimde ✗ idi, **düzeltildi** (5 ms kısma/açma, `154eddc`); DAW PDC NOT TESTED |
-| **5.1** Auto Key doğruluğu | KISMEN MEVCUT | Örnek melodilerde doğru; yanlış kesinlik, yavaş modülasyon (MEASURED); güven ve alternatif yok |
+| **5.1** Auto Key doğruluğu | KISMEN MEVCUT | Örnek melodilerde doğru; yanlış kesinlik, yavaş modülasyon (MEASURED); güven ve alternatif yok. *Güncelleme (18.11):* güven (0…1) ve `Auto · C?` göstergesi; tek / iki nota ton saymıyor; gerçek kayıtta doğruluk oranı ölçülmedi (16.3) |
 | **5.2** Kullanıcı kontrolü | MEVCUT – TEST EDİLECEK | Auto ile sabit ton ayrı; algılama parametreyi ezmiyor; "Auto · A" gösteriliyor; "bulunan tonu sabitle" eylemi yok |
-| **5.3** Dizi kapsamı | KISMEN MEVCUT | 13 dizi maskesi incelemeyle doğru (Hicaz = 0,1,4,5,7,8,10); dizi başına otomatik test, UI nota haritası ve Custom Scale yok |
+| **5.3** Dizi kapsamı | KISMEN MEVCUT | 13 dizi maskesi incelemeyle doğru (Hicaz = 0,1,4,5,7,8,10); dizi başına otomatik test, UI nota haritası ve Custom Scale yok. *Güncelleme (18.11):* Custom Scale ve klavye düzenleyicisi eklendi (16.5); dizi başına otomatik test hâlâ yok |
 | **5.4** Akor farkındalığı | GELİŞTİRİLECEK | Yok; arayüzde de gösterilmiyor (doğru) |
 | **6.1** Üç karakter modu | GELİŞTİRİLECEK | Yok (fabrika presetleri kısmen bu rolü görüyor) |
-| **6.2** Adaptive mod | GELİŞTİRİLECEK | Yok |
-| **6.3** Scale Note Edit | GELİŞTİRİLECEK | Yok |
+| **6.2** Adaptive mod | KISMEN MEVCUT (18.11) | Deneysel, varsayılan kapalı; sentetik testlerle doğrulandı, dinlenmedi (16.5) |
+| **6.3** Scale Note Edit | MEVCUT – TEST EDİLECEK (18.11) | Custom Scale: 12 nota, klavye düzenleyicisi, preset / oturum / otomasyon; DAW içinde NOT TESTED (16.5) |
 | **6.4** Gelişmiş panel | KISMEN MEVCUT | Bütün kontroller ana ekranda; Vocal Range ⚙ menüsünde; ipuçları var; ayrı panel ve birim açıklaması yok |
 | **7.1** Ana ekran | MEVCUT – TEST EDİLECEK | ROBOTISM merkezde, Robotik / İnsansı etiketli, perde ekranı üstte (ekran görüntüsü) |
 | **7.2** Perde ekranı | MEVCUT – TEST EDİLECEK | 6 s tarama, kilitsiz kuyruk, nota noktaları; zoom yok; ses akarken sessizlikte de 60 Hz çizim; açılışta eski veri |
@@ -499,7 +501,7 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 | **8.2** Oturum geri yükleme | KISMEN MEVCUT | Gidiş-dönüş, bozuk, eski ve yabancı oturum ✓; **NaN artık ✓** (PluginTest 3b, `00bde73`); `version` okunmuyor; iş parçacığı riski (R10) |
 | **8.3** Preset sistemi | KISMEN MEVCUT | 14 fabrika + kullanıcı ✓; bozuk dosya ✓, **NaN artık ✓**, kaydet/üzerine yaz/sil otomatik testte (PluginTest 3c); Transparent, Fast Rap ve Balanced Tune kategorileri yok; preset Key/Scale'i değiştiriyor; geçiş anlık |
 | **8.4** A/B ve undo | GELİŞTİRİLECEK | UndoManager yok, A/B yok |
-| **9** Host uyumluluğu | KISMEN MEVCUT | JUCE VST3 host'unda yükleme: Linux (MEASURED) ve Windows (CI) ✓; DAW matrisi NOT TESTED; **macOS/AU hiç derlenmedi** (CI); pluginval yok |
+| **9** Host uyumluluğu | KISMEN MEVCUT | JUCE VST3 host'unda yükleme: Linux (MEASURED) ve Windows (CI) ✓; DAW matrisi NOT TESTED; **macOS/AU hiç derlenmedi** (CI); pluginval yok. *Güncelleme (18.11):* REAPER / FL Studio test kiti (`daw_test/`), çalıştırılmadı (16.7) |
 | **10.1** Ses iş parçacığı | KISMEN MEVCUT | Bellek ayırma ve kilit yok (INSPECTED), denormal ✓; **NaN/Inf artık ✓** (`00bde73`); REALTIME geçişinde ~2 MB'lık tam sıfırlama yerine yalnızca eski zaman çizgisinin ilerisi temizleniyor (48 kHz'de ~9 400 konum; `154eddc`); TSan yok |
 | **10.2** CPU | KISMEN MEVCUT | Bu denetimde ölçüldü; depoda benchmark yok |
 | **10.3** Bellek | KISMEN MEVCUT | Örnek başına sabit ~2,1 MB; sızıntı testi yok; oturum ve preset ayrıştırma güvenli (NaN dahil, `00bde73`); WavProbe ayrıştırıcısı ASan altında temiz (`76f8594`) |
@@ -528,14 +530,14 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 | Oturum kaydet/yükle | ✅ bozuk / eski / NaN oturum dahil (PluginTest 3b) |
 | Preset kaydet/yükle | ✅ bozuk / NaN dosya, kaydet / üzerine yaz / sil dahil (PluginTest 3c) |
 | Tüm parametrelerde host otomasyonu | ⚠️ yalnızca sayı ve stres (motor); DAW ❌ |
-| Gerçek vokal perde doğruluğu ölçüldü | ⚠️ 8 kHz bantlı 6 klip |
+| Gerçek vokal perde doğruluğu ölçüldü | ✅ 145 kayıt, pYIN referansına göre (Bölüm 16.6); gerçek kayıtta kesin doğruluk yok |
 | ROBOTISM tüm aralıkta dinlendi | ❌ |
 | Sibilans ve ünsüz geçişleri | ❌ |
-| Formant ve vibrato gerçek vokalde | ❌ |
+| Formant ve vibrato gerçek vokalde | ⚠️ ölçüldü (seviye, tepe, LF: 16.2 / 16.6), dinlenmedi |
 | Click/pop/thump testleri | ⚠️ ölçüm var, dinleme yok; REALTIME geçişi ✅ (EngineTest 12) |
 | CPU ve bellek stresi | ⚠️ CPU ve 10 dk ✓; sızıntı ❌ |
 | Ses iş parçacığı güvenliği | ⚠️ inceleme ✓; NaN / Inf ✅ (EngineTest 10, 11); TSan ❌ |
-| DAW uyumluluk matrisi | ❌ |
+| DAW uyumluluk matrisi | ❌ (test kiti hazır, Bölüm 16.7) |
 | UI çözünürlük ve DPI | ⚠️ yalnızca Linux |
 | Çeviriler | ✅ tablo tam; görsel kontrol yalnızca Linux |
 | Lisans ve üçüncü taraf bildirimleri | ❌ |
@@ -553,7 +555,7 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 - Parametre kimlikleri ve oturum formatı değişmemeli.
 - Sıralama gerekçesi: 1–3 küçük ve ölçülebilir, sonraki her şeyin önünü açar. 4 kullanıcıya bağlı, hemen ve paralel başlamalı. 5–8'in kabulü gerçek veri setine bağlı.
 
-### P0-1 Test altyapısını depoya al (1.2, 1.3) — **kısmen yapıldı** (`76f8594`: madde 1 ve 6; 2–5 açık)
+### P0-1 Test altyapısını depoya al (1.2, 1.3) — **kısmen yapıldı** (`76f8594`: madde 1 ve 6; `778423b`: 3 ve 5 büyük ölçüde; 2, 4, jitter ve otomatik eşikler açık)
 
 **Dosyalar:** `tests/wav_probe.cpp`, `tests/vocal_metrics.py`, yeni `tests/run_vocal_matrix.py`, `tests/engine_test.cpp`, `CMakeLists.txt`.
 
@@ -603,7 +605,7 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 - Bildirilen gecikme yeni moda eşit.
 - Ses iş parçacığında bellek ayırma yok.
 
-### P0-4 Gerçek vokal veri seti (1.1) — **kullanıcı girdisi gerekli**
+### P0-4 Gerçek vokal veri seti (1.1) — **kısmen** (145 kayıt, Bölüm 16; insan dinlemesi ve Bass / Soprano aralığıyla matris açık)
 
 **İçerik:**
 - ≥ 12 kuru, tam bantlı kayıt (44,1 / 48 / 96 kHz).
@@ -616,7 +618,7 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 
 **Kabul:** Yol haritası 1.1. Sentetik başarı ticari kanıt sayılmaz.
 
-### P0-5 Algılayıcı: oktav takılması ve sıçramalar (2.1)
+### P0-5 Algılayıcı: oktav takılması ve sıçramalar (2.1) — ✅ **yapıldı** (`647a26a`, Bölüm 16.1; alt oktav ölçütü EngineTest 8d soprano'da az farkla aşılıyor, 16.1)
 
 **Dosya:** `Source/dsp/PitchDetector.h:119-136` (süreklilik kuralı), `:241-324` (`PitchTracker`).
 
@@ -632,7 +634,7 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 - Çıkış alt oktav enerjisi kuru sese göre ≤ +6 dB.
 - Gerçek sette oktav hatası oranı raporlanır ve önceki sürümden kötü değildir.
 
-### P0-6 Güven ve voiced/unvoiced (2.2, 2.3)
+### P0-6 Güven ve voiced/unvoiced (2.2, 2.3) — **kısmen** (Adaptive'de clarity'ye göre yumuşatma, deneysel; Bölüm 16.5)
 
 **Dosyalar:** `PitchDetector.h`, `TuneEngine.h` (`DisplayPoint`), `PitchCorrector.h`.
 
@@ -643,7 +645,7 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 
 **Kabul:** Gerçek sette voiced FP/FN ile LF patlaması ve zarf sıçraması raporu; ünsüz geçişlerinde artış yok; dinleme paketi.
 
-### P0-7 ROBOTISM / retune kalibrasyonu (3.1–3.5)
+### P0-7 ROBOTISM / retune kalibrasyonu (3.1–3.5) — **kısmen yapıldı** (`a43973a`, Bölüm 16.4; dinleme notları yok)
 
 **Dosya:** `Source/dsp/PitchCorrector.h:75-172`.
 
@@ -655,7 +657,7 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 
 **Kabul:** Monoton tablo, 0,5 çevresinde süreklilik, kayıtlı dinleme notları.
 
-### P0-8 Seviye ve artefakt (4.1–4.4)
+### P0-8 Seviye ve artefakt (4.1–4.4) — **kısmen yapıldı** (`e887480`, Bölüm 16.2; yan etkiler, limiter ve dinleme açık)
 
 **Dosya:** `Source/dsp/TuneEngine.h:518-546` (tanecik kazancı).
 
@@ -687,6 +689,8 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 2. `vocal0_hard_baseline/`: RAVDESS vocal0, kuru ve hard ayar karşılaştırması (başlangıç kaydı).
 
 Önceki oturumların paketlerinde (`artifacts/audio-runs/tune-listening/`) kayıtlı dinleme sonucu yok. Sonuçlar raporlanırsa USER-REPORTED olarak bu belgeye eklenmeli.
+
+> *Güncelleme (18.11.2026):* 14 yeni kör A/B paketi: Bölüm 16.8. Hiçbiri dinlenmedi.
 
 ---
 
@@ -834,3 +838,280 @@ Kullanıcı onayıyla (“Herşey için iznim var”) yapıldı. Her adım ayrı
 | CI Windows (MSVC): derleme + EngineTest + PluginTest | ✅ | ✅ (`7e1ed3b`, çalıştırma 44163434548) |
 | CI Linux: derleme + EngineTest + PluginTest | ✅ | ✅ (`7e1ed3b`) |
 | CI macOS (Universal VST3 + AU) | ❌ runner yok, iptal | ❌ runner yok, iptal |
+
+---
+
+## 16. Kullanıcı görevleri (18.11.2026): oktav, seviye, Auto Key güveni, ROBOTISM, Custom Scale / Adaptive, gerçek vokal ve DAW testi
+
+İstenen yedi iş: (1) perde algılayıcıda oktav hatası, (2) formant ve transpoze seviyesi, (3) Auto Key güven mekanizması,
+(4) gerçek vokallerle kapsamlı test, (5) ROBOTISM eğrisinin farklı ses tiplerinde kalibrasyonu, (6) Custom Scale ve Adaptive
+mod, (7) REAPER ve FL Studio'da gerçek VST3 testi.
+
+- **Kullanıcı kararları:** test seti için "Yüklediklerin + VocalSet (Önerilen)"; commit için "Devam iznim var". DAW / kurulum
+  sorusu cevapsız kaldı: **hiçbir yazılım kurulmadı**, pluginval ve REAPER çalıştırılmadı.
+- **Yöntem:** her iş ayrı commit. Sıra: başlangıç (`f6e3a46`) ölçümü → tek değişiklik → derleme → aynı malzemeyi yeniden render
+  → seviye eşitlenmiş karşılaştırma → regresyon (EngineTest, PluginTest, AuditProbe S1–S16, gerçek vokal matrisi). Eşikler
+  gerçek sette birden çok varyantla seçildi; reddedilen varyantlar aşağıda yazılı.
+- **Kanıt:** MEASURED (sayısal analiz) ve INSPECTED (kod). **LISTENED-MODEL kullanılmadı** (yerel model yalnızca kaba bozulma
+  sınıflarında kalibre; buradaki farklar o sınıfta değil). **USER-REPORTED yok:** bu bölümdeki hiçbir ses insan kulağıyla
+  dinlenmedi. Kanıt dosyaları `artifacts/audio-runs/2026-11-18_tune-rd/` altında (yerel, git dışı).
+
+**Gerçek vokal seti: 145 kayıt** (depo dışında, `~/.cache/vstm-ear/testdata`, salt okunur; manifest `vocals_manifest.json`)
+
+| Grup | Kayıt | Kaynak / lisans | İçerik |
+|---|---|---|---|
+| VocalSet kadın | 69 | VocalSet, CC BY 4.0 | 7 şarkıcı (f1, f2, f3, f5, f6, f7, f8) |
+| VocalSet erkek | 68 | VocalSet, CC BY 4.0 | 7 şarkıcı (m1, m2, m4, m5, m6, m7, m11) |
+| Kullanıcı | 1 | kullanıcının yüklediği kuru rap vokali (MP3 192k, çözülmüş) | erkek, ~3 dk |
+| Stem | 1 | önceki oturumlardaki vokal stem'i (kaynak ayrıştırıcı çıktısı, MP3) | karışımdan ayrılmış, sızıntılı |
+| RAVDESS | 6 | RAVDESS, CC BY-NC-SA 4.0 | 3 kadın, 3 erkek; 8 kHz bantlı |
+
+VocalSet teknikleri (12): arpej (düz, vibrato, vocal fry, nefesli, belt), "Caro mio ben" ve "Dona nobis pacem" (vibrato),
+"Row, row" (düz, vibrato, konuşma), uzun messa di voce, hızlı forte gam. Matristeki bütün kayıtlar eklentinin varsayılan
+Vocal Range'iyle (Tenor / Mid) işlendi; Bass / Soprano ayarı yalnızca sentetik testlerde ve `bass_vibrato_hard` paketinde
+kullanıldı. Referans: pYIN + YIN (`tests/pitch_eval.py`); gerçek kayıtta kesin doğru perde bilinmiyor, bu yüzden algılayıcı
+iddiaları ayrıca **gerçeği bilinen sentetik** sinyallerle de ölçüldü (`vibcheck/`).
+
+### 16.1 Perde algılayıcıda oktav hatası (R6) — `647a26a` (+ refine düzeltmesi `a43973a`)
+
+| Alan | |
+|---|---|
+| Görev | Legato oktav sıçramasında algılayıcının eski oktavda kalması (R6) |
+| Değiştirilen dosyalar | `Source/dsp/PitchDetector.h`; `tests/engine_test.cpp` (8d). Ölçüm araçları ayrı commit'te: `tests/pitch_eval.py`, `tests/run_vocal_matrix.py`, `tests/robotism_sweep.py` (`778423b`) |
+| Sorunun mevcut davranışı | Sentetik soprano A4 → A5 legato: üst notanın tamamında (311 analiz adımı) bir oktav aşağıda; çıkışta f0/2 −45,4 dB (kuru −76,6 dB). Neden (INSPECTED + MEASURED): seyreltilmiş (~12 kHz) YIN ızgarasında kısa periyodun çukuru yapay olarak sığ okunuyor, süreklilik kuralı da alt oktavı "neredeyse aynı iyi" diye tutuyordu. Gerçek vokalde (145 kayıt, hard) oktav altı hata %0,758, ≥ 30 ms süren 44 bölüm (toplam 6,26 s) |
+| Yapılan değişiklik | Oktav kararı tam hızdaki sinyalin periyodikliğiyle (normalize fark, parabolik ara değer) veriliyor. Yukarı hamlede alt oktav ancak açıkça daha periyodikse kalıyor (artığı < 0,5 × kısa periyodunki − 0,01); aşağı hamlede önceki oktavdan ancak uzun periyot 4 kat daha periyodikse çıkılıyor. `a43973a`: tam hız ince ayarı arama sınırına değince kaba değere dönmek yerine aynı çukurda yokuş aşağı yürüyor (en çok %8) |
+| Neden bu yöntem | Hatanın kaynağı ızgara çözünürlüğüydü; kararı tam hızda vermek kök nedeni düzeltiyor ve yalnızca süreklilik kuralının tetiklendiği adımlarda çalışıyor. Reddedilen: her adımda çift oktav denetimi (varyant A3) alternatif darbeli seslerde oktav altı hatayı artırdı; geniş tam hız araması kaba hatayı artırdı. Eşikler 145 kayıtta 7 varyantla seçildi |
+| Derleme sonucu | Başarılı, proje kaynaklarında 0 uyarı |
+| Çalıştırılan testler | EngineTest 8d (+4: soprano "i" iki aralıkta, tenor "a", bas "a"), AuditProbe S1, gerçek vokal matrisi (145 kayıt × 10 ayar, iki derleme), gerçeği bilinen sentetik vibrato (32 durum) ve portamento (24 durum), iki derleme yan yana |
+| Test sonucu | **Önce:** soprano sıçrama testi FAIL. **Sonra:** 4/4; dört seste de üst notanın %100'ünde doğru oktav (kaymadan 30 ms sonra), soprano çıkışında f0/2 −71,9 dB (kuru −78,8 dB). S1: soprano 311 → **0** hatalı adım (iki aralıkta, hard ve varsayılan) |
+| Gerçek vokal test sonucu | 145 kayıt, hard, pYIN + YIN referansı: oktav altı %0,758 → **%0,159**, oktav üstü %0,051 → %0,053; ≥ 30 ms oktav bölümü 44 → **16** (6,26 s → 1,27 s). Gruplar: VocalSet kadın %0,613 → %0,022, VocalSet erkek %0,754 → %0,367, stem %15,1 → %3,4, kullanıcı %0,137 → %0,021, RAVDESS kadın %0,50 → 0. Voiced bulma %98,89 → %98,89 |
+| Önceki sürümle fark | Gerçeği bilinen sentetikte (MEASURED): ±100 ct vibratoda takip hatası medyanı tenor 3,2 → 1,6 ct, bas 4,4 → 1,7 ct. Soprano "i" ±50 / ±100 ct'de eski sürüm kaydın tamamında bir oktav yanlıştı (1199 ct) → 0,4–0,8 ct. Portamentoda (40 / 80 / 150 ms, 4 ses × 2 ünlü) geçiş çevresindeki > 1 st hata 20 durumda azaldı (ör. tenor / alto / soprano 80 ms: %12–18 → %1–7), 2 durumda aynı, 2 durumda arttı (bas 80 ms "i" %16,0 → %17,2; bas 150 ms "a" %3,6 → %5,0) |
+| CPU / latency etkisi | Latency değişmedi. CPU (S8, iki derleme art arda ikişer koşu): fark koşudan koşuya oynamanın içinde (48 kHz %1,3–1,7, 96 kHz %2,0–3,3, iki sürümde de). İlk tek koşudaki 96 kHz artışı (%1,9 → %2,4) tekrarlanmadı |
+| Bilinen sınırlamalar | **Kaba hata (oktav dışı, > 1 st) pYIN'e göre %0,69 → %1,21.** Artış 69 dosyada, neredeyse tamamı VocalSet vibrato kayıtlarında ve nota kenarlarında: motor perdeyi referanstan 20–40 ms önce değiştiriyor ya da referansın güvensiz olduğu bölgenin kıyısında ayrılıyor. Gerçeği bilinen sentetik geçişlerde yeni sürüm daha doğru olduğu için artış büyük olasılıkla referansın gecikmesinden; gerçek kayıtta kesin doğruluk bilinmediği için **kanıtlanmadı**. **Bas aralığında çok geniş ve hızlı vibrato** yeni sürümde daha kötü (sentetik): bas ±200 ct 6,5 Hz "a" > 1 st hata %0 → %19, tenor ±200 ct "a" %0 → %3,2, bas ±150 ct "a" p90 17 → 72 ct. Hızlı (≤ 40 ms) bas kaymalarında kısa voicing düşmesi iki sürümde de var. Algılayıcı aralığın üstündeki notaları bir oktav aşağıda bulur (README). **P0-5 alt oktav ölçütü (kuru sese göre ≤ +6 dB):** S1'de karşılanıyor (f0/2 −77,8 dB, kuru −76,6 dB); EngineTest 8d soprano'da çıkıştaki f0/2 kuru sesinkinin +6,3…+6,9 dB üstünde (mutlak düzey f0'ın 72 dB altında), ölçüt az farkla aşılıyor; tenor ve basta altında |
+| Geri alma noktası | `git revert 647a26a` (oktav kararı). Refine düzeltmesi ROBOTISM eğrisiyle aynı commit'te (`a43973a`) |
+
+### 16.2 Formant / transpoze seviyesi (R8) — `e887480`
+
+| Alan | |
+|---|---|
+| Görev | Transpoze ve formant kaydırmasında seviyenin değişmesi (R8) |
+| Değiştirilen dosyalar | `Source/dsp/TuneEngine.h` (`updateLevelGain`, `levelPrior`), `tests/engine_test.cpp` (3b). Seviye ölçüm ayarları (±3 / 6 / 9 / 12) `tests/run_vocal_matrix.py`'de (`778423b`) |
+| Sorunun mevcut davranışı | TD-PSOLA kaydırmayla seviyeyi değiştiriyordu. x = formant − transpoze için 50 gerçek kayıtta medyan değişim: x = −12: −3,1 dB · −9: −3,5 · −6: −2,7 · −3: −2,2 · +3: −0,4 · +6: +0,4 · +9: +1,2 · +12: +1,9 dB; en kötü dosyalar −7,9 / +2,4 dB. Oktav yukarı transpozede çıkış girişin çift harmoniklerini taşır (temeli güçlü seste kayıp büyük); aşağı transpoze / formant yukarıda kısa tanecikler arasında boşluk kalır. Sentetik S12: transpoze +12 ve formant −12'de −7,36 dB, transpoze −12 ve formant +12'de +2,59 dB; EngineTest 3b'de tepe +5,9 dB (MEASURED) |
+| Yapılan değişiklik | Transpoze ya da formant kullanılırken (\|transpoze\| ≥ 0,5 st ya da \|formant\| ≥ 0,05) kaydırılmış (voiced) akış kuru sesin gücüne eşitleniyor: yalnızca çıkışın saf voiced olduğu örneklerde 50 ms güç ölçümü, 30 ms kazanç geçişi, −6…+12 dB sınır; ilk 20 ms ölçülene kadar 50 kayıttan çıkarılan medyan eğri (`levelPrior`). Ünsüz, nefes ve sessizlik yükseltilmiyor (kazanç orada tutuluyor). Yukarı kaydırmada (x < −0,5) 10 ms'lik güç pencerelerinde kaydırılmış ses kuru sesin +4 dB üstüne çıkamıyor (iniş 1 ms, dönüş 30 ms) |
+| Neden bu yöntem | Kayıp sese göre değişiyor (aynı ayarda −1…−8 dB); sabit tablo yetmiyor, ölçüme dayalı eşitleme her kayıtta çalışıyor, tablo yalnızca başlangıç. Transpoze ve formant 0 iken kazanç tam 1'e dönüyor: çıkış eski motorla **bit düzeyinde aynı** (16 render) |
+| Derleme sonucu | Başarılı, 0 uyarı (`-Wfloat-equal` uyarıları giderildi) |
+| Çalıştırılan testler | EngineTest 3b (6 kaydırma × 3 örnekleme hızı), AuditProbe S12, gerçek vokal seviye matrisi (50 kayıt × 18 ayar), tam matris (145 kayıt × 10 ayar, iki derleme), seviye eşitlenmiş tepe / patlama analizi (`peakcheck/`: 145 kayıt × 6 ayar, iki derleme; 20–150 Hz için dört ara derleme) |
+| Test sonucu | EngineTest 3b: en kötü 0,27 dB, tepe +4,0 dB (önce +5,9). S12: bütün kaydırmalarda −0,06…−0,27 dB (önce −7,36…+2,59) |
+| Gerçek vokal test sonucu | 50 kayıt × 18 ayar: her dosya ±0,88 dB içinde. Tam set: ±12 st transpoze ve ±12 formant'ta **144 / 145 dosya ±1 dB içinde** (önce 2–4 / 145); ortalama −0,1…−0,25 dB. 1 dB'yi aşanlar konuşma ve vocal fry: `vs_f7_row_spoken` (tr+12 −1,01, fm−12 −1,04 dB), `vs_f3_arpeggios_vocal_fry_a` (fm+12 −1,34 dB) |
+| Önceki sürümle fark | Kaydırma kullanılırken seviye ve aşağıdaki yan etkiler |
+| CPU / latency etkisi | Latency yok; örnek başına birkaç çarpma, ölçülebilir CPU farkı yok (S8) |
+| Bilinen sınırlamalar | Yan etkiler (tablo); limiter / true-peak koruması yok; konuşma ve vocal fry'da ±1,0–1,3 dB kalabiliyor; tanecik patlamaları sınırlandı, kaldırılmadı; dinlenmedi |
+| Geri alma noktası | `git revert e887480` |
+
+**Yan etkiler (MEASURED, 145 kayıt, seviye eşitlenmiş).** "Eşitlenmiş": her dosyanın kendi seviye farkı (yüksek sesli 50 ms
+karelerde wet − dry medyanı) çıkarıldı; yani kazancın kendisi değil, kazanca göre fazladan çıkan tepe ve patlamalar sayıldı.
+
+| Ayar | Tepe (wet / dry − seviye farkı) p95 / en kötü | 10 ms patlama (> +6 dB, dosya sayısı) | 20–150 Hz patlama | 0 dBFS üstü dosya (ham) |
+|---|---|---|---|---|
+| transpoze +12 | +4,3 / +7,2 → **+6,9 / +13,1 dB** | 745 (14) → 358 (57) | 699 → **848** (+%21) | 0 → 5 |
+| formant −12 | +3,3 / +6,0 → **+4,6 / +8,2 dB** | 855 (45) → 712 (78) | 3 963 → **4 351** (+%10) | 0 → 4 |
+| transpoze +3 | +5,5 / +9,2 → +5,6 / +9,6 dB | 83 (11) → 78 (17) | 631 → 659 (+%4) | 0 → 6 |
+| transpoze −12 | +4,5 / +5,9 → +4,4 / +5,8 dB | 198 (13) → 102 (9) | 10 415 → 10 308 (−%1) | 20 → 16 |
+| formant +12 | +7,2 / +9,7 → +7,3 / +9,5 dB | 51 (7) → 37 (5) | 244 → **300** (+%23) | 21 → 17 |
+| hard (kaydırma yok) | +4,0 / +7,1 → +5,1 / +7,1 dB | 64 (3) → 74 (5) | – | 3 → 5 |
+
+- **Kaynağı (ara derlemelerle, 20–150 Hz, eşitlenmiş):** transpoze +12: başlangıç 699 → oktav commit'i 759 → seviye commit'i
+  847 → son 848; formant −12: 3 963 → 3 994 → 4 510 → 4 351; formant +12: 244 → 288 → 292 → 300. Yukarı kaydırmadaki
+  artışın çoğu seviye dengelemesinden, formant +12'dekinin çoğu oktav değişikliğinden. Transpoze +12'deki artışın çoğu tek
+  dosyada (vokal stem'i 289 → 405); formant −12'de stem +114, kalanı VocalSet kadın vibrato kayıtlarında
+  (ör. `vs_f6_caro_vibrato` 22 → 82).
+- **Tepe:** yukarı kaydırmada seviye geri geldiği için ham tepe de yükseliyor (kullanıcı eskiden kazancı elle aynı oranda
+  açmak zorundaydı). Ek olarak, seviye eşitlenmiş tepe kuyruğu transpoze +12'de p95 +2,6 dB, formant −12'de +1,3 dB arttı:
+  kazanç, ölçümün yavaş kaldığı anlarda kısa tepeleri de yükseltiyor. Örnek: `vs_m11_dona_vibrato` formant −12'de kuru tepe
+  0,52 → çıkış 1,32 (+2,4 dBFS; önce 0,43). Kayan noktalı host'ta eklenti içinde kırpılmaz; sabit noktalı dışa aktarımda
+  limiter yoksa kırpılır.
+- **10 ms patlamalar:** toplam sayı azaldı (transpoze +12: 745 → 358), ama daha çok dosyaya dağıldı (14 → 57).
+- **Hard'daki küçük tepe değişimi** (p95 +4,0 → +5,1 dB) kaydırma olmadan da var: algılayıcı değişikliği tanecik yerlerini
+  değiştiriyor; 10 ms patlama 64 → 74.
+- **Duyulur mu:** bilinmiyor. Kör A/B paketleri (seviye eşitlenmiş, en kötü ölçülen dosyalar): `level_peak_formant-12_m11`,
+  `level_peak_transpose+12_f8fry`, `level_lf_formant-12_f6`, ayrıca `level_user_transpose±12`.
+- **Önerilen sonraki adım (yapılmadı):** (a) kazancı kuru sesin yakın geçmişteki tepe zarfıyla sınırlamak (tepe kuyruğu için),
+  (b) kazanç inişini 1 ms yerine 3–5 ms yapmak (20–150 Hz geçici olayları için). Her biri tek değişiklik olarak aynı
+  `peakcheck/` + `lfcheck` ölçümü ve dinleme paketiyle değerlendirilmeli; kabul ölçütü P0-8.
+
+### 16.3 Auto Key güven mekanizması (R7) — `82ad66e`
+
+| Alan | |
+|---|---|
+| Görev | Auto Key'in ne kadar emin olduğunu ölçmek, yanlış kesinliği önlemek (R7) |
+| Değiştirilen dosyalar | `Source/dsp/KeyDetector.h` (yeniden yazıldı), `Source/dsp/TuneEngine.h` (`keyCandidate`, `keyConfidence`), `Source/PluginEditor.h/.cpp` (KEY kutusu), `Source/Lang.cpp` (ipucu, 7 dil), `tests/engine_test.cpp` (8e) |
+| Sorunun mevcut davranışı | Tek nota (C4) ya da iki nota (C4 / G4) 2 s'de kesin "C"; A minör ezgide Scale = Major iken önce yanlış "G"; C → G modülasyonu 16 s içinde izlenmedi; güven bilgisi yok (S11, MEASURED). Kullanıcı vokalinde (varsayılan ayar, ~3 dk) 13 ton değişimi |
+| Yapılan değişiklik | İki perde sınıfı histogramı (uzun 25 s, kısa 6 s). Güven = (en iyi ton − ikinci) farkı × kanıt miktarı × nota çeşitliliği, 0…1. Ton yalnızca güven ≥ 0,5 iken kilitleniyor; aynı notaları paylaşan tonlar ayrılmadan karar yok. Modülasyon kısa bellekte aranıyor: yeni tonun güveni ≥ 0,6, farkı ≥ 0,03 ve ~1 s kararlı (3 sönümlenen oy). Kromatik geçiş notaları ve göreli minör tonu değiştirmiyor; sessizlikte karar değişmiyor. Kilitlenene kadar düzeltme en yakın yarım sese. Arayüz: `Auto · C` (emin), `Auto · C?` (aday, henüz emin değil), `Auto · …` (dinliyor) |
+| Neden bu yöntem | Az kanıtla verilen yanlış ton, sesi yanlış notaya çeker; emin olunmayan sürede kromatik düzeltme ton bilmeden de doğru yarım sese çeker. Güven arayüzde görünür olduğu için kullanıcı tonu elle sabitleyebilir |
+| Derleme sonucu | Başarılı, 0 uyarı |
+| Çalıştırılan testler | EngineTest 8e (6 test; 3'ü eski kodda kalıyor), AuditProbe S11, kullanıcı vokali (ton değişimi sayısı) |
+| Test sonucu | Tek nota ve iki nota: hiç kilitlenmiyor (güven 0,0). A minör + Major: yalnızca C (göreli majör), 3,1 s'den. A minör + Minor: A, 3,0 s. C majör ezgi: C, güven 1,0. C → G (8 s'de; 8 s'de 4 F#): 13,6 s'de izlendi. Kromatik geçiş notaları (F#, Bb) tonu değiştirmedi |
+| Gerçek vokal test sonucu | Kullanıcı vokali, varsayılan ayar: ton değişimi 13 → 3. Gerçek kayıtlarda doğru ton etiketi olmadığı için doğruluk oranı ölçülmedi; yalnızca kararlılık |
+| Önceki sürümle fark | İlk karar ~1–1,5 s geç (2,0 s → 3,0–3,5 s); belirsiz girişte karar yok |
+| CPU / latency etkisi | Yok (analiz adımında 12 tonluk skor) |
+| Bilinen sınırlamalar | Yalnızca 2 F# ile belli olan zayıf modülasyon (S11'deki C → G ezgisi) 8 s içinde izlenmiyor: bilinçli (kanıt az). Akor / armoni bilgisi yok. Özel dizide de çalışıyor (16.5) |
+| Geri alma noktası | `git revert 82ad66e` |
+
+### 16.4 ROBOTISM eğrisinin ses tiplerinde kalibrasyonu (R21) — `a43973a`
+
+| Alan | |
+|---|---|
+| Görev | ROBOTISM'in bütün aralıkta ve farklı ses tiplerinde benzer adımlarla değişmesi (R21: %0–10 ölü bölge) |
+| Değiştirilen dosyalar | `Source/dsp/PitchCorrector.h` (eğri), `Source/dsp/PitchDetector.h` (refine, 16.1), `tests/audit_probe.cpp` (S14 formülleri, yeni S16) |
+| Sorunun mevcut davranışı | %0 ile %10 aynıydı (vibrato 1,1 / 1,0 ct, geçiş 24 / 24 ms); %50 → %65 arasında sıçrama (S16 tenor: 62 → 108 ms). Gerçek vokalde (91 kayıt) en yakın yarım sese uzaklık %0 ve %10'da 1,5 / 1,5 ct |
+| Yapılan değişiklik | Robotik yarı: hız çarpanı (1 − r)(1 − r/2); İnsansı yarı: h^1,6 (h = (ROBOTISM − 0,5) × 2). %0, %50 ve %100'ün düzeltici değerleri aynı kaldı (vibrato ve zaman sabitleri birebir) |
+| Neden bu yöntem | Uç noktalar ve orta nokta kullanıcıya tanıdık kalsın; ara değerler iki yarıda da eşit adımlı olsun |
+| Derleme sonucu | Başarılı, 0 uyarı |
+| Çalıştırılan testler | AuditProbe S14 ve S16 (bas / tenor / alto / soprano × 9 nokta), gerçek vokal taraması (`robotism_sweep.py`, 91 kayıt × 9 nokta, son derlemeyle) |
+| Test sonucu | **S16 tenor, yalnızca eğri değişikliği** (refine'lı algılayıcıyla, eski → yeni eğri): korunan vibrato %10 / 20 / 35'te 1,0 / 9,3 / 41,3 → **4,5 / 17,9 / 48,6** ct (100 ct'lik), %65 / 80 / 90'da 89,3 / 94,1 / 95,9 → 84,2 / 92,1 / 95,0; geçiş %65 / 80 / 90'da 76 / 124 / 160 → **48 / 98 / 142 ms**. **Refine düzeltmesinin payı** (aynı eğri): geçişler her noktada kısaldı (%50: 62 → 22 ms, %100: 262 → 214 ms) çünkü yeni nota daha erken bulunuyor. **Son durum S16** (tenor / alto / soprano): geçiş %0–50'de 6–24 ms, %65'te 44–50, %80'de 94–98, %90'da 136–142, %100'de 210–214 ms (üç ses arasında en çok ±6 ms); korunan vibrato %50'de %65–74, %100'de %95–97 |
+| Gerçek vokal test sonucu | 91 kayıt, son derleme, en yakın yarım sese uzaklık (ct), %0…%100: 1,7 · 2,3 · 5,4 · 11,8 · 17,6 · 23,4 · 23,9 · 21,8 · 23,0 (önce 1,5 · 1,5 · 3,4 · 10,6 · 18,1 · 23,1 · 22,2 · 23,0 · 23,6). Ölü bölge kalktı; VocalSet kadın, erkek ve kullanıcı vokali aynı sırayı izliyor |
+| Önceki sürümle fark | Ara değerlerde düzeltme hızı ve korunan vibrato; uç noktalar ve %50 aynı |
+| CPU / latency etkisi | Yok |
+| Bilinen sınırlamalar | **Bas:** S16'daki hızlı (20 ms) üç yarım seslik adımda algılayıcı voicing'i kısa süre bırakıyor; çıkış girişin kendi geçişini izliyor (14–20 ms, ROBOTISM'den bağımsız; başlangıç sürümünde de aynı). Bas vibratosu diğer seslerle uyumlu (%50'de %81). İnsansı yarıdaki farklar gerçek vokalde bu metrikle ayrılamıyor (şarkıcının kendi sapmasında, ~22–24 ct'de doyuyor); "vibrato korundu" metriği gerçek kayıtta geniş vibratoda nota değişimlerine karıştığı için kullanılmadı. **Algısal kalibrasyon yapılmadı:** paketler `robotism10/35/65/90_user` |
+| Geri alma noktası | `git revert a43973a` (refine düzeltmesini de geri alır) |
+
+### 16.5 Custom Scale ve Adaptive mod — `a221b41`
+
+| Alan | |
+|---|---|
+| Görev | Kullanıcının kendi nota kümesini seçmesi (yol haritası 5.3 / 6.3) ve Adaptive mod (6.2) |
+| Değiştirilen dosyalar | `Source/Parameters.h`, `Source/PluginProcessor.h/.cpp`, `Source/PluginEditor.h/.cpp`, `Source/ui/Controls.h`, yeni `Source/ui/ScaleEditor.h`, `Source/dsp/TuneEngine.h`, `Source/dsp/KeyDetector.h`, `Source/dsp/PitchCorrector.h`, `Source/Lang.cpp`, `CMakeLists.txt`, `tests/engine_test.cpp`, `tests/plugin_test.cpp`, `tests/wav_probe.cpp` |
+| Sorunun mevcut davranışı | 13 sabit dizi; nota seçimi yok. Adaptive yok |
+| Yapılan değişiklik | **Custom Scale:** 12 notalık maske tona göre (1, b2 … 7); SCALE menüsünün sonunda "Özel dizi…" / "Düzenle…", tek oktavlık klavye düzenleyicisi (tonik halkalı, "Diziden kopyala"); Auto Key özel diziyle de çalışıyor. **Adaptive (deneysel, varsayılan kapalı):** algılayıcı emin değilken (clarity 0,70–0,92) düzeltme en çok %50'ye iniyor; söylenen vibrato (3,5–8,5 Hz) ve bilinçli yavaş kaymalar ROBOTISM %15 → %50 arasında devreye girerek korunuyor (Robotik uçta etkisi yok); hızlı koşularda retune 2 kat hızlı, İnsansı glide en çok %60 kısa. Parametreleri değiştirmiyor; kapalıyken motor **bit düzeyinde aynı**. **Uyumluluk:** yeni parametreler (`customscale`, `scalenote0..11`, `adaptive`) 1.0 listesinin sonuna, version hint 2 ile; Scale'in 13 seçeneği ve 1.0 kimlikleri / sırası aynı; ADAPTIVE anahtarı sağ kartta; yeni metinler 7 dilde |
+| Neden bu yöntem | Scale'e yeni bir seçenek eklemek onun değer aralığını ve otomasyonunu değiştirirdi; ayrı anahtar + 12 nota 1.0 projelerini ve otomasyonu korur. Adaptive yalnızca ölçülebilir durumlara (güven, vibrato, kayma, hız) tepki veriyor ve sabit sınırlar içinde kalıyor |
+| Derleme sonucu | Başarılı, 0 uyarı (`-Wshadow` uyarısı giderildi) |
+| Çalıştırılan testler | EngineTest 8g (özel dizi + Auto) ve 8f (3 Adaptive testi); PluginTest 3d (varsayılanlar, parametre sırası, oturum, 1.0 oturumu, özel dizinin motora gitmesi, menüden açma), ekran görüntüleri `08_custom_scale.png`, `08b_scale_editor.png`; gerçek vokal matrisi `default_ad`, `natural_ad`, `hard_ad`; VST3 parametre listesi (`VSTMOfflineHost --list`) |
+| Test sonucu | Özel dizi (A minör pentatonik) + Auto: A bulundu, C4 +20 ct → 0,004 ct. Özel C / D# / G: D +30 ct → 311,1 Hz (D#). 1.0 kimlikleri ve sırası aynı, 14 yeni parametre sonda (toplam 27; VST3 listesinde 0–26 aynı sırada); 1.0 oturumu özel dizi ve Adaptive kapalı açılıyor. Adaptive: dengeli ayarda söylenen vibrato 66,6 → 90,1 ct (tepe–tepe; Robotik uçta 0); yavaş kaymada ortalama çekme 24,3 → 17,3 ct; hızlı koşuda İnsansı tarafta kısa notalar 28,1 → 17,7 ct sapma |
+| Gerçek vokal test sonucu | 145 kayıt, Adaptive kapalı → açık: seviye aynı; 20–150 Hz patlama varsayılan 429 → 417, natural 442 → 405, hard 425 → 412; zarf sıçraması varsayılan 774 → 789, natural 702 → 695, hard 871 → 804. Hedef sapması metriği Adaptive'de karşılaştırılamaz (vibrato bilerek korunuyor) |
+| Önceki sürümle fark | Varsayılan ayarda yok (özel dizi ve Adaptive kapalı; motor bit düzeyinde aynı) |
+| CPU / latency etkisi | Latency yok; CPU farkı ölçüm gürültüsünde (S8) |
+| Bilinen sınırlamalar | Adaptive deneysel; eşikler sentetik testlerle seçildi, dinlenmedi (paketler `adaptive_vibrato_f2`, `adaptive_user`). Klavye düzenleyicisi (CallOutBox) yalnızca Linux'ta bileşen olarak ekran görüntüsüyle denendi; DAW içinde ve HiDPI'da NOT TESTED. Özel dizi kullanıcı presetine yazılıyor (preset bypass / realtime / range dışındaki bütün parametreleri tutuyor, INSPECTED); fabrika preseti yüklenince özel dizi kapanır ve notalar varsayılana döner (R15 ile aynı davranış); yeni parametreler için preset gidiş-dönüşü ayrıca otomatik test edilmedi |
+| Geri alma noktası | `git revert a221b41` |
+
+### 16.6 Gerçek vokallerle kapsamlı test — son durum (`a221b41` ↔ başlangıç `f6e3a46`)
+
+Aynı 145 kayıt, aynı ayarlar, iki derleme (`run_final.sh`; WavProbe, 48 kHz). Algılayıcı sonuçları ayardan bağımsız
+(aynı analiz). Parantez içi: başlangıç.
+
+**Algılayıcı (hard, pYIN + YIN referansına göre):** voiced bulma %98,89 (%98,89); yüksek sesli unvoiced'da yanlış voiced
+%12,43 (%12,39); oktav altı %0,159 (%0,758); oktav üstü %0,053 (%0,051); kaba hata %1,21 (%0,69, bkz. 16.1); ≥ 30 ms oktav
+bölümü 16 (44); ince hata medyanı 8,8 ct (8,7).
+
+| Ayar | Ortalama seviye farkı (dB) | En kötü \|seviye\| (dB) | 20–150 Hz patlama (ham) | 10 ms zarf sıçraması | 10 ms'de kuru sesin +6 dB üstü (ham) |
+|---|---|---|---|---|---|
+| hard | −0,10 (−0,15) | 0,38 (0,52) | 425 (442) | 871 (845) | 74 (64) |
+| varsayılan (Auto, Major, %50) | −0,12 (−0,15) | 0,44 (0,47) | 429 (395) | 774 (761) | 81 (78) |
+| natural (%80) | −0,18 (−0,18) | 0,61 (0,50) | 442 (413) | 702 (682) | 88 (85) |
+| düzeltme kapalı | −0,01 (−0,01) | 0,12 (0,11) | 253 (226) | 441 (436) | 91 (92) |
+| transpoze +12 | −0,20 (−3,50) | 1,01 (9,14) | 828 (439) | 5 623 (7 218) | 313 (9) |
+| transpoze −12 | −0,20 (+1,85) | 0,41 (2,42) | 10 175 (11 397) | 25 475 (26 129) | 89 (692) |
+| formant +12 | −0,20 (+1,83) | 1,34 (2,42) | 282 (285) | 1 959 (3 452) | 28 (152) |
+| formant −12 | −0,25 (−3,64) | 1,04 (9,19) | 4 149 (3 113) | 9 102 (9 698) | 490 (95) |
+| transpoze +3 | −0,11 (−2,13) | 0,32 (4,35) | 656 (503) | 983 (1 106) | 75 (48) |
+| transpoze −5, formant −3 | −0,17 (−0,62) | 1,06 (1,38) | 6 395 (6 197) | 3 681 (3 455) | 85 (122) |
+
+- "Ham" sütunlar seviye eşitlenmemiş: yukarı kaydırmada seviye 2–3,5 dB geri geldiği için ham sayılar kendiliğinden artıyor.
+  Seviye eşitlenmiş karşılaştırma 16.2'de.
+- Hedef sapması (çıkış perdesi − motorun hedefi, hedef sabitken, p90): hard 1,61 ct (1,70; iki sürümde de ölçülen 145 dosya).
+  Natural ve varsayılan ayarda sabit hedefli kare çok az (kayan hedef); bu ayarlarda ortalama anlamlı değil (natural'daki
+  7,3 ct'lik ortalama, tek karesi ölçülen stem dosyasından).
+- Düzeltme kapalıyken ve hard'da 20–150 Hz patlama ve zarf sıçraması sayıları birkaç yüzde oynuyor (algılayıcı değişikliği
+  tanecik yerlerini değiştiriyor); hepsi yine ölçüldü, dinlenmedi.
+- Cümle sonunda çıkış kuru sesin sönümünden 10–20 ms uzun sürebiliyor (iki sürümde de, düzeltme kapalıyken de; README).
+
+### 16.7 REAPER ve FL Studio'da VST3 testi — **NOT TESTED** (test kiti hazır)
+
+Bu iş **yapılamadı**: geliştirme ortamı bir Linux bulut makinesi; FL Studio'nun Linux sürümü yok, REAPER kurulu değil ve
+kurulum için kullanıcı onayı alınmadı. **Hiçbir DAW sonucu yok; "uyumlu" denemez.** Yerine kullanıcının kendi
+bilgisayarında çalıştıracağı bir kit hazırlandı (`daw_test/`, ayrıntılar `daw_test/README.md`):
+
+| Dosya | İş |
+|---|---|
+| `make_test_signals.py` | 6 sentetik test sinyali (kimsenin kaydı değil) + `manifest.json`; 48 / 44,1 kHz |
+| `reaper/vstm_tune_daw_test.lua` | REAPER'da test parçalarını kurar, parametreleri ve R09 otomasyonunu yazar, her parçayı ayrı WAV olarak render eder. **REAPER'da çalıştırılmadı** |
+| `analyze_daw_renders.py` | Render'ları ölçer: perde, seviye, PDC, oktav, otomasyon, yeniden açma / freeze eşitliği, stereo → PASS / FAIL / MISSING |
+| `README.md` | R01–R14 render tablosu, REAPER ve FL Studio adımları, elle kontrol tablosu (yol haritası 9) |
+
+- **Ölçüm aracı doğrulandı (MEASURED):** DAW yerine motorun kendi render'larıyla: gecikmesi telafi edilmiş render'larda 16 / 16
+  PASS; telafi edilmemişte PDC satırları 960 / 1 920 örnek kayma ile FAIL; FL Studio'nun "Proje - R01_….wav" adları tanınıyor.
+  Bu, aracın doğru çalıştığını gösterir; DAW sonucu değildir.
+- **Parametre sırası doğrulandı (MEASURED):** son VST3 (`a221b41`) `VSTMOfflineHost --list` ile: 27 parametre, betiğin
+  kullandığı 0–26 dizinleri aynı sırada (Key, Scale, …, Vocal Range, Custom Scale, Custom Note ×12, Adaptive); normalize
+  değerler (C = 1/12, Chromatic = 0, Formant / Pitch Range ±12 → 0…1) liste ile uyumlu. Liste:
+  `artifacts/audio-runs/2026-11-18_tune-rd/offlinehost_list_final.txt`.
+- REAPER betiğinin API çağrıları (TrackFX, zarf, render ayarları) REAPER belgelerine göre yazıldı; çalıştırılmadığı için
+  doğrulanmadı. Bir adım başarısız olursa betik konsola nedenini yazıyor; README aynı adımları elle tarif ediyor.
+
+### 16.8 Dinleme / insan değerlendirmesi
+
+**Bu bölümdeki değişikliklerin hiçbiri dinlenmedi.** LISTENED-MODEL kullanılmadı, USER-REPORTED yok. Kör A/B paketleri
+(seviye eşitlenmiş, gecikmeye göre hizalı, `blind_key.json` gizli, `LISTENING_SHEET.md` formu):
+`artifacts/audio-runs/2026-11-18_tune-rd/packs/` (14 paket, `packs/README.md`):
+
+| Paket | A / B | Soru |
+|---|---|---|
+| `octave_soprano_leap` | eski / yeni, hard, sentetik soprano A4 → A5 → A4 | A5'te pürüz, vızıltı, altta homurtu? |
+| `level_user_transpose+12`, `-12` | eski / yeni, kullanıcı vokali, ±12 st | seviye sıçraması, pompalama, kısa patlama, tık? |
+| `level_peak_formant-12_m11`, `level_peak_transpose+12_f8fry`, `level_lf_formant-12_f6` | eski / yeni, ölçülen en kötü dosyalar (16.2) | kısa patlama, çıtırtı, alçak gümleme? |
+| `robotism10/35/65/90_user` | eski / yeni ROBOTISM eğrisi, kullanıcı vokali | hangisi daha doğal / daha düzgün? |
+| `autokey_user_default` | eski / yeni Auto Key, varsayılan ayar | yanlış nota ya da tuhaf perdeye çekilme? |
+| `bass_vibrato_hard` | eski / yeni, alçak erkek sesi (Bass aralığı), hard | titreme, pürüz, notalar arasında takılma? |
+| `adaptive_vibrato_f2`, `adaptive_user` | yeni sürüm, Adaptive kapalı / açık | doğallık, vibrato, kaymalar, artefakt? |
+
+Sonuçlar gelirse USER-REPORTED olarak bu belgeye eklenmeli ve ölçümün önüne geçmeli.
+
+### 16.9 Güncel test durumu, test edilmeyenler ve açık işler
+
+| | Başlangıç (`f6e3a46`) | Şimdi (`a221b41`) |
+|---|---|---|
+| EngineTest | 41/41 | **58/58** (+4 oktav sıçrama, +6 Auto Key, seviye, özel dizi, +3 Adaptive) |
+| PluginTest (`--vst3`, ekran görüntüleri) | 43/43 | **49/49** (3d: özel dizi / Adaptive, 1.0 uyumluluğu) |
+| AuditProbe | S1–S15 | S1–**S16**; S1 soprano oktav 311 → 0, S11 tek / iki nota kilitlenmiyor, S12 seviye ≤ 0,27 dB |
+| Gerçek vokal matrisi | – | 145 kayıt × 10 ayar iki derlemede (+3 Adaptive ayarı); seviye eşitlenmiş tepe / LF analizi |
+| Normal girişte çıktı | – | değişti (oktav ve refine kararları); transpoze / formant 0 ve Adaptive kapalıyken seviye / Adaptive kodu devre dışı |
+| DAW (REAPER, FL Studio) | NOT TESTED | **NOT TESTED** (kit hazır) |
+
+**Test edilmeyenler (NOT TESTED):** gerçek DAW'da her şey (PDC, otomasyon, freeze, yeniden açma, tampon boyutu, HiDPI);
+REAPER betiğinin kendisi; özel dizi düzenleyicisinin bir DAW penceresi içinde açılması; macOS / AU; pluginval; insan
+dinlemesi; Bass / Soprano Vocal Range ayarıyla gerçek kayıt matrisi; 96 kHz gerçek kayıt; yeni parametrelerin preset
+gidiş-dönüşü (otomatik test).
+
+**Açık işler (öncelik sırasıyla):**
+1. İnsan dinlemesi: 16.8'deki paketler, özellikle 16.2'nin yan etkileri ve ROBOTISM.
+2. DAW kiti: REAPER ve FL Studio'da R01–R14 ve elle kontrol tablosu (`daw_test/README.md`).
+3. Seviye dengelemesinin tepe kuyruğu ve 20–150 Hz olayları (16.2, önerilen adımlar); P0-8'in limiter maddesi.
+4. Bas aralığında çok geniş / hızlı vibrato (16.1) ve hızlı bas kaymalarında voicing düşmesi.
+5. Kaba hata artışının gerçek kayıtta doğrulanması (elle etiketlenmiş kısa bir referans parçası).
+
+### 16.10 Yeniden üretme
+
+```bash
+# derleme + testler (depo kökünden)
+cmake -S VSTM_Tune -B VSTM_Tune/build-audit -G Ninja -DCMAKE_BUILD_TYPE=Release -DVSTM_BUILD_TESTS=ON \
+      -DVSTM_COPY_AFTER_BUILD=OFF -DVSTM_JUCE_PATH=/home/user/juce-framework/juce
+cmake --build VSTM_Tune/build-audit --parallel 4
+VSTM_Tune/build-audit/VSTMTune_EngineTest
+HOME=$(mktemp -d) xvfb-run -a VSTM_Tune/build-audit/VSTMTune_PluginTest_artefacts/Release/VSTMTune_PluginTest goruntuler \
+      --vst3 "VSTM_Tune/build-audit/VSTMTune_artefacts/Release/VST3/VSTM Tune.vst3"
+VSTM_Tune/build-audit/VSTMTune_AuditProbe olcumler            # S1 ... S16
+
+# gerçek vokal matrisi: başlangıç ve son derleme yan yana (R = artifacts/audio-runs/2026-11-18_tune-rd)
+R=artifacts/audio-runs/2026-11-18_tune-rd
+$R/run_final.sh                                                 # final_base/, final_new/ (summary.md), audit_final/
+python3 VSTM_Tune/tests/robotism_sweep.py --manifest $R/vocals_robot_subset.json \
+        --probe $R/bin-final/VSTMTune_WavProbe --out $R/sweep_final
+python3 $R/peakcheck/peakcheck.py $R/vocals_manifest.json $R/bin-final/VSTMTune_WavProbe new $R/peakcheck tr+12,fm-12
+python3 $R/peakcheck/lfcheck.py   $R/vocals_manifest.json $R/bin-final/VSTMTune_WavProbe new $R/peakcheck tr+12,fm-12
+python3 $R/vibcheck/vibcheck.py   $R/vibcheck/out   $R/bin-base/VSTMTune_WavProbe $R/bin-final/VSTMTune_WavProbe
+python3 $R/vibcheck/slidecheck.py $R/vibcheck/slide $R/bin-base/VSTMTune_WavProbe $R/bin-final/VSTMTune_WavProbe
+$R/make_packs.sh && $R/make_packs2.sh                           # kör A/B paketleri
+```
+
+Kanıt klasörü (yerel, git dışı): `final_base/`, `final_new/` (145 × 13 ayar), `audit_base/`, `audit_final/`, `cpucheck/`,
+`peakcheck/`, `vibcheck/`, `sweep_*`, `matrix_*` (varyant denemeleri), `daw_sim/` (DAW aracının doğrulanması), `packs/`,
+`bin-*/` (her ara derlemenin ikilileri, `bin-final/COMMIT`).

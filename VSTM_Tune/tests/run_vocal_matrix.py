@@ -50,6 +50,10 @@ SETTINGS = {
     "fm-12":     "key=0 scale=0 robotism=0 retune=0 humanize=0 formant=-12",
     "tr-5fm-3":  "key=0 scale=0 robotism=0.5 retune=15 humanize=0.35 transpose=-5 formant=-3",
 }
+# Adaptive (engine after 1.0 only; older WavProbes reject the argument)
+SETTINGS["default_ad"] = SETTINGS["default"] + " adaptive=1"
+SETTINGS["natural_ad"] = SETTINGS["natural"] + " adaptive=1"
+SETTINGS["hard_ad"] = SETTINGS["hard"] + " adaptive=1"
 for _st in (3, 6, 9):                     # level calibration points (transpose / formant alone)
     for _sg in (1, -1):
         SETTINGS[f"tr{_sg * _st:+d}"] = f"key=0 scale=0 robotism=0 retune=0 humanize=0 transpose={_sg * _st}"
