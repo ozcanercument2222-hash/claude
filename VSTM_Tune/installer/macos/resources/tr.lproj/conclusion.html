@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 13px -apple-system, "Helvetica Neue", sans-serif; line-height: 1.45; margin: 0 4px; }
+  h1 { font-size: 17px; margin: 0 0 8px; }
+  code { font: 11px ui-monospace, Menlo, monospace; }
+  ul { padding-left: 18px; }
+  li { margin: 3px 0; }
+</style>
+</head>
+<body>
+<h1>VSTM Tune kuruldu</h1>
+<p><b>DAW'ını yeniden başlat ve eklenti taraması yap:</b></p>
+<ul>
+  <li>FL Studio: Options → Manage plugins → Find installed plugins</li>
+  <li>REAPER: Settings → Plug-ins → VST → Re-scan</li>
+  <li>Ableton Live: Settings → Plug-Ins → "Use VST3 Plug-In System Folders" açık → Rescan</li>
+  <li>Logic Pro / GarageBand: yeniden açınca AU listesi yenilenir</li>
+</ul>
+<p>Daha önce dosyaları elle <code>~/Library/Audio/Plug-Ins/…</code> altına kopyaladıysan, DAW iki kopya görmesin diye oradakileri sil.</p>
+<p><b>Kaldırmak için</b> Terminal'de:</p>
+<p><code>sudo rm -rf "/Library/Audio/Plug-Ins/VST3/VSTM Tune.vst3" "/Library/Audio/Plug-Ins/Components/VSTM Tune.component" "/Applications/VSTM Tune.app"</code></p>
+</body>
+</html>

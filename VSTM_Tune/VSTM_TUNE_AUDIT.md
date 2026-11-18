@@ -512,7 +512,7 @@ Durum değerleri: **MEVCUT – TEST EDİLECEK** (uygulanmış, kanıtı eksik) �
 | **11.4** Preset tasarımı | KISMEN MEVCUT | Fabrika ile kullanıcı ayrı; preset açıklamaları ve dinlemeyle hazırlama kaydı yok |
 | **12** A/B değerlendirme protokolü | GELİŞTİRİLECEK | `tools/audio_view.py pack` var; önceki paketlerde kayıtlı insan sonucu yok; referans yazılımla karşılaştırma yok |
 | **13.1** Build | KISMEN MEVCUT | Windows ve Linux ✓ (CI); macOS Universal/AU yapılandırılmış ama hiç derlenmemiş; sürüm sabit 1.0.0, build numarası yok |
-| **13.2** Installer | GELİŞTİRİLECEK | Yalnızca zip + KURULUM.txt; imzasız |
+| **13.2** Installer | KISMEN MEVCUT (18.11) | macOS: `.pkg` kurulum paketi (VST3 + AU + uygulama, ad-hoc imzalı, Developer ID / noter onayı yok), CI'da kurulup test ediliyor (16.12). Windows: hâlâ zip + KURULUM.txt (`VSTM Tune.exe` kurulum programı değil, Standalone uygulama) |
 | **13.3** CI/CD | KISMEN MEVCUT | 3 OS'ta derleme ve test var; yayın kapısı, WAV regresyonu, pluginval, sanitizer ve changelog yok |
 | **13.4** Lisanslar | KISMEN MEVCUT | Inter OFL dosyası var; JUCE 8 ve VST3 SDK ticari koşulları, RAVDESS NC ve "Auto-Tune" markası doğrulanmalı (R24, R25) |
 
@@ -1107,6 +1107,20 @@ gidiş-dönüşü (otomatik test).
 | CI sonucu | Çalıştırma 44278080488 (`64edf97`): **Windows (MSVC) derleme, EngineTest ve PluginTest geçti**, Linux geçti; macOS işi yazım sırasında runner bekliyordu |
 | Bilinen sınırlamalar | ROBOTISM "i" bilgi balonu hâlâ `launchAsynchronously` kullanıyor: kutu açıkken editör kapanırsa yetim kalıyor ve aynı eklenti DLL'indeki başka bir VSTM Tune penceresinde ilk tıklamayı yutabilir (INSPECTED; çökme değil, eski davranış) |
 | Geri alma noktası | `git revert 64edf97` (çökmeyi geri getirir) |
+
+### 16.12 macOS kurulum paketi (.pkg) — bu commit
+
+| Alan | |
+|---|---|
+| Görev | Kullanıcı isteği: macOS için derle ve Windows'taki gibi çift tıklanan otomatik kurulum yap |
+| Değiştirilen dosyalar | yeni `installer/macos/` (`build_pkg.sh`, `distribution.xml`, `scripts/postinstall`, `resources/{tr,en}.lproj/{welcome,conclusion}.html`, `KURULUM.txt`), `.github/workflows/vstm-tune.yml`, `README.md`, `daw_test/README.md` |
+| Sorunun mevcut davranışı | macOS paketi bir zip'ti: dosyalar elle `~/Library/Audio/Plug-Ins/...` altına kopyalanıyor, karantina `xattr` ile Terminal'den kaldırılıyordu. AU ve uygulama yalnızca linker imzalıydı (JUCE kopyalama adımı kapalıyken yalnızca VST3'ü ad-hoc imzalıyor; INSPECTED: `JUCEUtils.cmake` `_juce_adhoc_sign`). Not: Windows paketindeki `VSTM Tune.exe` bir kurulum programı değil, Standalone uygulama |
+| Yapılan değişiklik | `productbuild` ile tek `VSTM Tune Kurulum.pkg`: üç bileşen (VST3 → `/Library/Audio/Plug-Ins/VST3`, AU → `/Library/Audio/Plug-Ins/Components`, uygulama → `/Applications`), "Özelleştir" ile seçilebilir, macOS 11+, arm64 + x86_64, Türkçe / İngilizce karşılama ve bitiş sayfaları. Bundle'lar ad-hoc imzalanıyor; taşınma (relocation) kapalı; kurulum sonrası karantina işareti siliniyor ve AU listesi yenileniyor. CI'da AU ve uygulama da ad-hoc imzalanıyor (zip'teki dosyalar dahil) |
+| Neden bu yöntem | macOS'un yerleşik kurulum biçimi; ek yazılım gerektirmiyor. Developer ID imzası ve noter onayı için kullanıcının Apple Developer hesabı ve CI'a gizli anahtar eklemesi gerekiyor: yapılmadı |
+| Çalıştırılan testler | CI macOS işinde: paket gerçekten kuruluyor (`sudo installer`), üç bileşenin yerinde ve imzasının geçerli olduğu, paket kayıtları, kurulan VST3 ile PluginTest, kurulan AU ile Apple'ın `auval -v aufx Vtn1 Vstm` doğrulaması |
+| Test sonucu | (CI çalıştırması sonrası doldurulacak) |
+| Bilinen sınırlamalar | İmzasız paket: macOS 15'te ilk açılışta *Sistem Ayarları → Gizlilik ve Güvenlik → Yine de Aç* gerekiyor. Kurulum sihirbazının görsel arayüzü (karşılama / bitiş sayfaları, Özelleştir ekranı) bir Mac ekranında görülmedi: CI'da yalnızca komut satırından kuruldu. Windows kurulum programı (setup.exe) yok. Gerçek DAW testi yine NOT TESTED |
+| Geri alma noktası | bu commit'in `git revert`'ü |
 
 ### 16.10 Yeniden üretme
 

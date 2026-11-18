@@ -132,6 +132,13 @@ cmake --build build --config Release -j8
 **Hazır paketler:** GitHub → Actions → **"VSTM Tune derle"** → en üstteki çalışma → sayfanın altındaki *Artifacts*
 (`VSTM-Tune-Windows`, `VSTM-Tune-macOS`, `VSTM-Tune-Linux`; kurulum talimatı paketin içindeki `KURULUM.txt`'de).
 
+**macOS kurulum paketi:** `VSTM-Tune-macOS` içindeki **`VSTM Tune Kurulum.pkg`** dosyasına çift tıkla: sihirbaz VST3'ü
+`/Library/Audio/Plug-Ins/VST3`'e, AU'yu `/Library/Audio/Plug-Ins/Components`'e, uygulamayı `/Applications`'a kurar
+("Özelleştir" ile seçilebilir, yönetici parolası ister). Paket Apple Developer ID ile imzalı / noter onaylı değil:
+macOS ilk açılışta engellerse *Sistem Ayarları → Gizlilik ve Güvenlik → Yine de Aç*. Paketi `installer/macos/build_pkg.sh`
+üretir (bir Mac'te: `installer/macos/build_pkg.sh build/VSTMTune_artefacts/Release 1.0.0 "VSTM Tune Kurulum.pkg"`);
+CI her derlemede paketi macOS makinesine gerçekten kurar, kurulan VST3'ü host gibi yükler ve AU'yu `auval` ile doğrular.
+
 ## Testler
 
 ```bash

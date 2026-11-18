@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 13px -apple-system, "Helvetica Neue", sans-serif; line-height: 1.45; margin: 0 4px; }
+  h1 { font-size: 17px; margin: 0 0 8px; }
+  code { font: 11px ui-monospace, Menlo, monospace; }
+  ul { padding-left: 18px; }
+  li { margin: 3px 0; }
+</style>
+</head>
+<body>
+<h1>VSTM Tune is installed</h1>
+<p><b>Restart your DAW and rescan plug-ins:</b></p>
+<ul>
+  <li>FL Studio: Options → Manage plugins → Find installed plugins</li>
+  <li>REAPER: Settings → Plug-ins → VST → Re-scan</li>
+  <li>Ableton Live: Settings → Plug-Ins → "Use VST3 Plug-In System Folders" on → Rescan</li>
+  <li>Logic Pro / GarageBand: the AU list refreshes when you reopen them</li>
+</ul>
+<p>If you copied the files by hand into <code>~/Library/Audio/Plug-Ins/…</code> before, delete those copies so the DAW does not see two.</p>
+<p><b>To uninstall</b>, in Terminal:</p>
+<p><code>sudo rm -rf "/Library/Audio/Plug-Ins/VST3/VSTM Tune.vst3" "/Library/Audio/Plug-Ins/Components/VSTM Tune.component" "/Applications/VSTM Tune.app"</code></p>
+</body>
+</html>

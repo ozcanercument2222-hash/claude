@@ -17,8 +17,9 @@ tabloyu geri gönderirsin; ölçümü `analyze_daw_renders.py` yapar.
 
 ## 1. Hazırlık
 
-1. Eklentiyi kur: GitHub → Actions → **VSTM Tune derle** → en son çalıştırma → `VSTM-Tune-Windows` (veya macOS)
-   → `VSTM Tune.vst3` dosyasını VST3 klasörüne kopyala (`C:\Program Files\Common Files\VST3`, macOS: `~/Library/Audio/Plug-Ins/VST3`).
+1. Eklentiyi kur: GitHub → Actions → **VSTM Tune derle** → en son çalıştırma → Artifacts.
+   Windows: `VSTM-Tune-Windows` → `VSTM Tune.vst3` klasörünü `C:\Program Files\Common Files\VST3` içine kopyala.
+   macOS: `VSTM-Tune-macOS` → `VSTM Tune Kurulum.pkg`'ye çift tıkla (yanındaki `KURULUM.txt`'ye bak).
 2. Sinyalleri üret (Python 3 + `numpy scipy soundfile`):
    ```
    python3 make_test_signals.py sinyaller            # 48 kHz

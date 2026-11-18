@@ -1,0 +1,16 @@
+#!/bin/bash
+# VSTM Tune - kurulumdan sonra (root olarak calisir). $3 = hedef disk ("/").
+# Kurulan dosyalarda "internetten indirildi" isareti kalmasin; Audio Unit listesi yenilensin.
+# Hicbir zaman hata ile bitmez: kurulum bu adim yuzunden basarisiz sayilmamali.
+VOL="${3:-/}"
+VOL="${VOL%/}"
+for item in "Library/Audio/Plug-Ins/VST3/VSTM Tune.vst3" \
+            "Library/Audio/Plug-Ins/Components/VSTM Tune.component" \
+            "Applications/VSTM Tune.app"; do
+    if [ -e "$VOL/$item" ]; then
+        /usr/bin/xattr -dr com.apple.quarantine "$VOL/$item" 2> /dev/null || true
+    fi
+done
+# Logic Pro / GarageBand: AU listesini yeniden taratir (calismiyorsa bir sey olmaz)
+/usr/bin/killall -9 AudioComponentRegistrar 2> /dev/null || true
+exit 0

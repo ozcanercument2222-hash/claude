@@ -1,0 +1,27 @@
+VSTM Tune - macOS (Apple Silicon + Intel, macOS 11 ve ustu)
+
+OTOMATIK KURULUM
+  1) "VSTM Tune Kurulum.pkg" dosyasina cift tikla.
+  2) Kurulum sihirbazini izle ve parolani gir. Uc bilesen kurulur ("Ozellestir" ile secilebilir):
+       VST3 eklentisi   ->  /Library/Audio/Plug-Ins/VST3
+       Audio Unit (AU)  ->  /Library/Audio/Plug-Ins/Components   (Logic Pro / GarageBand)
+       VSTM Tune.app    ->  /Applications                        (DAW olmadan calisan surum)
+  3) DAW'i yeniden baslat ve eklenti taramasi yap
+       (FL Studio: Options -> Manage plugins -> Find installed plugins).
+
+macOS PAKETI ACMAZSA ("Apple ... dogrulayamiyor" / "acilamadi")
+  Paket Apple Developer ID ile imzali ve noter onayli degil; macOS bu yuzden ilk acilista engeller.
+    - "Tamam"a bas, sonra: Sistem Ayarlari -> Gizlilik ve Guvenlik -> asagida
+      "VSTM Tune Kurulum.pkg engellendi" -> "Yine de Ac" -> parolan.
+    - Ya da Terminal'de (dosya Indirilenler klasorundeyse), sonra yeniden cift tikla:
+        xattr -d com.apple.quarantine ~/Downloads/VSTM\ Tune\ Kurulum.pkg
+
+KALDIRMA (Terminal)
+  sudo rm -rf "/Library/Audio/Plug-Ins/VST3/VSTM Tune.vst3" \
+              "/Library/Audio/Plug-Ins/Components/VSTM Tune.component" "/Applications/VSTM Tune.app"
+  sudo pkgutil --forget com.vstmaudio.vstmtune.pkg.vst3
+  sudo pkgutil --forget com.vstmaudio.vstmtune.pkg.au
+  sudo pkgutil --forget com.vstmaudio.vstmtune.pkg.app
+
+Elle kurmak istersen: VSTM-Tune-macOS.zip (icinde ayri bir KURULUM.txt var).
+Daha once dosyalari elle ~/Library/Audio/Plug-Ins/ altina kopyaladiysan oradakileri sil (DAW iki kopya gormesin).
