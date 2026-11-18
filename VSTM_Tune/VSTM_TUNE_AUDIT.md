@@ -1074,6 +1074,7 @@ Sonuçlar gelirse USER-REPORTED olarak bu belgeye eklenmeli ve ölçümün önü
 | AuditProbe | S1–S15 | S1–**S16**; S1 soprano oktav 311 → 0, S11 tek / iki nota kilitlenmiyor, S12 seviye ≤ 0,27 dB |
 | Gerçek vokal matrisi | – | 145 kayıt × 10 ayar iki derlemede (+3 Adaptive ayarı); seviye eşitlenmiş tepe / LF analizi |
 | Normal girişte çıktı | – | değişti (oktav ve refine kararları); transpoze / formant 0 ve Adaptive kapalıyken seviye / Adaptive kodu devre dışı |
+| CI (GitHub Actions) | Windows, Linux, macOS ✅ (`f6e3a46`, 44231317916) | Windows ✅, Linux ✅ (`64edf97`, 44278080488); `a221b41`'de Windows PluginTest çöktü (16.11); macOS bekliyor |
 | DAW (REAPER, FL Studio) | NOT TESTED | **NOT TESTED** (kit hazır) |
 
 **Test edilmeyenler (NOT TESTED):** gerçek DAW'da her şey (PDC, otomasyon, freeze, yeniden açma, tampon boyutu, HiDPI);
@@ -1088,7 +1089,7 @@ gidiş-dönüşü (otomatik test).
 4. Bas aralığında çok geniş / hızlı vibrato (16.1) ve hızlı bas kaymalarında voicing düşmesi.
 5. Kaba hata artışının gerçek kayıtta doğrulanması (elle etiketlenmiş kısa bir referans parçası).
 
-### 16.11 CI'da yakalanan çökme: özel dizi balonunun ömrü — (bu commit)
+### 16.11 CI'da yakalanan çökme: özel dizi balonunun ömrü — `64edf97`
 
 | Alan | |
 |---|---|
@@ -1103,8 +1104,9 @@ gidiş-dönüşü (otomatik test).
 | Gerçek vokal test sonucu | Uygulanamaz (yalnızca editör; ses yolu değişmedi) |
 | Önceki sürümle fark | `08_custom_scale.png` artık açık balonu da gösteriyor (önce Linux'ta 200 ms'de kapanıyordu); diğer ekran görüntüleri piksel düzeyinde aynı |
 | CPU / latency etkisi | Yok |
-| Bilinen sınırlamalar | Windows'ta düzeltmenin CI sonucu bu commit'in çalıştırmasında görülecek. ROBOTISM "i" bilgi balonu hâlâ `launchAsynchronously` kullanıyor: kutu açıkken editör kapanırsa yetim kalıyor ve aynı eklenti DLL'indeki başka bir VSTM Tune penceresinde ilk tıklamayı yutabilir (INSPECTED; çökme değil, eski davranış) |
-| Geri alma noktası | Bu commit'in `git revert`'ü (çökmeyi geri getirir) |
+| CI sonucu | Çalıştırma 44278080488 (`64edf97`): **Windows (MSVC) derleme, EngineTest ve PluginTest geçti**, Linux geçti; macOS işi yazım sırasında runner bekliyordu |
+| Bilinen sınırlamalar | ROBOTISM "i" bilgi balonu hâlâ `launchAsynchronously` kullanıyor: kutu açıkken editör kapanırsa yetim kalıyor ve aynı eklenti DLL'indeki başka bir VSTM Tune penceresinde ilk tıklamayı yutabilir (INSPECTED; çökme değil, eski davranış) |
+| Geri alma noktası | `git revert 64edf97` (çökmeyi geri getirir) |
 
 ### 16.10 Yeniden üretme
 
