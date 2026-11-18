@@ -90,6 +90,7 @@ private:
 
     bool lastActive = true;
     int lastDetectedKey = -2;
+    static constexpr float kSureKey = 0.5f;      // Auto key confidence below this shows "?"
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VSTMTuneEditor)
 };

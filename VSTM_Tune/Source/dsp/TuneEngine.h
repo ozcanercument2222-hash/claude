@@ -169,6 +169,8 @@ public:
         levelCount = 0;
         levelHeld = levelActive ? levelPrior (params.formant - params.transpose) : 1.0f;
         detectedKey.store (-1);
+        keyCandidate.store (-1);
+        keyConfidence.store (0.0f);
         currentNote.store (-1);
         currentVoiced.store (false);
     }
@@ -284,7 +286,9 @@ public:
     //==========================================================================
     //  read by the UI thread
     SpscQueue<DisplayPoint, 4096> display;
-    std::atomic<int>   detectedKey { -1 };
+    std::atomic<int>   detectedKey { -1 };          // Auto: locked tonic, -1 = still listening
+    std::atomic<int>   keyCandidate { -1 };         // Auto: best tonic so far (also before the lock)
+    std::atomic<float> keyConfidence { 0.0f };      // Auto: 0..1, see KeyDetector
     std::atomic<int>   currentNote { -1 };
     std::atomic<bool>  currentVoiced { false };
     std::atomic<float> currentInMidi { 0.0f };
@@ -452,6 +456,8 @@ private:
         keys.addFrame (r.voiced, inMidi, r.clarity, dt);
         const int autoKey = keys.update (params.scale, dt);
         detectedKey.store (autoKey);
+        keyCandidate.store (keys.getCandidate());
+        keyConfidence.store (keys.getConfidence());
 
         CorrectorSettings cs;
         cs.amount = params.amount;

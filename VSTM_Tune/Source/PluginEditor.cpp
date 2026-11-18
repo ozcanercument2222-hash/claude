@@ -273,7 +273,7 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
       sizeButton (icons::windowIcon(), 2.2f),
       settingsButton (icons::gear(), 2.1f),
       display (p.engine),
-      keySelector (param (ids::key), tr ("Key: the tonic notes are snapped to. Auto listens to the singing and finds it.")),
+      keySelector (param (ids::key), tr ("Key: the tonic notes are snapped to. Auto listens to the singing and finds it; a question mark means it is not sure yet, until then notes go to the nearest semitone.")),
       scaleSelector (param (ids::scale), tr ("Scale: which notes are allowed. Chromatic = all 12 notes.")),
       // all three value boxes centre their value (no text that sits left in one box and centred in another)
       correction (param (ids::correction), ValueSlider::Align::centre, tr ("Pitch Correction: how much of the distance to the target note is corrected.")),
@@ -333,8 +333,14 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
     {
         if (juce::roundToInt (param (ids::key).convertFrom0to1 (param (ids::key).getValue())) != 0)
             return juce::String();
+        // locked and sure: "C"; locked but unsure (singing left the key) or still listening with a
+        // best guess: "C?"; nothing to judge yet: an ellipsis. Correction uses only a locked key.
+        const auto dot = juce::String (juce::CharPointer_UTF8 ("\xc2\xb7 "));
         const int k = audio.engine.detectedKey.load();
-        return k >= 0 ? juce::String (juce::CharPointer_UTF8 ("\xc2\xb7 ")) + vstm::noteName (k) : juce::String();
+        if (k >= 0)
+            return dot + vstm::noteName (k) + (audio.engine.keyConfidence.load() < kSureKey ? "?" : "");
+        const int c = audio.engine.keyCandidate.load();
+        return c >= 0 ? dot + vstm::noteName (c) + "?" : dot + juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xa6"));
     };
 
     robot.setTooltip (tr ("ROBOTISM: turn left for the hard, robotic effect; turn right for natural, human transitions."));
@@ -400,9 +406,10 @@ void VSTMTuneEditor::timerCallback()
     }
 
     const int k = audio.engine.detectedKey.load();
-    if (k != lastDetectedKey)
+    const int shown = (k + 1) * 64 + (audio.engine.keyCandidate.load() + 1) * 2 + (audio.engine.keyConfidence.load() < kSureKey ? 1 : 0);
+    if (shown != lastDetectedKey)
     {
-        lastDetectedKey = k;
+        lastDetectedKey = shown;
         keySelector.repaint();
     }
 }

@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <random>
 #include <string>
 
@@ -472,6 +473,75 @@ int main()
         e.setParams (p);
         run (e, x, 512);
         check (e.detectedKey.load() == 2, "Auto key finds D minor even when E is the most sung note (got " + std::to_string (e.detectedKey.load()) + ")");
+    }
+
+    // 8e) Auto key confidence (VSTM_TUNE_AUDIT.md R7). Before: one sung note or two alternating notes
+    //     gave a "certain" key after 2 s, an A minor melody with Scale = Major was first called G,
+    //     and nothing told the user how sure the guess was.
+    {
+        auto keyRun = [&] (const std::vector<double>& notes, double noteLen, int scale, std::vector<int>* trace = nullptr)
+        {
+            auto x = makeVoice (sr, noteLen * (double) notes.size(), [&] (double t)
+            {
+                const int i = std::min ((int) notes.size() - 1, (int) (t / noteLen));
+                const double tin = t - i * noteLen;
+                double m = notes[(size_t) i];
+                if (i > 0 && tin < 0.03) m = notes[(size_t) i - 1] + (m - notes[(size_t) i - 1]) * tin / 0.03;
+                return midiToHz (m + 0.1);
+            });
+            auto e = std::make_unique<TuneEngine>();
+            e->prepare (sr, true);
+            auto p = baseParams();
+            p.key = -1;
+            p.scale = scale;
+            e->setParams (p);
+            for (size_t pos = 0; pos < x.size(); pos += 4800)              // one look per 100 ms
+            {
+                const int n = (int) std::min ((size_t) 4800, x.size() - pos);
+                float* chans[2] = { x.data() + pos, nullptr };
+                e->process (chans, 1, n);
+                if (trace) trace->push_back (e->detectedKey.load());
+            }
+            return e;
+        };
+        auto none = [] (const std::vector<int>& tr) { for (int k : tr) if (k >= 0) return false; return true; };
+        auto only = [] (const std::vector<int>& tr, int key) { for (int k : tr) if (k >= 0 && k != key) return false; return true; };
+        auto firstAt = [] (const std::vector<int>& tr, int key) { for (size_t i = 0; i < tr.size(); ++i) if (tr[i] == key) return 0.1 * (double) (i + 1); return -1.0; };
+
+        std::vector<int> tr;
+        auto e1 = keyRun (std::vector<double> (10, 60.0), 0.5, kMajor, &tr);
+        check (none (tr) && e1->keyConfidence.load() < 0.5f,
+               "Auto key: one note (C4, 5 s) is not a key: none locked, confidence " + std::to_string (e1->keyConfidence.load()));
+
+        tr.clear();
+        keyRun ({ 60, 67, 60, 67, 60, 67, 60, 67, 60, 67, 60, 67 }, 0.5, kMajor, &tr);
+        check (none (tr), "Auto key: two alternating notes (C4 / G4, 6 s) are not a key: none locked");
+
+        const std::vector<double> aMin { 57, 59, 60, 62, 64, 65, 67, 69, 64, 60, 62, 59, 57, 60, 64, 57 };
+        tr.clear();
+        keyRun (aMin, 0.5, kMajor, &tr);
+        check (only (tr, 0) && tr.back() == 0, "Auto key: A minor melody with Scale = Major: only C (relative major) is ever shown, from "
+                                                    + std::to_string (firstAt (tr, 0)) + " s");
+
+        const std::vector<double> cMaj { 60, 62, 64, 65, 67, 69, 71, 72, 67, 64, 65, 62, 60, 64, 67, 60 };
+        auto e2 = keyRun (cMaj, 0.35, kMajor);
+        check (e2->detectedKey.load() == 0 && e2->keyConfidence.load() >= 0.6f,
+               "Auto key: C major melody: C with confidence " + std::to_string (e2->keyConfidence.load()));
+
+        // modulation to G major (F# four times in 8 s): followed; chromatic passing notes (F#, Bb) in C: ignored
+        std::vector<double> mod = cMaj;
+        for (double n : { 67, 69, 71, 72, 74, 76, 78, 79, 78, 74, 71, 66, 67, 69, 71, 78 }) mod.push_back (n);
+        tr.clear();
+        keyRun (mod, 0.5, kMajor, &tr);
+        const double gAt = firstAt (tr, 7);
+        check (tr.back() == 7 && gAt > 8.0 && gAt < 15.0, "Auto key: C major -> G major at 8 s is followed at " + std::to_string (gAt) + " s");
+
+        std::vector<double> passing = cMaj;
+        passing.insert (passing.end(), cMaj.begin(), cMaj.end());
+        passing[10] = 66; passing[16] = 70; passing[22] = 66; passing[28] = 70;
+        tr.clear();
+        keyRun (passing, 0.5, kMajor, &tr);
+        check (only (tr, 0) && tr.back() == 0, "Auto key: chromatic passing notes (F#, Bb) in a C major melody do not move the key");
     }
 
     // 8c) pitch tracker: short harmonic-ratio errors are ignored, real leaps accepted
