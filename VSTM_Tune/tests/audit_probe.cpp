@@ -1,13 +1,14 @@
 //==============================================================================
 //  VSTM Tune - denetim olcumleri (VSTM_TUNE_AUDIT.md, bolum 6), JUCE gerektirmez
 //
-//    VSTMTune_AuditProbe <cikis_klasoru> [S1 ... S15]
+//    VSTMTune_AuditProbe <cikis_klasoru> [S1 ... S16]
 //    g++ -std=c++17 -O2 -I Source tests/audit_probe.cpp -o audit_probe
 //
 //  Sentetik vokal senaryolari: buyuk sicramalar (S1), NaN/Inf giris (S2), REALTIME
 //  gecisi (S3), ornekleme hizlari (S4), blok boyutlari (S5), stereo (S6), otomasyon
 //  stresi (S7), CPU (S8), 10 dk (S9), unvoiced (S10), Auto key (S11), formant /
-//  transpoze (S12), MIX (S13), ROBOTISM taramasi (S14), NaN parametre (S15).
+//  transpoze (S12), MIX (S13), ROBOTISM taramasi (S14), NaN parametre (S15), ROBOTISM'in
+//  dort ses tipinde (bas, tenor, alto, soprano) taramasi (S16).
 //  Her senaryo <cikis_klasoru>/measurements.jsonl dosyasina bir JSON satiri ekler,
 //  bazilari WAV / CSV yazar. Gecti / kaldi karari vermez: olcum aracidir; karar
 //  veren kontroller tests/engine_test.cpp icindedir. Kanit etiketi: MEASURED.
@@ -798,13 +799,13 @@ void robotismSweep()
         const double c05 = cents (measureHz (c.y, sr, (long) (0.5 * sr) + c.lat, (int) (sr * 0.1), 220.0), 220.0);
         const double c15 = cents (measureHz (c.y, sr, (long) (1.5 * sr) + c.lat, (int) (sr * 0.2), 220.0), 220.0);
 
-        // the macro's internal values (PitchCorrector.h formulas, retune 15 ms, humanize 0.35)
-        const float robot = clamp01 ((0.5f - rb) * 2.0f), human = clamp01 ((rb - 0.5f) * 2.0f);
+        // the macro's internal values (PitchCorrector.h formulas, retune 15 ms, humanize 0.35; keep in sync)
+        const float robot = clamp01 ((0.5f - rb) * 2.0f), human = std::pow (clamp01 ((rb - 0.5f) * 2.0f), 1.6f);
         const float hystCt = 15.0f + 20.0f * human;
         const float dwellMs = 22.0f + 30.0f * human - 8.0f * robot;
         const float glideMs = 110.0f * human;
         const float onsetMs = 70.0f * human;
-        const float speedMul = (1.0f - robot) * (1.0f - robot) * (1.0f + 3.0f * human);
+        const float speedMul = (1.0f - robot) * (1.0f - 0.5f * robot) * (1.0f + 3.0f * human);
         const float hz = clamp01 (0.35f * (1.0f - robot) + 0.4f * human * (1.0f - 0.35f));
         const float tauShort = 15.0f * speedMul, tauLong = 15.0f * speedMul * (1.0f + 6.0f * hz);
         jline (fmt ("{\"scenario\":\"S14_robotism\",\"robotism_pct\":%.0f,\"transition_10_90_ms\":%.1f,\"vibrato_pp_ct_of_100\":%.1f,"
@@ -814,6 +815,61 @@ void robotismSweep()
                     hystCt, dwellMs, glideMs, onsetMs, tauShort, tauLong));
     }
 }
+//==============================================================================
+//  S16  ROBOTISM across voice types: the S14 measures for bass, tenor, alto and soprano
+//       (step of a minor third, +-50 ct vibrato at 5.5 Hz, a note sung 40 ct sharp)
+//==============================================================================
+void robotismVoices()
+{
+    const double sr = 48000.0;
+    struct Voice { const char* name; double base; VoiceSpec v; int range; };
+    VoiceSpec bass = vowelO(); bass.fund = 0.25; bass.tilt = 1.6;
+    VoiceSpec alto = vowelO();
+    const Voice voices[] = { { "bass", 43.0, bass, 2 }, { "tenor", 57.0, vowelA(), 1 }, { "alto", 64.0, alto, 1 }, { "soprano", 69.0, vowelI(), 0 } };
+    for (const auto& vc : voices)
+    {
+        const double b = vc.base;
+        auto step = synth (sr, 2.0, [b] (double t) { const double k = std::clamp ((t - 1.0) / 0.02, 0.0, 1.0); return midiToHz (b + 3.0 * k); }, vc.v);
+        auto vib = synth (sr, 2.0, [b] (double t) { return midiToHz (b + 0.5 * std::sin (2.0 * kPi * 5.5 * t)); }, vc.v);
+        auto sharp = synth (sr, 2.0, [b] (double) { return midiToHz (b + 0.40); }, vc.v);
+        // measurement window: at least 1.5 periods of the lower note
+        const int win = std::max ((int) (sr * 0.008), (int) (1.5 * sr / midiToHz (b)));
+        for (const float rb : { 0.0f, 0.10f, 0.20f, 0.35f, 0.50f, 0.65f, 0.80f, 0.90f, 1.0f })
+        {
+            auto p = defaultParams(); p.scale = kChromatic; p.key = 0; p.robotism = rb; p.range = vc.range;   // retune 15 ms, humanize 35 %
+            const auto a = runMono (step, sr, p);
+            double t10 = -1, t90 = -1, settle = -1;
+            for (double t = 0.9; t < 1.7; t += 0.002)
+            {
+                const double m = hzToMidi (measureHz (a.y, sr, (long) (t * sr) + a.lat - win / 2, win, midiToHz (b + 1.5)));
+                if (t10 < 0 && m > b + 0.3) t10 = t;
+                if (t90 < 0 && m > b + 2.7) t90 = t;
+                if (t90 >= 0 && settle < 0 && std::abs (m - (b + 3.0)) < 0.10)
+                {
+                    bool stays = true;
+                    for (double u = t; u < t + 0.05; u += 0.004)
+                        stays = stays && std::abs (hzToMidi (measureHz (a.y, sr, (long) (u * sr) + a.lat - win / 2, win, midiToHz (b + 3.0))) - (b + 3.0)) < 0.10;
+                    if (stays) settle = t;
+                }
+            }
+            const auto bv = runMono (vib, sr, p);
+            double lo = 1e9, hi = -1e9;
+            for (double t = 1.0; t < 1.6; t += 0.004)
+            {
+                const double m = hzToMidi (measureHz (bv.y, sr, (long) (t * sr) + bv.lat - win / 2, win, midiToHz (b)));
+                lo = std::min (lo, m); hi = std::max (hi, m);
+            }
+            const auto c = runMono (sharp, sr, p);
+            const double c03 = cents (measureHz (c.y, sr, (long) (0.3 * sr) + c.lat, (int) (sr * 0.1), midiToHz (b)), midiToHz (b));
+            const double c10 = cents (measureHz (c.y, sr, (long) (1.0 * sr) + c.lat, (int) (sr * 0.2), midiToHz (b)), midiToHz (b));
+            jline (fmt ("{\"scenario\":\"S16_robotism_voices\",\"voice\":\"%s\",\"base_midi\":%.0f,\"robotism_pct\":%.0f,"
+                        "\"transition_10_90_ms\":%.1f,\"settle_10ct_ms\":%.1f,\"vibrato_kept_pct\":%.1f,\"err_ct_0.3s\":%.2f,\"err_ct_1.0s\":%.2f}",
+                        vc.name, b, rb * 100.0f, (t10 >= 0 && t90 >= 0) ? (t90 - t10) * 1000.0 : -1.0, settle >= 0 ? (settle - 1.0) * 1000.0 : -1.0,
+                        (hi - lo) * 100.0, c03, c10));
+        }
+    }
+}
+
 //==============================================================================
 //  S15  a NaN parameter value (e.g. from a corrupted preset/session) for 0.5 s, then a valid value again
 //==============================================================================
@@ -852,7 +908,7 @@ int main (int argc, char** argv)
 {
     if (argc < 2 || std::strcmp (argv[1], "--help") == 0)
     {
-        std::fprintf (stderr, "usage: VSTMTune_AuditProbe <output_folder> [S1 ... S15]   (no scenario = all)\n");
+        std::fprintf (stderr, "usage: VSTMTune_AuditProbe <output_folder> [S1 ... S16]   (no scenario = all)\n");
         return 2;
     }
     OUT = argv[1];
@@ -874,6 +930,7 @@ int main (int argc, char** argv)
     if (want ("S13")) mixBeating();
     if (want ("S14")) robotismSweep();
     if (want ("S15")) nanParameter();
+    if (want ("S16")) robotismVoices();
     if (want ("S9")) longRun();
     if (want ("S8")) cpu();
     std::fclose (J);

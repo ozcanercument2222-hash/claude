@@ -192,6 +192,7 @@ private:
     static constexpr float kBecomeVoiced = 0.22f;
     static constexpr float kStayVoiced = 0.34f;
     static constexpr float kGate = 0.0015f;       // about -56 dBFS
+    static constexpr int kRefineLags = 64;        // lags per refine() window (192 kHz: 2 x 18 + 2)
     // Octave thresholds on periodicity() residuals, chosen on real voices (145 recordings: 14
     // VocalSet singers, RAVDESS, a dry rap vocal, a separated stem; 7 variants compared, see
     // VSTM_TUNE_AUDIT.md 16.1). Real voices often alternate slightly from pulse to pulse, so twice
@@ -261,39 +262,60 @@ private:
         if (decim <= 1 || x == nullptr)
             return coarse;
 
-        const int lo = std::max (2, (int) std::floor (coarse) - decim - 1);
-        const int hi = (int) std::ceil (coarse) + decim + 1;
+        // The coarse estimate describes an older stretch of the signal than this search (the YIN
+        // frame reaches tauMax decimated samples further back): while the pitch moves (vibrato,
+        // slides) the newest minimum can lie just outside +-(decim + 1). It used to fall back to
+        // the coarse value then: in the Bass range (longest frame) a +-50 ct vibrato read 12 ct
+        // rough instead of 3 ct (rms second difference), and a fast slide was held on a stale value
+        // (a hard-tuned 20 ms third stopped on the note in between). A minimum on the edge now moves
+        // the search window downhill, so it stays in the same dip (a wider search found other dips),
+        // at most 8 % of the period away from the coarse estimate.
         const int w = std::clamp ((int) (1.5 * coarse), 256, 2048);
-        const int64_t base = endIndex - w - hi;
-        if (base < 0)
-            return coarse;
-
-        double vals[64];
-        const int count = std::min (64, hi - lo + 1);
-        int bestIdx = -1;
-        double bestVal = 1.0e30;
-        for (int i = 0; i < count; ++i)
+        const int radius = decim + 1;
+        const double maxDrift = std::max ((double) radius, 0.08 * coarse);
+        double centre = coarse;
+        for (int step = 0; step < 4; ++step)
         {
-            const int lag = lo + i;
-            double s = 0.0;
-            for (int j = 0; j < w; ++j)
+            const int lo = std::max (2, (int) std::floor (centre) - radius);
+            const int hi = (int) std::ceil (centre) + radius;
+            const int64_t base = endIndex - w - hi;
+            if (base < 0)
+                return coarse;
+
+            double vals[kRefineLags];
+            const int count = std::min (kRefineLags, hi - lo + 1);
+            int bestIdx = -1;
+            double bestVal = 1.0e30;
+            for (int i = 0; i < count; ++i)
             {
-                const float d = x[(base + j) & mask] - x[(base + j + lag) & mask];
-                s += (double) d * d;
+                const int lag = lo + i;
+                double s = 0.0;
+                for (int j = 0; j < w; ++j)
+                {
+                    const float d = x[(base + j) & mask] - x[(base + j + lag) & mask];
+                    s += (double) d * d;
+                }
+                vals[i] = s;
+                if (s < bestVal) { bestVal = s; bestIdx = i; }
             }
-            vals[i] = s;
-            if (s < bestVal) { bestVal = s; bestIdx = i; }
+
+            if (bestIdx <= 0 || bestIdx >= count - 1)
+            {
+                // still sloping down at the edge: follow it, within the allowed drift
+                centre += bestIdx <= 0 ? -radius : radius;
+                if (std::abs (centre - coarse) > maxDrift)
+                    return coarse;
+                continue;
+            }
+
+            const double a = vals[bestIdx - 1], b = vals[bestIdx], c = vals[bestIdx + 1];
+            const double den = a - 2.0 * b + c;
+            double p = lo + bestIdx;
+            if (den > 1.0e-18)
+                p += std::clamp (0.5 * (a - c) / den, -0.5, 0.5);
+            return p;
         }
-
-        if (bestIdx <= 0 || bestIdx >= count - 1)
-            return coarse;
-
-        const double a = vals[bestIdx - 1], b = vals[bestIdx], c = vals[bestIdx + 1];
-        const double den = a - 2.0 * b + c;
-        double p = lo + bestIdx;
-        if (den > 1.0e-18)
-            p += std::clamp (0.5 * (a - c) / den, -0.5, 0.5);
-        return p;
+        return coarse;
     }
 
     double fullRate = 44100.0, decRate = 11025.0;

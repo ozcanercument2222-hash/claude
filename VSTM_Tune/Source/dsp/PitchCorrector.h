@@ -73,7 +73,12 @@ public:
         }
 
         const float robot = clamp01 ((0.5f - s.robotism) * 2.0f);    // 0..1 toward "Robotik"
-        const float human = clamp01 ((s.robotism - 0.5f) * 2.0f);    // 0..1 toward "Insansi"
+        // Insansi side: the human-side amounts (glide, onset scoop, slower retune, wider
+        // hysteresis, longer dwell) grow along h^1.6 instead of linearly. Measured on four voice
+        // types (VSTM_TUNE_AUDIT.md 16.4): linearly, the note transition went 22 -> 76 ms between
+        // 50 % and 65 % and only 160 -> 214 ms between 90 % and 100 %; now it grows by a similar
+        // factor per step. 50 % (user settings as they are) and 100 % are unchanged.
+        const float human = std::pow (clamp01 ((s.robotism - 0.5f) * 2.0f), 1.6f);
 
         // vibrato / fast-modulation split: note centre is a 3 Hz one-pole of the input
         if (! wasVoiced)
@@ -146,8 +151,10 @@ public:
             glide = (float) note;
         }
 
-        // retune speed, shaped by robotism and (for sustained notes) humanize
-        const float speedMul = (1.0f - robot) * (1.0f - robot) * (1.0f + 3.0f * human);
+        // retune speed, shaped by robotism and (for sustained notes) humanize. Robotik side:
+        // (1 - r)(1 - r/2) instead of (1 - r)^2, so 0 - 10 % is no longer one flat "dead" zone
+        // (vibrato kept 1.0 % -> 0.9 % before); 0 % stays instant and 50 % unchanged.
+        const float speedMul = (1.0f - robot) * (1.0f - 0.5f * robot) * (1.0f + 3.0f * human);
         const float humanizeEff = clamp01 (s.humanize * (1.0f - robot) + 0.4f * human * (1.0f - s.humanize));
         const float sustain = smoothstep (0.08f, 0.40f, noteAge);
         const float tauMs = s.retuneMs * speedMul * (1.0f + 6.0f * humanizeEff * sustain);
