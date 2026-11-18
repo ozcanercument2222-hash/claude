@@ -817,7 +817,7 @@ Kullanıcı onayıyla (“Herşey için iznim var”) yapıldı. Her adım ayrı
   - Önceki oturumdan kalan `pluginval.zip`, resmi v1.0.4 Linux sürümüyle aynı (SHA-256 `c01c49d8…b55352`; GitHub'dan indirilip karşılaştırıldı).
   - Bu ikiliyi çalıştırma isteği otomatik izin denetimi tarafından reddedildi. Aşmaya çalışılmadı.
   - Çalıştırmak için kullanıcının bir izin kuralı eklemesi ya da kendi makinesinde `pluginval --strictness-level 10 --validate "VSTM Tune.vst3"` komutunu çalıştırması gerekiyor (bayraklar `pluginval --help` ile doğrulanmalı).
-- **macOS CI:** İş hâlâ runner almıyor (Bölüm 0, madde 4).
+- **macOS CI:** İş hâlâ runner almıyor (Bölüm 0, madde 4); `7e1ed3b` çalıştırmasında da 15. dakikada iptal oldu.
 - **Kullanıcı girdisi gerektirenler:** gerçek vokal veri seti (P0-4) ve insan dinlemesi. P0-5…P0-8'in kabulü bunlara bağlı.
 - **P0-1'in kalan maddeleri:** Bölüm 15.1'de listelendi.
 
@@ -831,3 +831,6 @@ Kullanıcı onayıyla (“Herşey için iznim var”) yapıldı. Her adım ayrı
 | AuditProbe S3 (REALTIME geçişi) | 40 ms sessizlik, adım ×5 | 0,02 ms, adım ≤ sabit durum |
 | AuditProbe S15 (NaN parametre) | kalıcı sessizlik / NaN | normal |
 | Normal girişte çıktı | – | bit düzeyinde aynı |
+| CI Windows (MSVC): derleme + EngineTest + PluginTest | ✅ | ✅ (`7e1ed3b`, çalıştırma 44163434548) |
+| CI Linux: derleme + EngineTest + PluginTest | ✅ | ✅ (`7e1ed3b`) |
+| CI macOS (Universal VST3 + AU) | ❌ runner yok, iptal | ❌ runner yok, iptal |
