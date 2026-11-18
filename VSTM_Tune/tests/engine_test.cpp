@@ -220,6 +220,37 @@ int main()
             check (std::abs (cents (hz, expect)) < 6.0, "transpose " + std::to_string ((int) tr) + " st: " + std::to_string (cents (hz, expect)) + " ct");
         }
 
+        // 3b) level with large transpose / formant shifts (VSTM_TUNE_AUDIT.md R8): before, the
+        //     shifted voice came out -7.4 ... +2.6 dB off (real voices: -7.9 ... +2.4 dB)
+        {
+            const double f = midiToHz (57.40);
+            auto x = makeVoice (sr, 2.0, [&] (double) { return f; });
+            const double inDb = rmsDb (x, (int) (sr * 1.0), (int) (sr * 0.5));
+            double worst = 0.0, worstPeak = -99.0;
+            std::string detail;
+            for (const auto& tf : std::vector<std::pair<float, float>> { { 0.f, -12.f }, { 0.f, 12.f }, { -12.f, 0.f }, { 12.f, 0.f },
+                                                                         { 3.f, 0.f }, { -5.f, -3.f } })
+            {
+                TuneEngine e;
+                e.prepare (sr, true);
+                auto p = baseParams();
+                p.transpose = tf.first;
+                p.formant = tf.second;
+                e.setParams (p);
+                const auto y = run (e, x, 256);
+                const int L = e.getLatencySamples();
+                const double d = rmsDb (y, (int) (sr * 1.0) + L, (int) (sr * 0.5)) - inDb;
+                double pk = 0.0;
+                for (float v : y) pk = std::max (pk, (double) std::abs (v));
+                worst = std::max (worst, std::abs (d));
+                worstPeak = std::max (worstPeak, 20.0 * std::log10 (pk / 0.3));
+                detail += (detail.empty() ? "" : ", ") + std::to_string ((int) tf.first) + "/" + std::to_string ((int) tf.second)
+                          + ": " + std::to_string (d).substr (0, 5);
+            }
+            check (worst <= 1.0 && worstPeak <= 6.0, "level kept with transpose / formant (worst " + std::to_string (worst) + " dB, peak +"
+                                                         + std::to_string (worstPeak) + " dB; " + detail + ")");
+        }
+
         // 4) formant shift keeps the pitch
         {
             const double f = midiToHz (60.0);

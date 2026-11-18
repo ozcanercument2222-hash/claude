@@ -93,6 +93,12 @@ public:
         aa1.setLowpass (sr, fc, 0.5412);
         aa2.setLowpass (sr, fc, 1.3066);
 
+        levelPowCoef = 1.0f - std::exp (-1.0f / (0.05f * (float) sr));
+        levelGainCoef = 1.0f - std::exp (-1.0f / (0.03f * (float) sr));
+        levelFastCoef = 1.0f - std::exp (-1.0f / (0.01f * (float) sr));
+        levelDownCoef = 1.0f - std::exp (-1.0f / (0.001f * (float) sr));
+        levelMinCount = (int) std::lround (0.02 * sr);
+
         applyRange();
         reset();
     }
@@ -158,6 +164,10 @@ public:
         switchPos = 0;
         switchFade = std::max (1, (int) std::lround (sr * 0.005));
         pendingLatency = latency;
+        levelGain = 1.0f;
+        levelPd = levelPv = levelFd = levelFv = 0.0f;
+        levelCount = 0;
+        levelHeld = levelActive ? levelPrior (params.formant - params.transpose) : 1.0f;
         detectedKey.store (-1);
         currentNote.store (-1);
         currentVoiced.store (false);
@@ -186,6 +196,16 @@ public:
         params = p;
         if (rangeChanged)
             applyRange();
+
+        const bool shifting = std::abs (p.transpose) >= 0.5f || std::abs (p.formant) >= 0.05f;
+        if (shifting && ! levelActive)
+        {
+            levelPd = levelPv = 0.0f;           // new measurement; start from the typical value
+            levelCount = 0;
+            levelHeld = levelPrior (p.formant - p.transpose);
+        }
+        levelActive = shifting;
+        levelUp = shifting && p.formant - p.transpose < -0.5f;
     }
 
     /** In-place processing of up to two channels. */
@@ -240,15 +260,24 @@ public:
             const size_t ti = (size_t) (t & kMask);
             const float xf = xfade[ti];          // < 0: plain sum, else unvoiced -> voiced crossfade
             xfade[ti] = -1.0f;
+            const float vg = levelGain;          // level of the shifted voice (exactly 1 without transpose / formant)
+            float dryPow = 0.0f, voicedPow = 0.0f;
+            bool onlyVoiced = xf < 0.0f;
             for (int ch = 0; ch < nc; ++ch)
             {
                 float& v = acc[(size_t) ch][ti];
                 float& u = accU[(size_t) ch][ti];
-                const float wet = xf < 0.0f ? v + u : u + xf * (v - u);
-                v = u = 0.0f;
                 const float dry = in[(size_t) ch][ti];
+                dryPow += dry * dry;
+                voicedPow += v * v;
+                onlyVoiced = onlyVoiced && ! (std::abs (u) > 0.0f);            // no unvoiced grain here
+                const float vv = v * vg;
+                const float wet = xf < 0.0f ? vv + u : u + xf * (vv - u);
+                v = u = 0.0f;
                 channels[ch][i] = (dry + wetGain * (wet - dry)) * switchGain;      // x 1.0 is exact: no change normally
             }
+            if (levelActive || std::abs (vg - 1.0f) > 0.0f)
+                updateLevelGain (onlyVoiced && voicedPow > 0.0f, dryPow, voicedPow);
         }
     }
 
@@ -264,6 +293,69 @@ public:
 private:
     static constexpr int kRing = 1 << 16;
     static constexpr int64_t kMask = kRing - 1;
+
+    //------------------------------------------------------------ level of the shifted voice
+    /** TD-PSOLA changes the level of the voiced stream with the shift (formant - transpose):
+        transposing up an octave keeps only the input's even harmonics (real voices: -2 ... -9 dB,
+        depending on how strong the fundamental is), transposing down or the formant up leaves gaps
+        between shorter grains (about +1.9 dB at 12 st). While transpose or formant is in use the
+        voiced stream is matched to the dry signal's power, measured only where the output is purely
+        voiced: consonants, breaths and silences are never boosted (the gain holds there). Limited
+        to -6 ... +12 dB; 50 ms power windows, 30 ms gain glide; until 20 ms of voice has been
+        measured the typical value for the shift is used. Shifting up, short grain bursts are kept
+        within +4 dB of the dry signal (see below). With transpose and formant at 0 the gain glides
+        back to exactly 1 and the output is bit-identical to the engine without it. */
+    void updateLevelGain (bool measure, float dryPow, float voicedPow) noexcept
+    {
+        float target = 1.0f;
+        if (levelActive)
+        {
+            if (measure)
+            {
+                levelPd += (dryPow - levelPd) * levelPowCoef;
+                levelPv += (voicedPow - levelPv) * levelPowCoef;
+                if (levelCount < levelMinCount)
+                    ++levelCount;
+                else if (levelPv > 1.0e-10f && levelPd > 1.0e-10f)
+                    levelHeld = std::clamp (std::sqrt (levelPd / levelPv), 0.5f, 4.0f);
+            }
+            target = levelHeld;
+
+            // Shifting up, overlapping grains sometimes line up for 10-30 ms and the voice jumps
+            // 10-16 dB above its own level (also without this gain; measured on real arpeggios at
+            // +9 st). The matched gain must not lift such a burst above the dry signal: in 10 ms
+            // windows the shifted voice stays within +4 dB of the dry one (fast down, slow back).
+            if (levelUp)
+            {
+                levelFd += (dryPow - levelFd) * levelFastCoef;
+                levelFv += (voicedPow - levelFv) * levelFastCoef;
+                if (levelFv > 1.0e-10f)
+                    target = std::min (target, std::sqrt (levelFd / levelFv) * 1.585f);
+            }
+        }
+        levelGain += (target - levelGain) * (target < levelGain ? levelDownCoef : levelGainCoef);
+        if (! levelActive && std::abs (levelGain - 1.0f) < 1.0e-4f)
+            levelGain = 1.0f;
+        if (! std::isfinite (levelGain) || ! std::isfinite (levelPd) || ! std::isfinite (levelPv)
+            || ! std::isfinite (levelFd) || ! std::isfinite (levelFv))
+        {
+            levelGain = 1.0f;
+            levelPd = levelPv = levelFd = levelFv = 0.0f;
+            levelCount = 0;
+        }
+    }
+
+    /** Typical level correction for a shift of x = formant - transpose semitones: the median level
+        change of 50 real recordings, sign flipped (VSTM_TUNE_AUDIT.md 16.2). Transpose and formant
+        give the same change for the same x. Only the starting point: the measurement takes over. */
+    static float levelPrior (float x) noexcept
+    {
+        static const float lossDb[9] = { -3.1f, -3.5f, -2.7f, -2.2f, 0.0f, -0.4f, 0.4f, 1.2f, 1.9f };   // x = -12, -9 ... +12
+        const float pos = (std::clamp (x, -12.0f, 12.0f) + 12.0f) / 3.0f;
+        const int i = std::min (7, (int) pos);
+        const float db = lossDb[i] + (pos - (float) i) * (lossDb[i + 1] - lossDb[i]);
+        return std::pow (10.0f, -db / 20.0f);
+    }
 
     //------------------------------------------------------------ REALTIME <-> HQ
     /** Gain of the next output sample while a latency switch runs:
@@ -881,6 +973,12 @@ private:
     int64_t xfadeEnd = -1;
 
     float mixSmooth = 1.0f, wetSmooth = 1.0f;
+
+    // level of the shifted voice (updateLevelGain)
+    bool levelActive = false, levelUp = false;
+    float levelGain = 1.0f, levelHeld = 1.0f, levelPd = 0.0f, levelPv = 0.0f, levelFd = 0.0f, levelFv = 0.0f;
+    float levelPowCoef = 0.0f, levelGainCoef = 0.0f, levelFastCoef = 0.0f, levelDownCoef = 0.0f;
+    int levelCount = 0, levelMinCount = 960;
 
     // REALTIME <-> HQ switch: 0 = none, 1 = fading out (old latency), 2 = fading in (new latency)
     int switchState = 0, switchPos = 0, switchFade = 240, pendingLatency = 882;
