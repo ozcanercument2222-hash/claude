@@ -5,7 +5,8 @@
 //  YIN (de Cheveigne & Kawahara 2002) - kaba arama, alcak-gecirgen ve seyreltilmis
 //  (~11-12 kHz) sinyal uzerinde yapilir; sonuc tam ornekleme hizinda, kaba periyodun
 //  cevresinde dar bir aralikta ince ayarlanir (yuksek notalarda da cent hassasiyeti).
-//  Oktav atlamalarina karsi bir onceki periyotla sureklilik kontrolu yapar.
+//  Oktav atlamalarina karsi bir onceki periyotla sureklilik kontrolu yapar; oktav karari
+//  (P mi 2P mi) seyreltilmis CMND ile degil, tam hizdaki sinyalin periyodikligiyle verilir.
 //==============================================================================
 #include "DspCommon.h"
 
@@ -116,22 +117,47 @@ public:
         if (best < 0)
             return r;
 
-        // continuity: guard against octave jumps relative to the previous voiced period
+        // continuity: guard against octave jumps relative to the previous voiced period.
+        // Octave choices are judged on the full-rate signal between the lag samples
+        // (periodicity()): on the decimated grid a short period reads too shallow (A5 at ~12 kHz:
+        // 13.4 samples -> CMND 0.024 at lag 13 but 0.006 at lag 27).
         if (wasVoiced && lastPeriod > 0.0)
         {
             const double prevTau = lastPeriod / decim;
             const double ratio = best / prevTau;
             if (ratio > 1.8 && ratio < 2.2)
             {
+                // YIN dropped an octave: the previous octave stays while it is still a dip, unless
+                // the long lag is overwhelmingly more periodic (a real downward leap). Real voices
+                // often alternate slightly from pulse to pulse, so "somewhat more periodic" at 2P
+                // is no evidence: that would move them an octave down.
                 const int alt = localMin ((int) std::lround (best * 0.5));
                 if (alt > 0 && cmnd[(size_t) alt] < kStayVoiced)
-                    best = alt;
+                {
+                    const int w = std::clamp ((int) (1.5 * best * decim), 256, 2048);
+                    const int64_t base = endIndex - w - (best * decim + decim + 1);
+                    if (! (periodicity (best, base, w, fullRing, fullMask) + kOctaveAbsMargin
+                           < kOctaveRelease * periodicity (alt, base, w, fullRing, fullMask)))
+                        best = alt;
+                }
             }
             else if (ratio > 0.45 && ratio < 0.55)
             {
+                // YIN went an octave up. A signal with period P is also periodic with 2P, so the
+                // previous (lower) octave is kept only when the signal is clearly more periodic
+                // with the long lag (odd harmonics present: the period really is the long one).
+                // The old rule kept it whenever its decimated dip was not much worse, which is
+                // always true for a periodic signal: a legato octave-up leap stayed an octave low
+                // for the whole note.
                 const int alt = localMin ((int) std::lround (best * 2.0));
-                if (alt > 0 && cmnd[(size_t) alt] < cmnd[(size_t) best] + 0.04f)
-                    best = alt;
+                if (alt > 0)
+                {
+                    const int w = std::clamp ((int) (1.5 * alt * decim), 256, 2048);
+                    const int64_t base = endIndex - w - (alt * decim + decim + 1);
+                    if (clearlyMorePeriodic (periodicity (alt, base, w, fullRing, fullMask),
+                                             periodicity (best, base, w, fullRing, fullMask)))
+                        best = alt;
+                }
             }
         }
 
@@ -166,6 +192,57 @@ private:
     static constexpr float kBecomeVoiced = 0.22f;
     static constexpr float kStayVoiced = 0.34f;
     static constexpr float kGate = 0.0015f;       // about -56 dBFS
+    // Octave thresholds on periodicity() residuals, chosen on real voices (145 recordings: 14
+    // VocalSet singers, RAVDESS, a dry rap vocal, a separated stem; 7 variants compared, see
+    // VSTM_TUNE_AUDIT.md 16.1). Real voices often alternate slightly from pulse to pulse, so twice
+    // the period is commonly "somewhat" more periodic: only a clear (up) or overwhelming (down)
+    // difference moves the estimate away from the previous octave.
+    static constexpr double kOctaveRatio = 0.5;          // keep the lower octave: residual < 1/2 ...
+    static constexpr double kOctaveAbsMargin = 0.01;     // ... and not just both tiny
+    static constexpr double kOctaveRelease = 0.25;       // leave the previous octave downwards: < 1/4
+
+    static bool clearlyMorePeriodic (double longLag, double shortLag) noexcept
+    {
+        return longLag + kOctaveAbsMargin < kOctaveRatio * shortLag;
+    }
+
+    /** How periodic the newest full-rate samples are with a lag near the decimated lag `coarseTau`:
+        sum (x[j] - x[j+L])^2 / sum (x[j]^2 + x[j+L]^2), minimum over the full-rate lags around it,
+        refined between them. 0 = exactly periodic, about 1 = unrelated. Only used for octave
+        decisions (a few hops per phrase), never on every hop. */
+    double periodicity (int coarseTau, int64_t base, int window, const float* x, int mask) const noexcept
+    {
+        const double centre = (double) coarseTau * decim;
+        const int lo = std::max (2, (int) std::floor (centre) - decim - 1);
+        const int count = std::min (64, (int) std::ceil (centre) + decim + 1 - lo + 1);
+        if (x == nullptr || base < 0 || count < 3)
+            return cmnd[(size_t) coarseTau];
+
+        double vals[64];
+        int bestIdx = 0;
+        for (int i = 0; i < count; ++i)
+        {
+            double s = 0.0, e = 0.0;
+            for (int j = 0; j < window; ++j)
+            {
+                const float a = x[(base + j) & mask], b = x[(base + j + lo + i) & mask];
+                const float d = a - b;
+                s += (double) d * d;
+                e += (double) a * a + (double) b * b;
+            }
+            vals[i] = e > 1.0e-20 ? s / e : 1.0;
+            if (vals[i] < vals[bestIdx]) bestIdx = i;
+        }
+        double v = vals[bestIdx];
+        if (bestIdx > 0 && bestIdx < count - 1)
+        {
+            const double a = vals[bestIdx - 1], c = vals[bestIdx + 1];
+            const double den = a - 2.0 * v + c;
+            if (den > 1.0e-12)
+                v = std::clamp (v - (a - c) * (a - c) / (8.0 * den), 0.0, v);
+        }
+        return v;
+    }
 
     int localMin (int around) const noexcept
     {

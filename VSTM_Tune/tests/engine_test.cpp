@@ -41,15 +41,21 @@ struct Resonator
     double process (double x) { const double y = b0 * x - a1 * y1 - a2 * y2; y2 = y1; y1 = y; return y; }
 };
 
+/** Formants of the synthetic vowel (default "a"; "i" has its first formant below the 2nd harmonic
+    of a soprano and two strong formants near the top of the detector's band). */
+struct Vowel { double F1 = 730.0, F2 = 1090.0, F3 = 2440.0, B1 = 90.0, B2 = 110.0, B3 = 170.0, g2 = 0.7, g3 = 0.35; };
+const Vowel vowelI { 300.0, 2300.0, 3000.0, 70.0, 120.0, 180.0, 0.5, 0.4 };
+
 /** Synthetic sung vowel. f0At(t) gives the fundamental at time t (seconds). */
-std::vector<float> makeVoice (double sr, double seconds, const std::function<double (double)>& f0At, float level = 0.3f)
+std::vector<float> makeVoice (double sr, double seconds, const std::function<double (double)>& f0At, float level = 0.3f,
+                              const Vowel& vowel = {})
 {
     const int n = (int) (sr * seconds);
     std::vector<float> out ((size_t) n);
     Resonator f1, f2, f3;
-    f1.set (sr, 730.0, 90.0);
-    f2.set (sr, 1090.0, 110.0);
-    f3.set (sr, 2440.0, 170.0);
+    f1.set (sr, vowel.F1, vowel.B1);
+    f2.set (sr, vowel.F2, vowel.B2);
+    f3.set (sr, vowel.F3, vowel.B3);
     std::mt19937 rng (7);
     std::normal_distribution<double> noise (0.0, 1.0);
 
@@ -67,7 +73,7 @@ std::vector<float> makeVoice (double sr, double seconds, const std::function<dou
             src += std::sin (2.0 * kPi * h * phase) / (double) (h * h) * (h == 1 ? 1.0 : 1.6);
         const double pulse = src - prevPulse;      // differentiate: spectral shape of voiced speech
         prevPulse = src;
-        double y = f1.process (pulse) + 0.7 * f2.process (pulse) + 0.35 * f3.process (pulse);
+        double y = f1.process (pulse) + vowel.g2 * f2.process (pulse) + vowel.g3 * f3.process (pulse);
         y += 0.0005 * noise (rng);
         out[(size_t) i] = (float) y;
     }
@@ -105,6 +111,26 @@ double measureHz (const std::vector<float>& x, double sr, int start, int length,
 }
 
 double cents (double hz, double refHz) { return 1200.0 * std::log2 (hz / refHz); }
+
+/** Largest Hann-windowed DFT magnitude within +-3 % of a frequency (an independent spectral probe). */
+double peakNear (const std::vector<float>& x, double sr, int start, int length, double hz)
+{
+    double best = 0.0;
+    for (int k = -6; k <= 6; ++k)
+    {
+        const double f = hz * (1.0 + 0.005 * k);
+        double re = 0.0, im = 0.0;
+        for (int i = 0; i < length; ++i)
+        {
+            const double w = 0.5 - 0.5 * std::cos (2.0 * kPi * i / (length - 1));
+            const double ph = 2.0 * kPi * f * i / sr;
+            re += w * x[(size_t) (start + i)] * std::cos (ph);
+            im -= w * x[(size_t) (start + i)] * std::sin (ph);
+        }
+        best = std::max (best, std::sqrt (re * re + im * im));
+    }
+    return best;
+}
 
 std::vector<float> run (TuneEngine& e, std::vector<float> x, int block)
 {
@@ -431,6 +457,66 @@ int main()
         PitchDetector::Result gap; gap.voiced = false;
         const bool bridged = tr.process (gap).voiced;
         check (onsetOk && spikeHeld && leapAccepted && bridged, "pitch tracker: 3-hop onset, spikes held, 20 ms leap accepted, dropouts bridged");
+    }
+
+    // 8d) legato octave leaps (25 ms slide), sung 30 ct sharp: the detector follows the sung octave
+    //     and the output has no sub-octave. Before: going up an octave, the detector stayed an
+    //     octave low for the whole note (the lower octave's CMND dip reads deeper on the decimated
+    //     lag grid): 2-period grains, f0/2 in the output 31 dB above the dry signal (soprano A5).
+    {
+        struct Case { const char* name; double lo, hi; int range; Vowel v; };
+        const Case cases[] = { { "soprano i A4-A5-A4", 69.3, 81.3, 1, vowelI }, { "soprano i A4-A5-A4 (Soprano range)", 69.3, 81.3, 0, vowelI },
+                               { "tenor a A3-A4-A3", 57.3, 69.3, 1, Vowel {} }, { "bass a G2-G3-G2", 43.3, 55.3, 1, Vowel {} } };
+        for (const auto& c : cases)
+        {
+            const double noteLen = 0.8, slide = 0.025;
+            auto f0 = [&] (double t)
+            {
+                const double notes[] = { c.lo, c.hi, c.lo };
+                const int i = std::min (2, (int) (t / noteLen));
+                const double tin = t - i * noteLen;
+                double m = notes[i];
+                if (i > 0 && tin < slide) m = notes[i - 1] + (notes[i] - notes[i - 1]) * tin / slide;
+                return midiToHz (m);
+            };
+            auto x = makeVoice (sr, 3 * noteLen, f0, 0.3f, c.v);
+            TuneEngine e;
+            e.prepare (sr, true);
+            auto p = baseParams();
+            p.robotism = 0.0f;
+            p.range = c.range;
+            e.setParams (p);
+            auto y = x;
+            int onOctave = 0, voiced = 0;
+            int hops = 0;
+            for (size_t pos = 0; pos < y.size(); pos += 256)
+            {
+                const int n = (int) std::min ((size_t) 256, y.size() - pos);
+                float* chans[2] = { y.data() + pos, nullptr };
+                e.process (chans, 1, n);
+                TuneEngine::DisplayPoint d;
+                while (e.display.pop (d))
+                {
+                    const double t = ++hops * e.getHopSeconds() - 0.024;          // ~ centre of the analysis window
+                    if (t < noteLen + slide + 0.030 || t > 2.0 * noteLen - 0.05 || ! (d.flags & TuneEngine::kVoiced))
+                        continue;
+                    ++voiced;
+                    if (std::abs (d.inMidi - c.hi) < 1.0) ++onOctave;
+                }
+            }
+            const int L = e.getLatencySamples();
+            const int a = (int) ((noteLen + 0.3) * sr), len = (int) (0.4 * sr);
+            const double target = midiToHz (std::round (c.hi)), sung = midiToHz (c.hi);
+            const double subOut = 20.0 * std::log10 (peakNear (y, sr, a + L, len, target / 2) / peakNear (y, sr, a + L, len, target));
+            const double subDry = 20.0 * std::log10 (peakNear (x, sr, a, len, sung / 2) / peakNear (x, sr, a, len, sung));
+            const double frac = voiced ? (double) onOctave / voiced : 0.0;
+            // f0/2 within 6 dB of the dry signal, or inaudibly low (60 dB under f0; the synthetic dry
+            // signal's own floor is about -79 dB, where two spectral probes differ by several dB)
+            check (frac > 0.99 && subOut < std::max (subDry + 6.0, -60.0),
+                   std::string ("octave leap ") + c.name + ": detector on the sung octave " + std::to_string ((int) std::lround (100.0 * frac))
+                       + " % of the upper note (from 30 ms after the slide), f0/2 " + std::to_string (subOut) + " dB vs dry "
+                       + std::to_string (subDry) + " dB");
+        }
     }
 
     // 9) silence in, silence out; no NaN
