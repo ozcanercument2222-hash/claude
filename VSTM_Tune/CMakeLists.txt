@@ -97,7 +97,8 @@ set(VSTM_PLUGIN_SOURCES
     Source/ui/Icons.h
     Source/ui/Controls.h
     Source/ui/RobotKnob.h
-    Source/ui/PitchDisplay.h)
+    Source/ui/PitchDisplay.h
+    Source/ui/ScaleEditor.h)
 
 set(VSTM_DSP_HEADERS
     Source/dsp/DspCommon.h

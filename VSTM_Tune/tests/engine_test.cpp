@@ -544,6 +544,101 @@ int main()
         check (only (tr, 0) && tr.back() == 0, "Auto key: chromatic passing notes (F#, Bb) in a C major melody do not move the key");
     }
 
+    // 8g) custom scale: the note set counts from the key like a scale; Auto finds the key with it.
+    //     A minor pentatonic as a custom set (1 b3 4 5 b7), a melody in A minor pentatonic, key Auto.
+    {
+        const double notes[] = { 57, 60, 62, 64, 67, 69, 67, 64, 62, 60, 57, 60, 64, 62, 57, 69, 67, 64, 60, 57 };
+        auto x = makeVoice (sr, 6.0, [&] (double t) { return midiToHz (notes[std::min (19, (int) (t / 0.3))] + 0.2); });
+        TuneEngine e;
+        e.prepare (sr, true);
+        auto p = baseParams();
+        p.key = -1;
+        p.scale = kMajor;                           // ignored while the custom set is on
+        p.customScale = true;
+        p.customMask = (uint16_t) ((1u << 0) | (1u << 3) | (1u << 5) | (1u << 7) | (1u << 10));
+        e.setParams (p);
+        auto y = run (e, x, 512);
+        const int L = e.getLatencySamples();
+        const double hz = measureHz (y, sr, (int) (sr * 5.47) + L, (int) (sr * 0.15), midiToHz (60.0));  // note 18: C4 sung 20 ct sharp
+        check (e.detectedKey.load() == 9 && std::abs (cents (hz, midiToHz (60.0))) < 5.0,
+               "custom scale (A minor pentatonic set): Auto finds A (got " + std::to_string (e.detectedKey.load()) + "), C4 +20 ct -> "
+                   + std::to_string (cents (hz, midiToHz (60.0))) + " ct");
+    }
+
+    // 8f) Adaptive (off by default; off = the engine without it). It keeps a sung vibrato and lets
+    //     a slow slide through on the balanced / human side, leaves the robotic end alone, and helps
+    //     short notes of fast runs land on the human side. Engine output pitch (display points).
+    {
+        struct Track { std::vector<double> t, in, out; };
+        auto runA = [&] (const std::function<double (double)>& f0, double secs, float robotism, float retune, bool adaptive)
+        {
+            auto x = makeVoice (sr, secs, [&] (double t) { return midiToHz (f0 (t)); });
+            TuneEngine e;
+            e.prepare (sr, true);
+            auto p = baseParams();
+            p.robotism = robotism;
+            p.retuneMs = retune;
+            p.humanize = 0.35f;
+            p.adaptive = adaptive;
+            e.setParams (p);
+            Track tr;
+            int hops = 0;
+            for (size_t pos = 0; pos < x.size(); pos += 256)
+            {
+                const int n = (int) std::min ((size_t) 256, x.size() - pos);
+                float* chans[2] = { x.data() + pos, nullptr };
+                e.process (chans, 1, n);
+                TuneEngine::DisplayPoint d;
+                while (e.display.pop (d))
+                {
+                    const double t = ++hops * e.getHopSeconds() - 0.024;
+                    if (d.flags & TuneEngine::kVoiced) { tr.t.push_back (t); tr.in.push_back (d.inMidi); tr.out.push_back (d.outMidi); }
+                }
+            }
+            return tr;
+        };
+        auto pp = [] (const Track& tr, double a, double b)
+        {
+            double lo = 1e9, hi = -1e9;
+            for (size_t k = 0; k < tr.t.size(); ++k) if (tr.t[k] > a && tr.t[k] < b) { lo = std::min (lo, tr.out[k]); hi = std::max (hi, tr.out[k]); }
+            return (hi - lo) * 100.0;
+        };
+        auto vib = [] (double t) { return 57.1 + 0.4 * std::sin (2.0 * kPi * 5.5 * t); };
+        const double balancedOff = pp (runA (vib, 3.0, 0.5f, 15.0f, false), 1.5, 2.5);
+        const double balancedOn = pp (runA (vib, 3.0, 0.5f, 15.0f, true), 1.5, 2.5);
+        const double robotOn = pp (runA (vib, 3.0, 0.0f, 0.0f, true), 1.5, 2.5);
+        check (balancedOn > 1.25 * balancedOff && robotOn < 5.0,
+               "Adaptive keeps a sung vibrato when balanced (" + std::to_string (balancedOff) + " -> " + std::to_string (balancedOn)
+                   + " ct p-p), the robotic end still flattens it (" + std::to_string (robotOn) + " ct)");
+
+        auto slide = [] (double t) { return 57.0 + 3.0 * std::clamp ((t - 1.0) / 0.4, 0.0, 1.0); };
+        auto dev = [] (const Track& tr)
+        {
+            double s = 0.0; int n = 0;
+            for (size_t k = 0; k < tr.t.size(); ++k) if (tr.t[k] > 1.05 && tr.t[k] < 1.35) { s += std::abs (tr.out[k] - tr.in[k]); ++n; }
+            return n ? 100.0 * s / n : 0.0;
+        };
+        const double slideOff = dev (runA (slide, 2.0, 0.5f, 15.0f, false)), slideOn = dev (runA (slide, 2.0, 0.5f, 15.0f, true));
+        check (slideOn < 0.8 * slideOff, "Adaptive lets a slow slide through (mean pull " + std::to_string (slideOff) + " -> "
+                                              + std::to_string (slideOn) + " ct)");
+
+        const double runNotes[] = { 57, 59, 60, 62, 64, 62, 60, 59, 57, 59, 60, 62, 64, 65, 64, 62, 60, 59, 57, 55 };
+        auto fastRun = [&] (double t) { return runNotes[std::min (19, (int) (t / 0.1))] + 0.3; };
+        auto landing = [] (const Track& tr)
+        {
+            double s = 0.0; int n = 0;
+            for (size_t k = 0; k < tr.t.size(); ++k)
+            {
+                const double ph = std::fmod (tr.t[k], 0.1);
+                if (tr.t[k] > 0.3 && ph > 0.05 && ph < 0.095) { s += std::abs (tr.out[k] - std::round (tr.out[k])); ++n; }
+            }
+            return n ? 100.0 * s / n : 0.0;
+        };
+        const double runOff = landing (runA (fastRun, 2.0, 0.9f, 15.0f, false)), runOn = landing (runA (fastRun, 2.0, 0.9f, 15.0f, true));
+        check (runOn < runOff - 5.0, "Adaptive lands the short notes of a fast run on the human side (" + std::to_string (runOff)
+                                         + " -> " + std::to_string (runOn) + " ct off the note)");
+    }
+
     // 8c) pitch tracker: short harmonic-ratio errors are ignored, real leaps accepted
     {
         PitchTracker tr;

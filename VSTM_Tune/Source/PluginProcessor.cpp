@@ -29,6 +29,10 @@ VSTMTuneProcessor::VSTMTuneProcessor()
     pBypass     = raw (ids::bypass);
     pRealtime   = raw (ids::realtime);
     pRange      = raw (ids::range);
+    pCustomScale = raw (ids::customScale);
+    pAdaptive   = raw (ids::adaptive);
+    for (int i = 0; i < 12; ++i)
+        pScaleNote[i] = raw (ids::scaleNote (i));
 
     apvts.addParameterListener (ids::realtime, this);
     apvts.state.setProperty ("presetName", presets.getCurrentName(), nullptr);
@@ -66,6 +70,13 @@ vstm::TuneEngine::Params VSTMTuneProcessor::readParams() const noexcept
     p.mix = pMix.get() * 0.01f;
     p.active = pBypass.get() < 0.5f;
     p.range = juce::jlimit (0, 2, juce::roundToInt (pRange.get()));
+    p.customScale = pCustomScale.get() > 0.5f;
+    uint16_t mask = 0;
+    for (int i = 0; i < 12; ++i)
+        if (pScaleNote[i].get() > 0.5f)
+            mask = (uint16_t) (mask | (1u << i));
+    p.customMask = mask;
+    p.adaptive = pAdaptive.get() > 0.5f;
     return p;
 }
 

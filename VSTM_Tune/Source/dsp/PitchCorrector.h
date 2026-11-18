@@ -36,6 +36,7 @@ struct CorrectorSettings
     float    robotism = 0.5f;       // 0 = robotic, 1 = human
     float    vibratoScale = 1.0f;   // 0..2, depth of natural pitch modulation
     float    transpose = 0.0f;      // semitones
+    bool     adaptive = false;      // Adaptive: follows the performance within fixed limits (see below)
 };
 
 class PitchCorrector
@@ -59,9 +60,22 @@ public:
         delta = 0.0f;
         glideProgress = 1.0f;
         settledFlag = true;
+        adapt = {};
+        adaptState = {};
     }
 
-    Output process (bool voiced, float inMidi, float dt, const CorrectorSettings& s) noexcept
+    /** What Adaptive is doing right now (0..1 each), for tests and display. */
+    struct AdaptiveState
+    {
+        float confidence = 1.0f;    // detector certainty (clarity), smoothed
+        float vibrato = 0.0f;       // a regular 3.5 - 8.5 Hz modulation is being sung
+        float slide = 0.0f;         // the note centre is moving fast (a deliberate slide)
+        float fast = 0.0f;          // many note changes per second (runs, rap)
+    };
+    const AdaptiveState& getAdaptiveState() const noexcept { return adaptState; }
+
+    /** clarity: the detector's 1 - CMND minimum of this frame (only used by Adaptive). */
+    Output process (bool voiced, float inMidi, float dt, const CorrectorSettings& s, float clarity = 1.0f) noexcept
     {
         Output out;
         if (! voiced)
@@ -89,9 +103,14 @@ public:
             note = kNoNote;
             pendingNote = kNoNote;
             pendingAge = 0.0f;
+            if (s.adaptive)
+                adapt.restart (inMidi);
         }
+        const float centreBefore = centre;
         centre += (inMidi - centre) * (1.0f - std::exp (-dt * 2.0f * (float) kPi * 3.0f));
         const float shaped = centre + s.vibratoScale * (inMidi - centre);
+        if (s.adaptive)
+            adapt.observe (inMidi, centre, centreBefore, clarity, noteAge, dt, adaptState);
 
         // target note with hysteresis (cents) and a minimum dwell time before switching
         const float hyst = (15.0f + 20.0f * human) * 0.01f;
@@ -139,7 +158,8 @@ public:
         }
 
         // "insansi gecis": S-curve glide between notes, only on the human side
-        const float glideMs = 110.0f * human;
+        // (Adaptive: up to 60 % shorter in fast runs, so short notes can still land)
+        const float glideMs = 110.0f * human * (s.adaptive ? 1.0f - 0.6f * adaptState.fast : 1.0f);
         if (glideMs > 0.5f && glideProgress < 1.0f)
         {
             glideProgress = std::min (1.0f, glideProgress + dt * 1000.0f / glideMs);
@@ -157,9 +177,25 @@ public:
         const float speedMul = (1.0f - robot) * (1.0f - 0.5f * robot) * (1.0f + 3.0f * human);
         const float humanizeEff = clamp01 (s.humanize * (1.0f - robot) + 0.4f * human * (1.0f - s.humanize));
         const float sustain = smoothstep (0.08f, 0.40f, noteAge);
-        const float tauMs = s.retuneMs * speedMul * (1.0f + 6.0f * humanizeEff * sustain);
+        float tauMs = s.retuneMs * speedMul * (1.0f + 6.0f * humanizeEff * sustain);
 
-        const float target = glide - shaped;
+        float target = glide - shaped;
+        float adaptAmount = 1.0f;
+        if (s.adaptive)
+        {
+            // Adaptive (VSTM_TUNE_AUDIT.md 16.5). It never changes a parameter; it scales the
+            // correction inside fixed limits, and the robotic end keeps its hard effect:
+            //  - unsure detector (breathy, noisy, ambiguous voice): correction down to 50 %
+            //  - a sung vibrato: only the note centre is pulled, the vibrato stays (fades in
+            //    from ROBOTISM 15 % to 50 %)
+            //  - a deliberate slide: correction down to 40 % while the centre moves fast (same fade)
+            //  - fast runs (> ~4 note changes / s): retune up to twice as fast and the human-side
+            //    glide up to 60 % shorter, so short notes land
+            const float freedom = smoothstep (0.15f, 0.5f, s.robotism);
+            target += adaptState.vibrato * freedom * (shaped - centre);
+            tauMs *= 1.0f - 0.5f * adaptState.fast;
+            adaptAmount = (0.5f + 0.5f * adaptState.confidence) * (1.0f - 0.6f * adaptState.slide * freedom);
+        }
         if (tauMs < 0.5f)
             delta = target;
         else
@@ -168,7 +204,7 @@ public:
         // natural scoop at the start of a phrase survives on the human side
         const float onsetMs = 70.0f * human;
         const float onsetGain = onsetMs > 1.0f ? smoothstep (onsetAge * 1000.0f / onsetMs) : 1.0f;
-        const float amount = clamp01 (s.amount) * onsetGain;
+        const float amount = clamp01 (s.amount) * onsetGain * adaptAmount;
 
         out.outMidi = shaped + amount * delta + s.transpose;
         out.note = note;
@@ -183,6 +219,8 @@ public:
             settledFlag = true;
             out.settled = true;
         }
+        if (s.adaptive && out.noteChanged)
+            adapt.noteRate += 1.0f;
 
         noteAge += dt;
         onsetAge += dt;
@@ -204,6 +242,57 @@ private:
         settledFlag = false;
     }
 
+    /** Adaptive's observations of the performance (only updated while Adaptive is on). */
+    struct Adapt
+    {
+        float conf = 1.0f, devPow = 0.0f, rate = 0.0f, slope = 0.0f, noteRate = 0.0f;
+        float lastDev = 0.0f, sinceCross = 0.0f;
+
+        void restart (float) noexcept
+        {
+            devPow = 0.0f;
+            rate = 0.0f;
+            slope = 0.0f;
+            lastDev = 0.0f;
+            sinceCross = 0.0f;
+        }
+
+        void observe (float inMidi, float centreNow, float centreBefore, float clarity, float noteAge, float dt,
+                      AdaptiveState& st) noexcept
+        {
+            auto follow = [dt] (float& v, float x, float tau) { v += (x - v) * (1.0f - std::exp (-dt / tau)); };
+
+            follow (conf, smoothstep (0.70f, 0.92f, clarity), 0.03f);
+
+            // vibrato: regular movement around the note centre, 3.5 - 8.5 Hz, +-10 ... +-100 ct
+            const float dev = inMidi - centreNow;
+            follow (devPow, dev * dev, 0.25f);
+            sinceCross += dt;
+            if (lastDev < -0.02f && dev >= -0.02f && dev > lastDev)        // upward crossing
+            {
+                if (sinceCross > 0.08f && sinceCross < 0.4f)
+                    rate = rate <= 0.0f ? 1.0f / sinceCross : rate + (1.0f / sinceCross - rate) * 0.5f;
+                sinceCross = 0.0f;
+            }
+            if (sinceCross > 0.4f)
+                rate *= 0.5f;                                              // no regular crossings: no vibrato
+            lastDev = dev;
+            const float depth = std::sqrt (devPow);                       // rms in semitones
+            const float inBand = smoothstep (2.8f, 3.5f, rate) * (1.0f - smoothstep (8.5f, 10.0f, rate));
+            st.vibrato = smoothstep (0.05f, 0.12f, depth) * inBand * smoothstep (0.15f, 0.35f, noteAge);
+
+            // fast runs: decaying count of note changes (1 s memory)
+            noteRate *= std::exp (-dt / 1.0f);
+            st.fast = smoothstep (3.0f, 6.0f, noteRate);
+
+            // slide: the 3 Hz note centre moves faster than 4 ... 10 semitones per second. A fast
+            // run moves the centre just as fast, in steps: there it is not a slide.
+            follow (slope, (centreNow - centreBefore) / std::max (dt, 1.0e-4f), 0.03f);
+            st.slide = smoothstep (4.0f, 10.0f, std::abs (slope)) * (1.0f - st.fast);
+            st.confidence = conf;
+        }
+    };
+
     bool wasVoiced = false;
     int note = kNoNote;
     int pendingNote = kNoNote;
@@ -212,5 +301,7 @@ private:
     float glideFrom = 0.0f, glide = 0.0f, glideProgress = 1.0f;
     float noteAge = 0.0f, onsetAge = 0.0f;
     bool settledFlag = true;
+    Adapt adapt;
+    AdaptiveState adaptState;
 };
 } // namespace vstm

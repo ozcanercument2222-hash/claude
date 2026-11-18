@@ -395,6 +395,71 @@ int main (int argc, char* argv[])
     }
 
     //--------------------------------------------------------------------------
+    std::printf ("\n=== 3d) Custom scale and Adaptive (added after 1.0) ===\n");
+    {
+        VSTMTuneProcessor a;
+        auto value = [&a] (const juce::String& id) { return a.apvts.getParameter (id)->getValue(); };
+        bool defaults = value (vstm::ids::customScale) < 0.5f && value (vstm::ids::adaptive) < 0.5f;
+        for (int i = 0; i < 12; ++i)
+            defaults = defaults && (value (vstm::ids::scaleNote (i)) > 0.5f) == vstm::params::customNoteDefault (i);
+        CHECK (defaults, "defaults: custom scale off (notes = major scale), Adaptive off");
+
+        // the 1.0 parameters keep their place: the first 13 are the 1.0 list, new ones follow
+        const char* order10[] = { "key", "scale", "correction", "retune", "humanize", "robotism", "vibscale", "formant",
+                                  "transpose", "mix", "bypass", "realtime", "range" };
+        bool sameOrder = a.getParameters().size() == 13 + 14;
+        for (int i = 0; i < 13 && sameOrder; ++i)
+            sameOrder = dynamic_cast<juce::RangedAudioParameter*> (a.getParameters()[i])->paramID == order10[i];
+        CHECK (sameOrder, "1.0 parameter IDs and order unchanged, 14 new ones appended (%d in all)", a.getParameters().size());
+
+        // session round trip
+        setParam (a, vstm::ids::customScale, 1.0f);
+        setParam (a, vstm::ids::adaptive, 1.0f);
+        for (int i = 0; i < 12; ++i)
+            setParam (a, vstm::ids::scaleNote (i), (i == 0 || i == 3 || i == 7) ? 1.0f : 0.0f);
+        juce::MemoryBlock mb;
+        a.getStateInformation (mb);
+        VSTMTuneProcessor b;
+        b.setStateInformation (mb.getData(), (int) mb.getSize());
+        bool same = true;
+        for (auto* id : { &vstm::ids::customScale, &vstm::ids::adaptive })
+            same = same && std::abs (b.apvts.getParameter (*id)->getValue() - value (*id)) < 1e-6f;
+        for (int i = 0; i < 12; ++i)
+            same = same && std::abs (b.apvts.getParameter (vstm::ids::scaleNote (i))->getValue() - value (vstm::ids::scaleNote (i))) < 1e-6f;
+        CHECK (same, "session: custom notes, custom scale and Adaptive come back");
+
+        // a 1.0 session has none of the new parameters: they come back at their defaults
+        auto xml = juce::parseXML ("<VSTMTune presetName=\"Default Preset\" uiScale=\"0.75\" version=\"1\">"
+                                   "<PARAM id=\"robotism\" value=\"30\"/><PARAM id=\"scale\" value=\"2\"/></VSTMTune>");
+        juce::MemoryBlock old10;
+        juce::AudioProcessor::copyXmlToBinary (*xml, old10);
+        b.setStateInformation (old10.getData(), (int) old10.getSize());
+        bool oldOk = b.apvts.getParameter (vstm::ids::customScale)->getValue() < 0.5f && b.apvts.getParameter (vstm::ids::adaptive)->getValue() < 0.5f
+                  && std::abs (b.apvts.getRawParameterValue (vstm::ids::robotism)->load() - 30.0f) < 1e-3f;
+        for (int i = 0; i < 12; ++i)
+            oldOk = oldOk && (b.apvts.getParameter (vstm::ids::scaleNote (i))->getValue() > 0.5f) == vstm::params::customNoteDefault (i);
+        CHECK (oldOk, "a 1.0 session opens with the custom scale off, default notes and Adaptive off");
+
+        // the processor hands the custom notes to the engine: C minor triad, key C, a D sung
+        // 30 ct sharp is pulled to C or D#, never to D
+        VSTMTuneProcessor c;
+        c.setPlayConfigDetails (2, 2, kFs, 512);
+        c.prepareToPlay (kFs, 512);
+        setParam (c, vstm::ids::key, 1.0f);                                  // C
+        setParam (c, vstm::ids::robotism, 0.0f);
+        setParam (c, vstm::ids::retune, 0.0f);
+        setParam (c, vstm::ids::customScale, 1.0f);
+        for (int i = 0; i < 12; ++i)
+            setParam (c, vstm::ids::scaleNote (i), (i == 0 || i == 3 || i == 7) ? 1.0f : 0.0f);
+        Voice d;
+        d.notes = { 62.3 };
+        std::vector<float> outD;
+        processSeconds (c, d, 2.0, &outD);
+        const double hz = measureHz (outD, (int) (kFs * 1.2), (int) (kFs * 0.2), vstm::midiToHz (62.0));
+        const double toC = std::abs (1200.0 * std::log2 (hz / vstm::midiToHz (60.0))), toDs = std::abs (1200.0 * std::log2 (hz / vstm::midiToHz (63.0)));
+        CHECK (std::min (toC, toDs) < 5.0, "custom scale C / D# / G: D +30 ct goes to %.1f Hz (%.1f ct from C, %.1f ct from D#)", hz, toC, toDs);
+    }
+
     std::printf ("\n=== 3c) User preset files ===\n");
     {
         // a throw-away folder: the test never touches the real user presets
@@ -502,6 +567,33 @@ int main (int argc, char* argv[])
             pump (150);
             savePng (*ed, shotDir.getChildFile ("06_bypass.png"), 1.0f);
             setParam (p, vstm::ids::bypass, 0.0f);
+            pump (80);
+
+            // custom scale editor (C minor pentatonic starting from Minor) and ADAPTIVE on
+            setParam (p, vstm::ids::scale, (float) vstm::kMinor);
+            setParam (p, vstm::ids::adaptive, 1.0f);
+            ed->showCustomScaleEditor();
+            setParam (p, vstm::ids::scaleNote (2), 0.0f);
+            setParam (p, vstm::ids::scaleNote (8), 0.0f);
+            pump (250);
+            savePng (*ed, shotDir.getChildFile ("08_custom_scale.png"), 1.0f);
+            {
+                // the note editor itself (it opens in a call-out box next to the scale box)
+                vui::VLookAndFeel lnf;
+                vui::ScaleNoteEditor se (p.apvts, [] { return 7; });
+                se.setLookAndFeel (&lnf);
+                pump (50);
+                savePng (se, shotDir.getChildFile ("08b_scale_editor.png"), 1.0f);
+                savePng (se, shotDir.getChildFile ("08b_scale_editor@2x.png"), 2.0f);
+                se.setLookAndFeel (nullptr);
+            }
+            CHECK (p.apvts.getParameter (vstm::ids::customScale)->getValue() > 0.5f
+                       && p.apvts.getParameter (vstm::ids::scaleNote (3))->getValue() > 0.5f
+                       && p.apvts.getParameter (vstm::ids::scaleNote (4))->getValue() < 0.5f,
+                   "\"Custom scale...\" switches the custom scale on and starts from the selected scale (Minor)");
+            setParam (p, vstm::ids::customScale, 0.0f);
+            setParam (p, vstm::ids::adaptive, 0.0f);
+            setParam (p, vstm::ids::scale, (float) vstm::kMajor);
             pump (80);
 
             // the editor in every UI language (07_lang_tr.png, ...)

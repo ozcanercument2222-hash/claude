@@ -3,6 +3,7 @@
 #include "ui/Controls.h"
 #include "ui/RobotKnob.h"
 #include "ui/PitchDisplay.h"
+#include "ui/ScaleEditor.h"
 
 //==============================================================================
 /** Preset pill: < name >. Click the name for the full list, Save / Delete. */
@@ -61,12 +62,15 @@ public:
     /** Screenshot / test helpers. */
     vui::PitchDisplay& getDisplay() { return display; }
     vui::RobotKnob& getRobotKnob() { return robot; }
+    void showCustomScaleEditor() { setCustomScale (true); openScaleEditor(); }
 
 private:
     void timerCallback() override;
     void showSizeMenu();
     void showSettingsMenu();
     void showRobotismInfo();
+    void openScaleEditor();
+    void setCustomScale (bool on);
     void askPresetName();
     void showHostMenu (juce::RangedAudioParameter& p);
     juce::RangedAudioParameter& param (const juce::String& id) { return *audio.apvts.getParameter (id); }
@@ -84,12 +88,14 @@ private:
     juce::SliderParameterAttachment robotAttachment;
     vui::InfoButton infoButton;
     vui::MiniKnob vibratoKnob, formantKnob, transposeKnob, mixKnob;
-    vui::FooterToggle autotuneToggle, realtimeToggle;
+    vui::FooterToggle autotuneToggle, realtimeToggle, adaptiveToggle;
     vui::IconButton waveButton;
     juce::TooltipWindow tooltips { this, 650 };
 
     bool lastActive = true;
     int lastDetectedKey = -2;
+    bool lastCustom = false;
+    juce::Component::SafePointer<juce::CallOutBox> scaleCallout;
     static constexpr float kSureKey = 0.5f;      // Auto key confidence below this shows "?"
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VSTMTuneEditor)

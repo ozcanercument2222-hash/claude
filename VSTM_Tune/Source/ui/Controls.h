@@ -565,6 +565,15 @@ public:
     std::function<juce::String()> suffix;
     /** Optional separators: menu item indices after which a separator is inserted. */
     juce::Array<int> separatorsAfter;
+    /** Optional text shown instead of the parameter's choice (e.g. "Custom"); empty = the choice.
+        While it is shown, no choice is ticked in the menu. */
+    std::function<juce::String()> textOverride;
+    /** Optional extra menu items after a separator (ids >= kExtraItem) and what they do. */
+    std::function<void (juce::PopupMenu&)> addExtraItems;
+    std::function<void (int)> onExtraItem;
+    /** Called after one of the parameter's choices was picked from the menu. */
+    std::function<void (int)> onChoice;
+    static constexpr int kExtraItem = 1000;
 
     void paint (juce::Graphics& g) override
     {
@@ -572,7 +581,8 @@ public:
         fillWell (g, r, 14.0f, isMouseOver());
         const auto choices = param.getAllValueStrings();
         const int idx = juce::roundToInt (param.convertFrom0to1 (param.getValue()));
-        const auto text = choices[juce::jlimit (0, choices.size() - 1, idx)];
+        const auto over = textOverride ? textOverride() : juce::String();
+        const auto text = over.isNotEmpty() ? over : choices[juce::jlimit (0, choices.size() - 1, idx)];
         const auto s = suffix ? suffix() : juce::String();
         const auto fs = font (17.0f);
         const float room = r.getWidth() - 25.0f - 62.0f - (s.isNotEmpty() ? textWidth (fs, s) + 10.0f : 0.0f);
@@ -591,18 +601,31 @@ public:
         juce::PopupMenu m;
         const auto choices = param.getAllValueStrings();
         const int idx = juce::roundToInt (param.convertFrom0to1 (param.getValue()));
+        const bool overridden = textOverride && textOverride().isNotEmpty();
         for (int i = 0; i < choices.size(); ++i)
         {
-            m.addItem (i + 1, choices[i], true, i == idx);
+            m.addItem (i + 1, choices[i], true, i == idx && ! overridden);
             if (separatorsAfter.contains (i))
                 m.addSeparator();
+        }
+        if (addExtraItems)
+        {
+            m.addSeparator();
+            addExtraItems (m);
         }
         juce::Component::SafePointer<DropSelector> safe (this);
         m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMinimumWidth (getWidth()).withStandardItemHeight (32),
                          [safe] (int result)
                          {
-                             if (safe != nullptr && result > 0)
-                                 safe->attachment.setValueAsCompleteGesture ((float) (result - 1));
+                             if (safe == nullptr || result <= 0)
+                                 return;
+                             if (result >= kExtraItem)
+                             {
+                                 if (safe->onExtraItem) safe->onExtraItem (result);
+                                 return;
+                             }
+                             safe->attachment.setValueAsCompleteGesture ((float) (result - 1));
+                             if (safe->onChoice) safe->onChoice (result - 1);
                          });
     }
 

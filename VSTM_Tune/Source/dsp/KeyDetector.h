@@ -65,12 +65,18 @@ public:
     }
 
     /** Re-evaluates at most twice per second. Returns the detected tonic (0..11) or -1 while unsure. */
-    int update (int scale, double dt) noexcept
+    int update (int scale, double dt) noexcept { return update (scale, scaleMask (scale), dt); }
+
+    /** Same with an explicit note set (bit i = i semitones above the tonic), e.g. a custom scale;
+        scale -1 = no known scale type (a plain template is built from the mask). */
+    int update (int scale, uint16_t mask, double dt) noexcept
     {
         sinceEval += dt;
-        if (scale != lastScale)
+        mask = (uint16_t) (mask & 0x0fff);
+        const int identity = (scale + 1) * 4096 + mask;        // another scale or note set: start over
+        if (identity != lastScale)
         {
-            lastScale = scale;
+            lastScale = identity;
             current = -1;
             switchTo = -1;
             switchVotes = 0;
@@ -82,7 +88,7 @@ public:
         const double fresh = newEvidence;
         newEvidence = 0.0;
 
-        if (scale == kChromatic)
+        if (mask == 0x0fff || mask == 0)                         // every note allowed: the key does not matter
         {
             candidate = 0;
             confidence = 1.0f;
@@ -90,7 +96,7 @@ public:
         }
 
         Eval lng;
-        evaluate (histLong, scale, lng);
+        evaluate (histLong, scale, mask, lng);
         candidate = lng.best;
 
         if (current < 0)
@@ -105,7 +111,7 @@ public:
         if (fresh >= kMinFreshEvidence)
         {
             Eval sht;
-            evaluate (histShort, scale, sht);
+            evaluate (histShort, scale, mask, sht);
             // modulation: the recent notes leave the current key (some of them are outside it) and
             // another key holds them better, clearly and confidently
             const bool modulation = sht.best >= 0 && sht.best != current
@@ -133,7 +139,7 @@ public:
                 switchVotes = 0;
                 if (modulation)                       // the long memory follows the new key
                     std::copy (std::begin (histShort), std::end (histShort), std::begin (histLong));
-                evaluate (histLong, scale, lng);
+                evaluate (histLong, scale, mask, lng);
             }
         }
         confidence = lng.conf[current];
@@ -164,7 +170,7 @@ private:
     };
 
     /** Scores, inside fractions and confidences of the 12 tonics on one histogram. */
-    static void evaluate (const double* h, int scale, Eval& e) noexcept
+    static void evaluate (const double* h, int scale, uint16_t mask, Eval& e) noexcept
     {
         double total = 0.0;
         for (int i = 0; i < 12; ++i) total += h[i];
@@ -174,8 +180,7 @@ private:
             return;
 
         double profile[12];
-        makeProfile (scale, profile);
-        const uint16_t mask = scaleMask (scale);
+        makeProfile (scale, mask, profile);
         int best = 0;
         for (int tonic = 0; tonic < 12; ++tonic)
         {
@@ -209,26 +214,25 @@ private:
         }
     }
 
-    static void makeProfile (int scale, double* p) noexcept
+    static void makeProfile (int scale, uint16_t m, double* p) noexcept
     {
         static const double major[12] = { 6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88 };
         static const double minor[12] = { 6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17 };
 
-        if (scale == kMajor)
+        if (scale == kMajor && m == scaleMask (kMajor))
         {
             std::copy (major, major + 12, p);
             return;
         }
-        if (scale == kMinor || scale == kHarmonicMinor || scale == kMelodicMinor)
+        if ((scale == kMinor || scale == kHarmonicMinor || scale == kMelodicMinor) && m == scaleMask (scale))
         {
             std::copy (minor, minor + 12, p);
-            const uint16_t m = scaleMask (scale);
             for (int i = 0; i < 12; ++i)          // nudge toward the exact note set of the variant
                 if ((m >> i) & 1u) p[i] += 0.8;
             return;
         }
 
-        const uint16_t m = scaleMask (scale);
+        // any other note set (modes, pentatonics, Hicaz, a custom scale): tonic and fifth weighted
         for (int i = 0; i < 12; ++i)
             p[i] = ((m >> i) & 1u) ? 1.0 : 0.0;
         p[0] += 0.6;                               // tonic

@@ -5,7 +5,9 @@
 //
 //  name: key (-1 = Auto, 0..11), scale (0..12), amount (0..1), retune (ms),
 //        humanize (0..1), robotism (0..1), vibrato (0..2), formant (st),
-//        transpose (st), mix (0..1), realtime (0/1), range (0..2), block (samples)
+//        transpose (st), mix (0..1), realtime (0/1), range (0..2), block (samples),
+//        custom (custom scale: note mask 0..4095, bit i = i semitones above the key),
+//        adaptive (0/1)
 //
 //  CSV: her analiz adimi (~2.9 ms) icin zaman (giris zaman cizgisinde, saniye),
 //  voiced, giris perdesi, cikis perdesi (MIDI), hedef nota, sapma ve bayraklar.
@@ -145,6 +147,8 @@ int main (int argc, char** argv)
         else if (k == "transpose") p.transpose = (float) v;
         else if (k == "mix")       p.mix = (float) v;
         else if (k == "range")     p.range = (int) v;
+        else if (k == "custom")    { p.customScale = true; p.customMask = (uint16_t) ((int) v & 0x0fff); }
+        else if (k == "adaptive")  p.adaptive = v != 0.0;
         else if (k == "realtime")  realtime = v != 0.0;
         else if (k == "block")     block = std::max (1, (int) v);
         else { std::fprintf (stderr, "unknown param %s\n", k.c_str()); return 2; }

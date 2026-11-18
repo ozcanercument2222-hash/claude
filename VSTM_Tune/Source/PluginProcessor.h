@@ -58,7 +58,8 @@ private:
 
     juce::AudioParameterBool* bypassParam = nullptr;
     RawParam pKey, pScale, pCorrection, pRetune, pHumanize, pRobotism, pVibrato,
-             pFormant, pTranspose, pMix, pBypass, pRealtime, pRange;
+             pFormant, pTranspose, pMix, pBypass, pRealtime, pRange, pCustomScale, pAdaptive;
+    RawParam pScaleNote[12];
 
     double currentRate = 44100.0;
 

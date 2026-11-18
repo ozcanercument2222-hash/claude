@@ -24,6 +24,11 @@ inline const juce::String mix        { "mix" };
 inline const juce::String bypass     { "bypass" };
 inline const juce::String realtime   { "realtime" };
 inline const juce::String range      { "range" };
+// added after 1.0 (version hint 2): appended after the 1.0 parameters, 1.0 IDs and order unchanged
+inline const juce::String customScale { "customscale" };
+inline const juce::String adaptive    { "adaptive" };
+/** Custom scale note i = i semitones above the key (0 = the key itself). */
+inline juce::String scaleNote (int i)  { return "scalenote" + juce::String (i); }
 }
 
 namespace vstm::params
@@ -48,6 +53,16 @@ inline juce::StringArray rangeChoices()
 {
     return { i18n::tr ("Soprano / Alto"), i18n::tr ("Tenor / Mid"), i18n::tr ("Bass / Baritone") };
 }
+
+/** Interval names of the custom scale notes (above the key): 1, b2, 2, b3, 3, 4, #4, 5, b6, 6, b7, 7. */
+inline const char* degreeName (int i)
+{
+    static const char* names[] = { "1", "b2", "2", "b3", "3", "4", "#4", "5", "b6", "6", "b7", "7" };
+    return names[((i % 12) + 12) % 12];
+}
+
+/** The custom scale starts out as the major scale. */
+inline bool customNoteDefault (int i) { return ((scaleMask (kMajor) >> ((i % 12 + 12) % 12)) & 1u) != 0; }
 
 //------------------------------------------------------------------ text
 inline juce::String percentText (float v)             { return juce::String (juce::roundToInt (v)) + "%"; }
@@ -150,6 +165,13 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
                                                       AudioParameterBoolAttributes (onOff).withAutomatable (false)));
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ids::range, 1 }, tr ("Vocal Range"), rangeChoices(), 1,
                                                         AudioParameterChoiceAttributes().withAutomatable (false)));
+
+    // after 1.0: custom scale (12 notes relative to the key) and Adaptive, after everything 1.0 had
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ids::customScale, 2 }, tr ("Custom Scale"), false, onOff));
+    for (int i = 0; i < 12; ++i)
+        layout.add (std::make_unique<AudioParameterBool> (ParameterID { ids::scaleNote (i), 2 },
+                                                          tr ("Custom Note") + " " + degreeName (i), customNoteDefault (i), onOff));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ids::adaptive, 2 }, tr ("Adaptive"), false, onOff));
     return layout;
 }
 } // namespace vstm::params

@@ -55,6 +55,9 @@ public:
         float mix = 1.0f;               // 0..1
         bool  active = true;            // false = bypassed
         int   range = 1;                // 0 = high voice, 1 = mid, 2 = low
+        bool  customScale = false;      // true: customMask decides the allowed notes, not the scale
+        uint16_t customMask = 0x0AB5;   // bit i = the note i semitones above the key (default: major)
+        bool  adaptive = false;         // Adaptive correction (PitchCorrector); off = unchanged engine
     };
 
     struct DisplayPoint
@@ -190,6 +193,7 @@ public:
         p.formant      = keep (p.formant,      params.formant,      -24.0f,   24.0f);
         p.transpose    = keep (p.transpose,    params.transpose,    -24.0f,   24.0f);
         p.mix          = keep (p.mix,          params.mix,            0.0f,    1.0f);
+        p.customMask = (uint16_t) (p.customMask & 0x0fff);
         if (p.key < -1 || p.key > 11) p.key = -1;
         p.scale = std::clamp (p.scale, 0, (int) kNumScales - 1);
         p.range = std::clamp (p.range, 0, 2);
@@ -293,6 +297,9 @@ public:
     std::atomic<bool>  currentVoiced { false };
     std::atomic<float> currentInMidi { 0.0f };
     std::atomic<float> currentOutMidi { 0.0f };
+
+    /** Adaptive's view of the performance (tests, display). Audio thread only. */
+    const PitchCorrector::AdaptiveState& getAdaptiveState() const noexcept { return corrector.getAdaptiveState(); }
 
 private:
     static constexpr int kRing = 1 << 16;
@@ -453,8 +460,10 @@ private:
             inMidi = (float) hzToMidi (sr / r.period);
         lastInMidi = inMidi;
 
+        // allowed notes: the scale's, or the custom set (relative to the key, like a scale)
+        const uint16_t mask = params.customScale ? (uint16_t) (params.customMask & 0x0fff) : scaleMask (params.scale);
         keys.addFrame (r.voiced, inMidi, r.clarity, dt);
-        const int autoKey = keys.update (params.scale, dt);
+        const int autoKey = keys.update (params.customScale ? -1 : params.scale, mask, dt);
         detectedKey.store (autoKey);
         keyCandidate.store (keys.getCandidate());
         keyConfidence.store (keys.getConfidence());
@@ -466,12 +475,13 @@ private:
         cs.robotism = params.robotism;
         cs.vibratoScale = params.vibratoScale;
         cs.transpose = params.transpose;
-        if (params.scale == kChromatic)          { cs.key = 0; cs.mask = 0x0fff; }
-        else if (params.key >= 0)                { cs.key = params.key; cs.mask = scaleMask (params.scale); }
-        else if (autoKey >= 0)                   { cs.key = autoKey;    cs.mask = scaleMask (params.scale); }
+        cs.adaptive = params.adaptive;
+        if (mask == 0x0fff || mask == 0)         { cs.key = 0; cs.mask = 0x0fff; }    // every note allowed
+        else if (params.key >= 0)                { cs.key = params.key; cs.mask = mask; }
+        else if (autoKey >= 0)                   { cs.key = autoKey;    cs.mask = mask; }
         else                                     { cs.key = 0; cs.mask = 0x0fff; }    // still listening: nearest semitone
 
-        const auto o = corrector.process (r.voiced, inMidi, (float) dt, cs);
+        const auto o = corrector.process (r.voiced, inMidi, (float) dt, cs, r.clarity);
 
         Rec& rec = recs[(size_t) recWrite];
         rec.time = (double) nIn - r.centreDelay;

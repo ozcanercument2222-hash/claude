@@ -274,7 +274,7 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
       settingsButton (icons::gear(), 2.1f),
       display (p.engine),
       keySelector (param (ids::key), tr ("Key: the tonic notes are snapped to. Auto listens to the singing and finds it; a question mark means it is not sure yet, until then notes go to the nearest semitone.")),
-      scaleSelector (param (ids::scale), tr ("Scale: which notes are allowed. Chromatic = all 12 notes.")),
+      scaleSelector (param (ids::scale), tr ("Scale: which notes are allowed. Chromatic = all 12 notes. Custom scale: pick your own notes.")),
       // all three value boxes centre their value (no text that sits left in one box and centred in another)
       correction (param (ids::correction), ValueSlider::Align::centre, tr ("Pitch Correction: how much of the distance to the target note is corrected.")),
       retune (param (ids::retune), ValueSlider::Align::centre, tr ("Retune Speed: how fast the pitch is pulled to the note. 0 ms = instant (robotic).")),
@@ -286,6 +286,7 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
       mixKnob (param (ids::mix), tr ("MIX"), tr ("Mix: blend between the original and the tuned voice.")),
       autotuneToggle (param (ids::bypass), true, true, tr ("AUTOTUNE ON"), tr ("AUTOTUNE OFF")),
       realtimeToggle (param (ids::realtime), false, false, tr ("REALTIME"), tr ("REALTIME")),
+      adaptiveToggle (param (ids::adaptive), false, true, tr ("ADAPTIVE"), tr ("ADAPTIVE")),
       waveButton (icons::pulse(), 1.7f, true)
 {
     setLookAndFeel (&lnf);
@@ -295,7 +296,7 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
     for (juce::Component* c : std::initializer_list<juce::Component*> {
              &presetBar, &saveButton, &sizeButton, &settingsButton, &display, &keySelector, &scaleSelector,
              &correction, &retune, &humanize, &robot, &infoButton, &vibratoKnob, &formantKnob, &transposeKnob,
-             &mixKnob, &autotuneToggle, &waveButton, &realtimeToggle })
+             &mixKnob, &autotuneToggle, &waveButton, &realtimeToggle, &adaptiveToggle })
         canvas.addAndMakeVisible (c);
 
     // layout on the 1536 x 1024 design canvas (measured from the reference design)
@@ -325,9 +326,24 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
     realtimeToggle.setBounds (1505 - rtWidth, 940, rtWidth, 50);
     const float rtText = realtimeToggle.preferredWidth() - 70.0f;        // the REALTIME text itself
     waveButton.setBounds (juce::roundToInt (1505.0f - 54.0f - rtText - 18.0f - 44.0f), 943, 44, 44);
+    // ADAPTIVE belongs to how the correction behaves: under HUMANIZE in the right card
+    adaptiveToggle.setBounds (1170, 704, 276, 46);
 
-    // separators in the scale menu: | Chromatic | Major .. Melodic | Pentatonics, Blues | modes | Hicaz
+    // separators in the scale menu: | Chromatic | Major .. Melodic | Pentatonics, Blues | modes | Hicaz | Custom
     scaleSelector.separatorsAfter = { vstm::kChromatic, vstm::kMelodicMinor, vstm::kBlues, vstm::kMixolydian };
+    // the custom scale is a separate switch (the Scale choice keeps its 13 values: automation and
+    // sessions of 1.0 read the same), shown in the scale box and its menu
+    auto customOn = [this] { return param (ids::customScale).getValue() > 0.5f; };
+    scaleSelector.textOverride = [this, customOn] { return customOn() ? tr ("Custom") : juce::String(); };
+    scaleSelector.addExtraItems = [customOn] (juce::PopupMenu& m)
+    {
+        m.addItem (vui::DropSelector::kExtraItem + 1, tr ("Custom scale…"), true, customOn());
+        if (customOn())
+            m.addItem (vui::DropSelector::kExtraItem + 2, tr ("Edit custom scale…"));
+    };
+    scaleSelector.onExtraItem = [this] (int) { setCustomScale (true); openScaleEditor(); };
+    scaleSelector.onChoice = [this] (int) { setCustomScale (false); };
+    adaptiveToggle.setTooltip (tr ("Adaptive (experimental): follows the performance within fixed limits. A sung vibrato and deliberate slides are kept (not at the robotic end), fast runs are tuned quicker, uncertain pitch is pulled less. Your settings are not changed."));
     keySelector.separatorsAfter = { 0 };
     keySelector.suffix = [this]
     {
@@ -379,6 +395,8 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
 
 VSTMTuneEditor::~VSTMTuneEditor()
 {
+    if (auto* open = scaleCallout.getComponent())       // its content refers to this editor
+        delete open;
     tooltips.setLookAndFeel (nullptr);
     setLookAndFeel (nullptr);
 }
@@ -405,6 +423,14 @@ void VSTMTuneEditor::timerCallback()
             c->setAlpha (active ? 1.0f : 0.55f);
     }
 
+    const bool custom = param (ids::customScale).getValue() > 0.5f;
+    if (custom != lastCustom)
+    {
+        lastCustom = custom;
+        scaleSelector.repaint();
+    }
+
+    // what the key box shows: locked key, best guess, and whether a "?" is drawn
     const int k = audio.engine.detectedKey.load();
     const int shown = (k + 1) * 64 + (audio.engine.keyCandidate.load() + 1) * 2 + (audio.engine.keyConfidence.load() < kSureKey ? 1 : 0);
     if (shown != lastDetectedKey)
@@ -412,6 +438,47 @@ void VSTMTuneEditor::timerCallback()
         lastDetectedKey = shown;
         keySelector.repaint();
     }
+}
+
+void VSTMTuneEditor::setCustomScale (bool on)
+{
+    auto& p = param (ids::customScale);
+    if ((p.getValue() > 0.5f) == on)
+        return;
+    if (on)
+    {
+        // first use (notes still at their defaults): start from the scale that is selected
+        bool untouched = true;
+        for (int i = 0; i < 12; ++i)
+        {
+            auto& n = param (ids::scaleNote (i));
+            untouched = untouched && std::abs (n.getValue() - n.getDefaultValue()) < 0.5f;
+        }
+        if (untouched)
+        {
+            const uint16_t mask = vstm::scaleMask (juce::roundToInt (param (ids::scale).convertFrom0to1 (param (ids::scale).getValue())));
+            for (int i = 0; i < 12; ++i)
+            {
+                auto& n = param (ids::scaleNote (i));
+                n.beginChangeGesture();
+                n.setValueNotifyingHost (((mask >> i) & 1u) ? 1.0f : 0.0f);
+                n.endChangeGesture();
+            }
+        }
+    }
+    p.beginChangeGesture();
+    p.setValueNotifyingHost (on ? 1.0f : 0.0f);
+    p.endChangeGesture();
+    scaleSelector.repaint();
+}
+
+void VSTMTuneEditor::openScaleEditor()
+{
+    auto content = std::make_unique<vui::ScaleNoteEditor> (audio.apvts, [this] { return audio.engine.detectedKey.load(); });
+    content->setLookAndFeel (&lnf);
+    if (auto* open = scaleCallout.getComponent())
+        delete open;
+    scaleCallout = &juce::CallOutBox::launchAsynchronously (std::move (content), scaleSelector.getBoundsInParent(), &canvas);
 }
 
 void VSTMTuneEditor::showHostMenu (juce::RangedAudioParameter& p)
