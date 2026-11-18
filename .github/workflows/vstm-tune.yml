@@ -18,15 +18,6 @@ on:
       - 'VSTM_Tune/**'
       - '.github/workflows/vstm-tune.yml'
   workflow_dispatch:
-    inputs:
-      macos_image:
-        description: "macOS makinesi (macos-15 is 15 dk icinde makine alamazsa macos-14 dene)"
-        required: false
-        default: macos-15
-        type: choice
-        options:
-          - macos-15
-          - macos-14
 
 concurrency:
   group: vstm-tune-build-${{ github.ref }}
@@ -46,7 +37,7 @@ jobs:
         include:
           - { name: Windows, os: windows-latest }
           # macOS makine kapasitesi sorunlu saatlerde is 15 dk'da iptal olabilir: "Re-run failed jobs".
-          - { name: macOS,   os: "${{ inputs.macos_image || 'macos-15' }}" }
+          - { name: macOS,   os: macos-15 }
           - { name: Linux,   os: ubuntu-22.04 }
 
     defaults:
