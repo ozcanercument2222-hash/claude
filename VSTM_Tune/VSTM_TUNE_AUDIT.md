@@ -1149,3 +1149,153 @@ $R/make_packs.sh && $R/make_packs2.sh                           # kör A/B paket
 Kanıt klasörü (yerel, git dışı): `final_base/`, `final_new/` (145 × 13 ayar), `audit_base/`, `audit_final/`, `cpucheck/`,
 `peakcheck/`, `vibcheck/`, `sweep_*`, `matrix_*` (varyant denemeleri), `daw_sim/` (DAW aracının doğrulanması), `packs/`,
 `bin-*/` (her ara derlemenin ikilileri, `bin-final/COMMIT`).
+
+---
+
+## 17. Final quality pass (19.11.2026) — sürüm 1.1.0
+
+Görev: `VSTM_Tune_Final_Quality_Pass.txt`. Geri dönüş: etiket `vstm-tune-pre-final-pass` (`5d2e4e3`). Kanıt klasörü (yerel,
+git dışı): `artifacts/audio-runs/2026-11-19_final-pass/`. **Hiçbir ses dinlenmedi** (LISTENED-MODEL kullanılmadı, USER-REPORTED yok).
+
+### 17.1 Bulgular (INSPECTED) ve kararlar
+
+| # | Bulgu | Karar |
+|---|---|---|
+| F1 | Auto Key kilitlendikten sonra da "modülasyon" / "drift" oylamasıyla tonu değiştiriyordu | Tek seferlik kilit; değişim yalnız kullanıcı isteğiyle ya da isteğe bağlı "Ton değişimlerini izle" ile |
+| F2 | `prepareToPlay` bulunan tonu siliyordu; ton oturuma yazılmıyordu | KeyDetector `prepare`'de korunur; kilit oturum sürümü 2'de saklanır |
+| F3 | Arayüz Auto'nun vokalden tahmin olduğunu söylemiyordu; kilit / yeniden analiz yoktu | "VOKALDEN TAHMİN" notu, `A? 41%` / kilit simgesi, KEY menüsünde durum ve eylemler (7 dil) |
+| F4 | Her preset Key / Scale / özel diziyi yazıyordu (R15) | "Presetler ton ve diziyi korur" (varsayılan açık) |
+| F5 | "Hicaz Vocal" / "Chromatic Fix" yalnız diziyle tanımlıydı | Kaldırıldı; fabrika listesi ses ayarı, kategoriler |
+| F6 | Kullanıcı preseti yeniden adlandırılamıyordu | Eklendi (çakışan / fabrika adı reddedilir) |
+| F7 | Klavye erişimi yoktu (JUCE varsayılanı; adım %0,1, host gesture'ı yok) | Ok / Shift / PageUp-Down / Home-End / Delete, her tuş tek gesture; odak halkası yalnız Tab ile |
+| F8 | ROBOTISM "i" balonu editör kapanınca yetim kalıyordu (16.11) | Balon editöre bağlandı |
+| F9 | Oturum `version` okunmuyordu (R18); sürüm Hakkında'da sabit | Sürüm 2 okunuyor / yazılıyor; sürüm CMake'ten (1.1.0) |
+
+**Yapılmayanlar (bilinçli):** beat / sidechain ile ton analizi (bölüm C: DAW'da doğrulanamaz, sidechain veri yolu host'a göre
+değişir; tasarım notu: ayrı "Beat" giriş veri yolu + tam karışım için kroma tabanlı ton tahmini, DAW'da doğrulanmadan tamamlandı
+sayılmayacak). YIN + TD-PSOLA değiştirilmedi. Seviye dengelemesinin tepe / 20–150 Hz yan etkileri (16.2) bu geçişte değiştirilmedi:
+dinlemesiz DSP değişikliği yapılmadı.
+
+### 17.2 Auto Key: tek seferlik kilit — kalibrasyon ve gerçek vokal (MEASURED)
+
+Kilit koşulu: güven ≥ 0,5 (güven = skor farkı × **ayırt edicilik** × kanıt × nota çeşitliliği), aynı aday arka arkaya **6** bakışta
+(her bakışta yeni şarkı) ve uzun bellekte en az **4** birim kanıt (~4 s net şarkı). Ayırt edicilik: aday, rakiplerin açıklayamadığı
+bir şarkı payını açıklamalı (C D E G A, C / F / G majörün hepsine uyar → kilit yok; eski sürüm 3,1 s'de C'ye kilitleniyordu).
+
+Gerçek set: 145 kayıt (16. bölümdeki set), varsayılan ayar (Auto, Major). Gerçek kayıtlarda ton etiketi yok; vekil ölçüt: kilidin,
+**kaydın tamamının** perde-sınıfı histogramından çıkan tonla (iç pay + Krumhansl) uyumu, açık kenar paylı (≥ %1) dosyalarda.
+
+| Değişken (kararlı bakış / asgari kanıt) | Kilitlenen | Uyumsuz / açık | Medyan kilit |
+|---|---|---|---|
+| eski sürüm (sürekli izleme) | 99 | kilit sonrası 35 ton değişimi, 23 dosya | 5,5 s |
+| 3 / yok | 64 | 10 / 57 | 7,0 s |
+| 6 / yok | 39 | 6 / 37 | 9,5 s |
+| 3 / 3 | 42 | 4 / 40 | 11,0 s |
+| 3 / 4 | 27 | 1 / 25 | 18,5 s |
+| **6 / 4 (seçilen)** | **21** | **0 / 20** | **17,5 s** |
+| 6 / 5 | 17 | 0 / 16 | 20,5 s |
+| 6 / 4, güven ≥ 0,25 ile sayım | 27 | 1 / 25 | 17,5 s |
+
+- Uyumsuz erken kilitlerin hepsi şarkının açılış cümlesinden: "Caro mio ben" kayıtlarının çoğu ilk ~10 s'de A majörü ima ediyor
+  (eski sürüm A'ya kilitlenip 12 s'de D'ye geçiyordu), şarkının geri kalanı D (ya da C#). Asgari kanıt bu durumu önlüyor.
+- Seçilen ayarla: kilitten sonra ton değişimi **0** (145 kayıt); şarkılarda (Caro, Dona, Row, stem, kullanıcı rap'i) kilit
+  **20/20** tüm kaydın tonuyla aynı (eski sürümün son tonu 47/55). Stem: eski C → 100. s'de F (şarkı sonu yine C); yeni 49. s'de C,
+  değişmiyor. Kullanıcı rap vokali: aday sürekli değişiyor, ~2 dk kilit yok (güvenli geri dönüş), sonra G#.
+- Bedel: daha az ve geç kilit. Kilitlenene kadar düzeltme en yakın yarım sese (dizi değil). Kullanıcı "Şimdi kilitle" ile adayı
+  ya da KEY'den beat'in tonunu seçebilir.
+- Sentetik (EngineTest 8e / 8h / 8i, AuditProbe S11): 1 / 2 nota ve pentatonik → kilit yok; C majör + 8 s G majör → C kalıyor
+  (izleme açıkken 29,6 s'de G); 48 s "gezen" performans (G majör bölüm, yanlış / geçiş notaları, G#, melisma, geniş vibrato) →
+  7,6 s'de C, sonra 0 değişim (eski sürüm: 2 değişim, test eski kodda KALDI); D minör (E %45) → aday D, sınırda kanıtla kendiliğinden
+  kilit yok, "Şimdi kilitle" D. Yalnız 2 F# ile belli olan zayıf modülasyon izleme açıkken de izlenmiyor (S11, bilinçli).
+- Kanıt: `autokey_real/` (`summary.json`, `variants*.json`, `consistency.json`, `run.py`, `variants.py`).
+
+### 17.3 Oturum, preset, arayüz (MEASURED, PluginTest)
+
+| Kontrol | Sonuç |
+|---|---|
+| Kilitli Auto Key kaydedilir (`autoKeyLock`, `autoKeyConf`, `version` 2), yeniden açılınca ses çalmadan önce de kaydedilir, güveniyle geri gelir, `prepareToPlay` (tampon değişimi) sonrası korunur | ✓ |
+| Yeniden açılan projede 6 s G majör şarkı: kilit C kalıyor, menü G'yi öneriyor | ✓ |
+| 1.0 oturumu: kilit yok, izleme kapalı, presetler tonu korur | ✓ |
+| Bozuk `autoKeyLock` (nan / 57 / abc / -1 / boş), `autoKeyConf` inf, bozuk bayraklar: kilit yok, varsayılanlar (5/5) | ✓ |
+| 12 fabrika preseti: Key A / Minor / özel dizi aynı kalıyor, ses ayarları yükleniyor, "değişti" işareti yok | ✓ |
+| Tüm parametreleri sıfırla: Key Auto, Major, özel dizi kapalı | ✓ |
+| 1.0 projesi "Hicaz Vocal" adıyla: Hicaz ve değerler geri geliyor, ad gösteriliyor | ✓ |
+| Kullanıcı preseti yeniden adlandırma; mevcut / fabrika adı reddi; dosyadaki ton seçenek kapalıyken uygulanıyor | ✓ |
+| Tık: preset geçişlerinde en büyük örnek adımı / sabit durum 1,17; robotik tutulan notada Key / Scale değişimleri 1,00 (sınır 1,5) | ✓ |
+| KEY kutusu: kilitsiz tahminde yüzde motorun güveniyle aynı (`· G? 2%`, 0,0150), kilitlide kilit simgesi; elle tonda not ve ek yok | ✓ |
+| Klavye: FORMANT ↑ +0,2 st, Shift+↓ −0,1 st (bir adım), Delete → 0; 3 tuş = 3 gesture; Boşluk DAW'a geçiyor | ✓ |
+| "i" balonu iki kez açılıp pencere açıkken kapatılıyor: tek balon, çökme yok | ✓ |
+| 7 dil: yeni 21 metin tablo eksiksiz (`firstIncompleteEntry`); TR / RU / DE / ZH ekran görüntülerinde KEY satırı sığıyor | ✓ (Linux) |
+
+### 17.4 ROBOTISM: 9 nokta (MEASURED, sentetik; DSP 1.0 ile aynı)
+
+S14 tenor (A3 → C4, ±50 ct vibrato): geçiş %10→90 / kalan vibrato (100 ct'den) / histerezis / bekleme / glide
+
+| ROBOTISM | 0 | 10 | 25 | 35 | 50 | 65 | 80 | 90 | 100 |
+|---|---|---|---|---|---|---|---|---|---|
+| Geçiş (ms) | 16 | 18 | 24 | 22 | 22 | 48 | 98 | 142 | 214 |
+| Vibrato (ct) | 1,0 | 4,2 | 27,2 | 48,3 | 73,5 | 83,9 | 91,8 | 94,9 | 96,8 |
+| Histerezis / bekleme / glide | 15 / 14 / 0 | 15 / 16 / 0 | 15 / 18 / 0 | 15 / 20 / 0 | 15 / 22 / 0 | 18 / 26 / 16 | 24 / 35 / 49 | 29 / 43 / 77 | 35 / 52 / 110 |
+
+S16 (bas / tenor / alto / soprano), geçiş ms / kalan vibrato %: %50'de 14 / 22 / 20 / 22 ms ve 81 / 74 / 68 / 65 %; %100'de
+14 / 214 / 214 / 210 ms ve 98 / 97 / 96 / 95 %. Vibrato her seste monoton; geçiş süresi robotik yarıda 0–24 ms (ölçüm adımı 2 ms),
+insansı yarıda monoton. Bas: 16.4'teki bilinen sınır (hızlı küçük üçlüde voicing düşmesi, geçiş ROBOTISM'den bağımsız 14 ms).
+Gerçek vokal (`robotism_sweep.py`, 91 kayıt, aynı 9 nokta, kromatik): en yakın yarım sese uzaklık medyanı 1,7 · 2,3 · 7,6 · 11,8 ·
+17,6 · 23,4 · 23,9 · 21,8 · 23,0 ct (%65'ten sonra şarkıcının kendi sapmasında doyuyor; 16.4 ile aynı eğilim). Adaptive açıkken
+%0 / 50 / 100'de 2,4 / 11,4 / 23,5 ct (kapalı 1,7 / 17,6 / 23,0): uçlarda aynı, ortada daha sıkı. Bu sette "vibrato korundu" ve
+"geçiş" metrikleri geniş vibratoda nota değişimlerine karıştığı için kullanılmadı (16.4). ROBOTISM'in diğer kontrollere etkisi: README tablosu.
+**Algısal kalibrasyon yok** (dinleme yok).
+
+### 17.5 Adaptive (MEASURED)
+
+Varsayılan kapalı kaldı. Kod değişmedi. Eski ↔ yeni derleme, 145 kayıt: `hard_ad` ve `natural_ad` (Adaptive açık) ile Adaptive kapalı
+bütün sabit tonlu ayarlar **bit düzeyinde aynı** (17.6). Varsayılan ayarda açık / kapalı (145 kayıt, yeni derleme): seviye farkı
+−0,11 / −0,11 dB, 20–150 Hz patlama 423 / 421, zarf sıçraması 771 / 782, alt-oktav p95 11,7 / 11,3 dB. Parametre değiştirmediği
+INSPECTED (`PitchCorrector.h`); dinleme yok (paketler 16.8).
+
+### 17.6 Regresyon: eski (`5d2e4e3`) ↔ yeni (MEASURED, `bitexact/`)
+
+| Ayar (145 kayıt) | Bit düzeyinde aynı |
+|---|---|
+| hard, natural, Major-C %50, düzeltme kapalı, transpoze +12, formant −12, hard + Adaptive, natural + Adaptive, HQ + MIX %50 | 145 / 145 (her biri) |
+| varsayılan (Key Auto) | 47 / 145 (farkın nedeni ton kararları; en büyük örnek farkı 1,85) |
+
+Varsayılan ayar, yeni ↔ eski (`matrix_default/summary.md`): algılayıcı metrikleri aynı; seviye farkı −0,11 (−0,12) dB, |seviye| 0,42
+(0,44) dB, 20–150 Hz patlama 421 (429), zarf sıçraması 782 (774), alt-oktav p95 11,3 (13,9) dB, hedef sapması p90 1,24 (1,13) ct.
+
+### 17.7 Host / DAW
+
+| Host | Sonuç |
+|---|---|
+| JUCE VST3 host (PluginTest `--vst3`, Linux) | tarama, yükleme, kimlik, gecikme 960, 25 otomasyon parametresi, ses, editör ✓ (MEASURED) |
+| CI Windows / macOS / Linux | çalıştırma 44471065358 (`d9d0edd`), sonuç commit sonrası README'deki Actions sayfasında |
+| REAPER, FL Studio, diğer DAW'lar | **NOT TESTED** (REAPER indirme sitesi ağ politikasınca kapalı: CONNECT 403; FL Studio'nun Linux sürümü yok). Kit: `daw_test/`, 1.1 kontrolleri eklendi |
+| pluginval | **NOT TESTED** (önceki oturumdan kalan resmi v1.0.4 ikilisinin çalıştırılması izin denetimince reddedilmişti; bu geçişte yeniden denenmedi) |
+
+### 17.8 CPU, bellek, uzun çalışma (MEASURED, paylaşımlı sanal makine)
+
+S17 (30 dk, stereo 48 kHz, 256 örneklik blok; her 2 s rastgele bütün parametreler, her dakika kilit / yeniden analiz isteği, her 5 dk
+REALTIME geçişi): çıkış sonlu, bellek (RSS) 1. dakikada 13 768 kB → sonda 13 800 kB (büyüme yok), sondaki tutulan notalar 0,00 ct,
+blok ortalaması 113 µs (bütçe 5 333 µs). En uzun blok 11,1 ms: ölçüm sırasında 4 çekirdekte başka ölçüm çalışıyordu, güvenilir değil;
+gerçek donanımda yeniden ölçülmeli. Ses iş parçacığında yeni bellek ayırma / kilit yok (INSPECTED: istek posta kutusu atomik,
+`KeyDetector::reset / lockTo` sabit diziler).
+
+### 17.9 Dinleme ile doğrulanması gerekenler
+
+1. Auto Key kilitlenmeden önceki "en yakın yarım ses" düzeltmesi, eski sürümün (bazen yanlış) dizi düzeltmesine göre nasıl duyuluyor?
+2. ROBOTISM 0 / 10 / 25 / 35 / 50 / 65 / 80 / 90 / 100 algısal olarak eşit adımlı mı?
+3. Adaptive açık / kapalı: vibrato, kayma ve hızlı koşularda tercih.
+4. Preset ve Key / Scale değişiminde duyulur bir tık / sıçrama var mı (ölçüm: yok)?
+5. 16.8'deki açık paketler (seviye dengelemesinin yan etkileri, oktav, bas vibratosu).
+
+Paket üretici: `tests/make_listening_pack.py` (kör, -20 LUFS, gecikme hizalı, cevap anahtarı ayrı, Türkçe form).
+
+### 17.10 Test durumu
+
+| | Önce (`5d2e4e3`) | Şimdi |
+|---|---|---|
+| EngineTest | 58/58 | **66/66** |
+| PluginTest (`--vst3`, ekran görüntüleri) | 50/50 | **69/69** |
+| AuditProbe | S1–S16 | S1–**S17** (S11 uzun Auto Key senaryoları, 9 nokta ROBOTISM) |
+| Derleme | 0 uyarı | 0 uyarı (proje kaynakları; GCC 13.3, JUCE 8.0.6) |
+| Gerçek DAW / pluginval / dinleme | NOT TESTED | **NOT TESTED** |

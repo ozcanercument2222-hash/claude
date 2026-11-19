@@ -1,14 +1,16 @@
 //==============================================================================
 //  VSTM Tune - denetim olcumleri (VSTM_TUNE_AUDIT.md, bolum 6), JUCE gerektirmez
 //
-//    VSTMTune_AuditProbe <cikis_klasoru> [S1 ... S16]
+//    VSTMTune_AuditProbe <cikis_klasoru> [S1 ... S17]
 //    g++ -std=c++17 -O2 -I Source tests/audit_probe.cpp -o audit_probe
 //
 //  Sentetik vokal senaryolari: buyuk sicramalar (S1), NaN/Inf giris (S2), REALTIME
 //  gecisi (S3), ornekleme hizlari (S4), blok boyutlari (S5), stereo (S6), otomasyon
 //  stresi (S7), CPU (S8), 10 dk (S9), unvoiced (S10), Auto key (S11), formant /
 //  transpoze (S12), MIX (S13), ROBOTISM taramasi (S14), NaN parametre (S15), ROBOTISM'in
-//  dort ses tipinde (bas, tenor, alto, soprano) taramasi (S16).
+//  dort ses tipinde (bas, tenor, alto, soprano) taramasi (S16), 30 dakika + bellek, otomasyon,
+//  ton istekleri ve REALTIME gecisleriyle (S17; VSTM_AUDIT_S17_MINUTES ile kisaltilabilir).
+//  ROBOTISM noktalari (final quality pass): 0 / 10 / 25 / 35 / 50 / 65 / 80 / 90 / 100.
 //  Her senaryo <cikis_klasoru>/measurements.jsonl dosyasina bir JSON satiri ekler,
 //  bazilari WAV / CSV yazar. Gecti / kaldi karari vermez: olcum aracidir; karar
 //  veren kontroller tests/engine_test.cpp icindedir. Kanit etiketi: MEASURED.
@@ -19,6 +21,7 @@
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -27,6 +30,9 @@
 #include <random>
 #include <string>
 #include <vector>
+#if defined (__linux__)
+ #include <unistd.h>
+#endif
 
 using namespace vstm;
 
@@ -610,6 +616,113 @@ void longRun()
 }
 
 //==============================================================================
+//  S17  30 minutes (final quality pass): stereo, every 2 s a random parameter set, every minute
+//       an Auto key request (lock / re-analyze), REALTIME switched every 5 minutes. Output finite,
+//       held notes still tuned at the end, block time, and the process memory (Linux: resident
+//       set from /proc/self/statm) after 1 minute and at the end: the engine must not grow.
+//==============================================================================
+long residentKb()
+{
+#if defined (__linux__)
+    FILE* f = std::fopen ("/proc/self/statm", "r");
+    if (! f) return -1;
+    long pages = 0, resident = 0;
+    const int got = std::fscanf (f, "%ld %ld", &pages, &resident);
+    std::fclose (f);
+    return got == 2 ? resident * (sysconf (_SC_PAGESIZE) / 1024) : -1;
+#else
+    return -1;
+#endif
+}
+
+void longRunMemory()
+{
+    const double sr = 48000.0;
+    const char* env = std::getenv ("VSTM_AUDIT_S17_MINUTES");
+    const double minutes = env != nullptr ? std::clamp (std::atof (env), 1.0, 120.0) : 30.0;
+    const auto tile = synth (sr, 20.0, melody ({ 57, 59, 60, 62, 64, 62, 60, 59, 57, 55 }, 2.0, 0.04, 0.3));
+    auto e = std::make_unique<TuneEngine>();
+    e->prepare (sr, true);
+    auto p = hardParams();
+    e->setParams (p);
+    std::mt19937 rng (17);
+    std::uniform_real_distribution<float> u (0.0f, 1.0f);
+    const int block = 256;
+    std::vector<float> l ((size_t) block), r ((size_t) block);
+    const size_t total = (size_t) (minutes * 60.0 * sr);
+    const size_t tailFrom = total - std::min (total, (size_t) (20.0 * sr));   // the last 20 s: hard tune, no automation
+    bool finite = true;
+    double worstUs = 0.0, sumUs = 0.0;
+    long kb1 = -1;
+    size_t blocks = 0, tilePos = 0;
+    std::vector<float> lastTile;
+    lastTile.reserve (tile.size() + (size_t) block);
+    const size_t autoEvery = (size_t) (2.0 * sr / block), keyEvery = (size_t) (60.0 * sr / block), rtEvery = (size_t) (300.0 * sr / block);
+    bool tailStarted = false;
+    const auto t0 = std::chrono::steady_clock::now();
+    for (size_t pos = 0; pos < total; pos += (size_t) block, ++blocks)
+    {
+        const bool tail = pos >= tailFrom;
+        if (tail && ! tailStarted)
+        {
+            tailStarted = true;
+            p = hardParams();
+            tilePos = 0;
+            if (! e->isRealtime()) e->setRealtime (true);
+        }
+        if (! tail && blocks % autoEvery == 0)
+        {
+            p.amount = u (rng); p.retuneMs = 200.0f * u (rng); p.humanize = u (rng); p.robotism = u (rng);
+            p.vibratoScale = 2.0f * u (rng); p.formant = 24.0f * u (rng) - 12.0f; p.transpose = std::round (24.0f * u (rng) - 12.0f);
+            p.mix = u (rng); p.scale = (int) (u (rng) * ((float) kNumScales - 0.01f)); p.key = (int) (u (rng) * 12.99f) - 1;
+            p.adaptive = u (rng) > 0.5f; p.followKeyChanges = u (rng) > 0.5f; p.range = (int) (u (rng) * 2.99f);
+        }
+        e->setParams (p);
+        if (! tail && blocks > 0 && blocks % keyEvery == 0)
+        {
+            if ((blocks / keyEvery) % 2 == 0) e->requestKeyReanalyze();
+            else e->requestKeyLock ((int) (u (rng) * 11.99f), u (rng));
+        }
+        if (! tail && blocks > 0 && blocks % rtEvery == 0)
+            e->setRealtime (! e->isRealtime());
+        for (int i = 0; i < block; ++i)
+        {
+            l[(size_t) i] = tile[tilePos];
+            r[(size_t) i] = 0.5f * tile[tilePos];
+            tilePos = (tilePos + 1) % tile.size();
+        }
+        float* ch[2] = { l.data(), r.data() };
+        const auto b0 = std::chrono::steady_clock::now();
+        e->process (ch, 2, block);
+        const double us = std::chrono::duration<double, std::micro> (std::chrono::steady_clock::now() - b0).count();
+        worstUs = std::max (worstUs, us);
+        sumUs += us;
+        TuneEngine::DisplayPoint d;
+        while (e->display.pop (d)) {}
+        for (int i = 0; i < block; ++i)
+            finite = finite && std::isfinite (l[(size_t) i]) && std::isfinite (r[(size_t) i]);
+        if (tail) lastTile.insert (lastTile.end(), l.begin(), l.end());
+        if (kb1 < 0 && (double) pos / sr >= 60.0) kb1 = residentKb();
+    }
+    const double secs = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
+    const long kbEnd = residentKb();
+    // the last 20 s are the melody from its start, hard-tuned 30 ct sharp notes: every note centre
+    // (2 s notes) against its target, after the latency
+    const double notes[] = { 57, 59, 60, 62, 64, 62, 60, 59, 57, 55 };
+    double worst = 0.0;
+    const int lat = e->getLatencySamples();
+    for (int k = 1; k < 9; ++k)
+    {
+        const double target = midiToHz (notes[k]);
+        const double c = cents (measureHz (lastTile, sr, (long) ((k * 2.0 + 1.0) * sr) + lat, (int) (sr * 0.2), target), target);
+        worst = std::max (worst, std::abs (c));
+    }
+    jline (fmt ("{\"scenario\":\"S17_long_run_memory\",\"minutes\":%.0f,\"finite\":%s,\"rss_kb_after_1min\":%ld,\"rss_kb_end\":%ld,"
+                "\"block_mean_us\":%.1f,\"block_max_us\":%.1f,\"block_budget_us\":%.1f,\"render_seconds\":%.1f,\"worst_held_note_ct_end\":%.2f}",
+                minutes, finite ? "true" : "false", kb1, kbEnd, sumUs / (double) blocks, worstUs, block / sr * 1e6, secs, worst));
+}
+
+//==============================================================================
 //  S10  noise, breath, consonant-like bursts: false voicing and level
 //==============================================================================
 void unvoiced()
@@ -656,9 +769,9 @@ void unvoiced()
 void autoKey()
 {
     const double sr = 48000.0;
-    auto keyTrace = [&] (const std::vector<float>& x, int scale)
+    auto keyTrace = [&] (const std::vector<float>& x, int scale, bool follow = false)
     {
-        auto p = defaultParams(); p.key = -1; p.scale = scale;
+        auto p = defaultParams(); p.key = -1; p.scale = scale; p.followKeyChanges = follow;
         auto e = std::make_unique<TuneEngine>();
         e->prepare (sr, true);
         e->setParams (p);
@@ -681,7 +794,9 @@ void autoKey()
                 last = k;
             }
         }
-        return fmt ("\"first_key_s\":%.2f,\"trace\":[%s]", firstKeyAt, trace.c_str());
+        return fmt ("\"first_key_s\":%.2f,\"trace\":[%s],\"end_state\":%d,\"end_candidate\":\"%s\",\"end_confidence\":%.3f",
+                    firstKeyAt, trace.c_str(), e->keyState.load(), e->keyCandidate.load() < 0 ? "none" : noteName (e->keyCandidate.load()),
+                    e->keyConfidence.load());
     };
     // a) one note only (C4) for 5 s, Major
     {
@@ -709,6 +824,24 @@ void autoKey()
         auto x = synth (sr, 8.0, melody (std::vector<double> (aMin, aMin + 16), 0.5, 0.03, 0.1));
         jline (fmt ("{\"scenario\":\"S11_auto_key\",\"case\":\"A minor melody, scale Major selected\",%s}", keyTrace (x, kMajor).c_str()));
         jline (fmt ("{\"scenario\":\"S11_auto_key\",\"case\":\"A minor melody, scale Minor selected\",%s}", keyTrace (x, kMinor).c_str()));
+    }
+    // e) final quality pass (one-shot lock): 24 s of C major, then 8 s in G major; follow key changes off / on
+    {
+        std::vector<double> m;
+        const double cMaj[] = { 60, 62, 64, 65, 67, 69, 71, 72, 67, 64, 65, 62, 60, 64, 67, 60 };
+        const double gMaj[] = { 67, 69, 71, 72, 74, 76, 78, 79, 74, 71, 72, 69, 67, 71, 74, 66 };
+        for (int r = 0; r < 3; ++r) for (double n : cMaj) m.push_back (n);
+        for (double n : gMaj) m.push_back (n);
+        auto x = synth (sr, 32.0, melody (m, 0.5, 0.03, 0.1));
+        jline (fmt ("{\"scenario\":\"S11_auto_key\",\"case\":\"C major 0-24 s then G major 24-32 s, follow off\",%s}", keyTrace (x, kMajor).c_str()));
+        jline (fmt ("{\"scenario\":\"S11_auto_key\",\"case\":\"C major 0-24 s then G major 24-32 s, follow ON\",%s}", keyTrace (x, kMajor, true).c_str()));
+    }
+    // f) pentatonic only (C D E G A), 20 s: no note tells C, F and G major apart
+    {
+        std::vector<double> m;
+        for (int r = 0; r < 5; ++r) for (double n : { 60.0, 62.0, 64.0, 67.0, 69.0, 67.0, 64.0, 62.0, 60.0, 64.0, 67.0, 72.0, 69.0 }) m.push_back (n);
+        auto x = synth (sr, 20.0, melody (m, 0.3, 0.03, 0.1));
+        jline (fmt ("{\"scenario\":\"S11_auto_key\",\"case\":\"pentatonic C D E G A 20 s, scale Major\",%s}", keyTrace (x, kMajor).c_str()));
     }
 }
 
@@ -776,7 +909,7 @@ void robotismSweep()
     auto step = synth (sr, 2.0, [] (double t) { const double k = std::clamp ((t - 1.0) / 0.02, 0.0, 1.0); return midiToHz (57.0 + 3.0 * k); });
     auto vib = synth (sr, 2.0, [] (double t) { return midiToHz (57.0 + 0.5 * std::sin (2.0 * kPi * 5.5 * t)); });
     auto sharp = synth (sr, 2.0, [] (double) { return midiToHz (57.40); });
-    for (const float rb : { 0.0f, 0.10f, 0.20f, 0.35f, 0.50f, 0.65f, 0.80f, 0.90f, 1.0f })
+    for (const float rb : { 0.0f, 0.10f, 0.25f, 0.35f, 0.50f, 0.65f, 0.80f, 0.90f, 1.0f })
     {
         auto p = defaultParams(); p.scale = kMajor; p.key = 0; p.robotism = rb;      // retune 15 ms, humanize 35 %
         const auto a = runMono (step, sr, p);
@@ -834,7 +967,7 @@ void robotismVoices()
         auto sharp = synth (sr, 2.0, [b] (double) { return midiToHz (b + 0.40); }, vc.v);
         // measurement window: at least 1.5 periods of the lower note
         const int win = std::max ((int) (sr * 0.008), (int) (1.5 * sr / midiToHz (b)));
-        for (const float rb : { 0.0f, 0.10f, 0.20f, 0.35f, 0.50f, 0.65f, 0.80f, 0.90f, 1.0f })
+        for (const float rb : { 0.0f, 0.10f, 0.25f, 0.35f, 0.50f, 0.65f, 0.80f, 0.90f, 1.0f })
         {
             auto p = defaultParams(); p.scale = kChromatic; p.key = 0; p.robotism = rb; p.range = vc.range;   // retune 15 ms, humanize 35 %
             const auto a = runMono (step, sr, p);
@@ -908,7 +1041,7 @@ int main (int argc, char** argv)
 {
     if (argc < 2 || std::strcmp (argv[1], "--help") == 0)
     {
-        std::fprintf (stderr, "usage: VSTMTune_AuditProbe <output_folder> [S1 ... S16]   (no scenario = all)\n");
+        std::fprintf (stderr, "usage: VSTMTune_AuditProbe <output_folder> [S1 ... S17]   (no scenario = all)\n");
         return 2;
     }
     OUT = argv[1];
@@ -932,6 +1065,7 @@ int main (int argc, char** argv)
     if (want ("S15")) nanParameter();
     if (want ("S16")) robotismVoices();
     if (want ("S9")) longRun();
+    if (want ("S17")) longRunMemory();
     if (want ("S8")) cpu();
     std::fclose (J);
     return 0;

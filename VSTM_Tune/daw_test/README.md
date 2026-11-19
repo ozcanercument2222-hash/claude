@@ -97,11 +97,18 @@ FL Studio betikle kurulamıyor; adımlar elle:
 | Freeze / bounce (R13) | | | |
 | Bypass: DAW bypass'ı ↔ AUTOTUNE ON senkron, tık yok | | | |
 | Otomasyon yazma ve okuma (R09; 25 parametre otomasyona açık) | | | |
-| Preset: kullanıcı preseti kaydet → başka ayar → geri yükle | | | |
+| Preset: kullanıcı preseti kaydet → başka ayar → geri yükle → yeniden adlandır → sil | | | |
 | Gecikme / PDC (R02, R03); çalarken REALTIME değişimi | | | |
 | Editör aç / kapat / boyutlandır, HiDPI %125 / %150 / %200 | | | |
 | SCALE menüsü → "Custom scale…" klavye penceresi SCALE kutusunun yanında açılıyor, notalar tıklanıyor | | | |
-| ADAPTIVE anahtarı ve KEY kutusunda "Auto · C" / "Auto · C?" gösterimi | | | |
+| ADAPTIVE anahtarı; KEY kutusunda "Auto · C? 41%" (aday, kilitsiz) / "Auto · C" + kilit simgesi (kilitli), KEY yanında "VOKALDEN TAHMİN" | | | |
+| **1.1 Auto Key kilidi:** şarkı söylerken kilitlenir; kilitten sonra 30–60 s şarkıda ton DEĞİŞMEZ (yanlış / geçiş notaları dahil) | | | |
+| **1.1 Auto Key oturumu:** kilitliyken projeyi kaydet → kapat → aç: KEY kutusu aynı tonu kilitli gösterir (ses çalmadan önce de) | | | |
+| **1.1 KEY menüsü:** "Şimdi kilitle", "Yeniden analiz et" (kilit ve kanıt silinir, "…"), "Ton değişimlerini izle" (varsayılan kapalı) | | | |
+| **1.1 Transport / tampon değişimi:** çal-durdur, tampon boyutu ya da örnekleme hızı değişince kilitli ton kaybolmaz | | | |
+| **1.1 Presetler ton ve diziyi korur:** KEY = A, SCALE = Minor seç; `<` `>` ile fabrika presetlerini gez: KEY / SCALE değişmez | | | |
+| **1.1 Preset menüsü:** "Presetler ton ve diziyi korur" kapatılınca kullanıcı preseti kendi ton / dizisini yükler; "Yeniden adlandır" | | | |
+| **1.1 Klavye:** knob'a tıkla → ok tuşları %1, Shift + ok bir adım, Delete varsayılan; DAW otomasyonu her tuşu bir hareket olarak kaydeder; boşluk tuşu DAW'ı çalıştırır | | | |
 | Aynı projede birden fazla kopya (bağımsız ayarlar) | | | |
 | Projeyi yeniden açma (R10) | | | |
 | DAW kapanırken / eklenti silinirken çökme yok | | | |

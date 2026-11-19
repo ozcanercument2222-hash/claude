@@ -2,8 +2,8 @@
 """ROBOTISM sweep on real recordings, per voice group (evidence label: MEASURED).
 
     robotism_sweep.py --manifest vocals.json --probe build/VSTMTune_WavProbe --out DIR
-                      [--points 0,10,20,35,50,65,80,90,100] [--only-tech vibrato,straight] [--jobs 4]
-                      [--retune 15 --humanize 0.35]
+                      [--points 0,10,25,35,50,65,80,90,100] [--only-tech vibrato,straight] [--jobs 4]
+                      [--retune 15 --humanize 0.35] [--extra "adaptive=1"]
 
 For every input and ROBOTISM value the input is rendered (chromatic, so the knob alone decides
 how hard the notes are pulled) and both the dry and the rendered pitch are tracked with the same
@@ -120,10 +120,10 @@ def transitions(dm, dv, wm, wv):
 
 
 def one(job):
-    f, rb, probe, out, retune, humanize = job
+    f, rb, probe, out, retune, humanize, extra = job
     wav = Path(out) / "wav" / f"{f['id']}__r{rb}.wav"
     args = [probe, f["path"], str(wav), "key=0", "scale=0", f"robotism={rb / 100.0}", f"retune={retune}",
-            f"humanize={humanize}", f"range={f.get('range', 1)}"]
+            f"humanize={humanize}", f"range={f.get('range', 1)}"] + extra.split()
     p = subprocess.run(args, capture_output=True, text=True)
     if p.returncode != 0:
         return {"id": f["id"], "group": f.get("group"), "robotism": rb, "error": p.stderr[-300:]}
@@ -150,11 +150,12 @@ def main():
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--probe", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--points", default="0,10,20,35,50,65,80,90,100")
+    ap.add_argument("--points", default="0,10,25,35,50,65,80,90,100")
     ap.add_argument("--only-tech", default="")
     ap.add_argument("--retune", type=float, default=15.0)
     ap.add_argument("--humanize", type=float, default=0.35)
     ap.add_argument("--jobs", type=int, default=4)
+    ap.add_argument("--extra", default="", help="more WavProbe name=value pairs for every render, e.g. adaptive=1")
     a = ap.parse_args()
     man = json.loads(Path(a.manifest).read_text())["files"]
     if a.only_tech:
@@ -162,7 +163,7 @@ def main():
         man = [f for f in man if f.get("technique", "song") in keep or not f["id"].startswith("vs_")]
     pts = [int(x) for x in a.points.split(",")]
     (Path(a.out) / "wav").mkdir(parents=True, exist_ok=True)
-    jobs = [(f, rb, a.probe, a.out, a.retune, a.humanize) for f in man for rb in pts]
+    jobs = [(f, rb, a.probe, a.out, a.retune, a.humanize, a.extra) for f in man for rb in pts]
     with ProcessPoolExecutor(max_workers=a.jobs) as ex:
         res = list(ex.map(one, jobs))
     Path(a.out, "sweep.json").write_text(json.dumps(res, indent=1))

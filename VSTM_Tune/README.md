@@ -1,7 +1,7 @@
 # VSTM Tune – gerçek zamanlı vokal autotune
 
 Tek düğmeyle **robotik ↔ insansı** arasında gezinen, gerçek zamanlı perde düzeltme plugin'i.
-Formatlar: **VST3**, **AU** (yalnız macOS), **Standalone**. Mono ve stereo.
+Formatlar: **VST3**, **AU** (yalnız macOS), **Standalone**. Mono ve stereo. Sürüm **1.1.0** (değişiklikler: `RELEASE_NOTES.md`).
 
 ![VSTM Tune](docs/vstm_tune.png)
 
@@ -37,7 +37,7 @@ vokali gruplarında aynı sırayı izler. Algısal kalibrasyon (insan dinlemesi)
 
 | Kontrol | Açıklama |
 |---|---|
-| **KEY** | Tonik. **Auto**: şarkıyı dinleyip tonu kendisi bulur ve ne kadar emin olduğunu gösterir: `Auto · A` (emin), `Auto · A?` (henüz emin değil ya da şarkı tondan çıktı), `Auto · …` (dinliyor). Ton kilitlenene kadar en yakın yarım sese düzeltir. Tek nota ya da iki nota ton saymaz; aynı notaları paylaşan tonlar ayrılmadan karar vermez; modülasyonu ~1 s kararlılıkla izler, sessizlikte ve kromatik geçiş notalarında tonu değiştirmez. |
+| **KEY** | Tonik. **Beat'in tonunu biliyorsan buradan seç** (en güvenilir yol: seçtiğin ton sen değiştirene kadar sabit kalır). **Auto** tonu yalnızca **vokalden tahmin eder** (beat'i duymaz; KEY yanında `VOKALDEN TAHMİN` yazar): `Auto · …` dinliyor, `Auto · A? 41%` kilitlenmemiş tahmin ve güveni, `Auto · A` + 🔒 kilitli. Kilitlenene kadar notalar en yakın yarım sese gider. Bir kez kilitlenince söylenen notalar (yanlış, kromatik, geçiş notası, vibrato, melisma) tonu **değiştirmez**. Ayrıntı: aşağıda *Auto Key*. |
 | **SCALE** | İzinli notalar: Chromatic, Major, Minor, Harmonic / Melodic Minor, Major / Minor Pentatonic, Blues, Dorian, Phrygian, Lydian, Mixolydian, **Hicaz**, **Özel dizi** (menünün sonunda: `Custom scale…`). |
 | **Özel dizi (Custom scale)** | Bir oktavlık klavyede 12 notayı tek tek aç / kapat. Notalar tona göre tutulur (1, b2 … 7): ton değişince ya da Auto yeni tonu bulunca dizi de onunla kayar; tonik halkayla gösterilir. İlk açılışta seçili dizinin notalarıyla başlar; `Diziden kopyala` istediğin an tekrar alır. Preset ve projeyle kaydedilir, otomasyona açıktır. |
 | **PITCH CORRECTION** | Hedef notaya olan mesafenin ne kadarı düzeltilsin (0–100%). |
@@ -56,7 +56,8 @@ vokali gruplarında aynı sırayı izler. Algısal kalibrasyon (insan dinlemesi)
 noktalar nota geçişleri. Kafadaki etiket o an söylenen notayı ve girişin o notadan sapmasını gösterir (`A4 −16 ct`).
 Ses yokken ekran durur (gereksiz CPU yok).
 
-**Üst bar:** preset seçici (`<` `>` veya isme tıkla: 14 fabrika preseti + kendi presetlerin; değiştirince isim yanında nokta çıkar),
+**Üst bar:** preset seçici (`<` `>` veya isme tıkla: 12 fabrika preseti Robotik / Doğal / Efekt grupları + kendi presetlerin;
+değiştirince isim yanında nokta çıkar; menüde kaydet, **yeniden adlandır**, sil, klasörü aç ve **Presetler ton ve diziyi korur**),
 ⤓ preset kaydet, ▢ pencere boyutu (768 × 512 … 1536 × 1024, köşeden de sürüklenir), ⚙ ayarlar (vokal aralığı:
 Soprano / Alto, Tenor, Bas / Bariton; tüm parametreleri sıfırla; hakkında).
 
@@ -67,6 +68,61 @@ Dili zorlamak için ortam değişkeni: `VSTM_TUNE_LANG=de` (en, tr, de, fr, it, 
 
 **Fare:** düğmelerde dikey sürükle, **Shift** = ince ayar, **çift tık** = varsayılan, tekerlek, **değere tıkla** = yazarak gir,
 **sağ tık** = DAW'ın parametre menüsü (otomasyon, MIDI learn).
+**Klavye:** knob / kaydırıcıya tıkla ya da **Tab** ile gel: ok tuşları %1, **Shift** + ok bir adım, PageUp / PageDown %10,
+Home / End uçlar, Delete varsayılan; KEY / SCALE kutusu ve alt anahtarlar Enter / Boşluk ile. Her tuş DAW'a tek bir otomasyon
+hareketi olarak gider; kullanılmayan tuşlar (ör. Boşluk = DAW'ı çal) DAW'a geçer. Odak halkası yalnız Tab ile gelince görünür.
+
+## Auto Key: vokalden tahmin, bir kez kilit (1.1)
+
+Kullanıcının iş akışında ton **beat'e göre** seçilir. Plugin yalnız vokali duyar; Auto bu yüzden bir *tahmindir* ve beat'in
+tonunu garanti etmez (eksik notalı bir ezgide tonik / majör-minör belirsiz kalabilir). Sidechain ile beat analizi **yok**.
+
+| Durum | KEY kutusu | Düzeltme |
+|---|---|---|
+| Dinliyor (kanıt yok) | `Auto · …` | en yakın yarım ses (güvenli geri dönüş) |
+| Aday (kilitsiz) | `Auto · A? 41%` (yüzde = motorun hesapladığı güven) | en yakın yarım ses |
+| Kilitli | `Auto · A` 🔒 | A + seçili dizi; **söylenen notalar değiştirmez** |
+| Kromatik dizi | `Auto` | ton gerekmez |
+
+- **Kilit ne zaman:** yeterli ve *ayırt edici* kanıt toplanınca: uzun bellekte ~4 s'lik net şarkı, güven ≥ %50 ve aynı aday
+  arka arkaya 6 bakışta (her bakışta yeni şarkı). Gerçek kayıtlarda tipik olarak 10–20 s. Ayırt edici nota yoksa (ör.
+  yalnız C D E G A: C, F ve G majörün hepsine uyar) kilit olmaz, aday gösterilir.
+- **KEY menüsü (Auto seçiliyken):** durum satırı, **Şimdi kilitle** (görünen adayı), **Önerilen tona geç** (kilitliyken vokal
+  açıkça başka bir tonu gösterirse), **Yeniden analiz et** (kanıt ve kilit silinir, baştan dinler), **Ton değişimlerini izle**
+  (modülasyon; isteğe bağlı, varsayılan kapalı; açıkken kilitli ton ~1 s kararlı kanıtla değişebilir).
+- **Kalıcılık:** kilit, host'un yeniden hazırlamasından (çal / durdur, tampon / örnekleme hızı değişimi) etkilenmez ve projeyle
+  kaydedilir (oturum sürümü 2: `autoKeyLock`, `autoKeyConf`, `followKeyChanges`, `presetsKeepKey`). 1.0 projeleri kilitsiz açılır.
+- **SCALE türü değişince** kilitli tonik korunur; mevcut kanıt yeni dizide başka bir toniği açıkça (güven ≥ %50) gösteriyorsa ona
+  geçilir (ör. A minör ezgide Minor → Major: A → C, aynı notalar). Özel dizinin notalarını düzenlemek tonu oynatmaz.
+- **Ölçüm (MEASURED, 145 gerçek kayıt, varsayılan ayar):** kilitten sonra ton değişimi 35 → **0** (eski sürüm 23 kayıtta
+  avlanıyordu); kilitlenen kayıtlar 99 → 21 (temkinli); şarkılarda kilidin, kaydın tamamının gösterdiği tonla uyumu
+  47/55 → **20/20**; medyan kilit süresi 5,5 → 17,5 s. Ayrıntı: `VSTM_TUNE_AUDIT.md` 17.2.
+
+## Presetler: ton ve dizi şarkıya aittir (1.1)
+
+**Presetler ton ve diziyi korur** (preset menüsünde, varsayılan **açık**, projeyle kaydedilir): preset yüklemek KEY, SCALE ve
+özel diziyi değiştirmez; yalnız sesi (ROBOTISM, RETUNE, HUMANIZE, PITCH CORRECTION, vibrato, formant, transpoze, MIX, Adaptive)
+değiştirir. Kapatılırsa 1.0'daki gibi preset kendi ton ve dizisini de yükler (kullanıcı presetleri bunları dosyada saklamaya
+devam eder). **Tüm parametreleri sıfırla** (⚙) her şeyi, ton ve dizi dahil, varsayılana döndürür.
+Fabrika presetleri yalnız ses ayarıdır: 1.0'daki "Hicaz Vocal" ve "Chromatic Fix"in tek farkı diziydi, kaldırıldı (Hicaz ve
+Kromatik SCALE menüsünde; bu adlı eski projeler değerleriyle açılır). Preset değişiminde tık ölçülmedi: geçişteki en büyük örnek
+adımı sabit durumun 1,17 katı (sınır 1,5; MEASURED, PluginTest 3g).
+
+## ROBOTISM diğer kontrolleri nasıl etkiler (deterministik)
+
+ROBOTISM ayarların üstünde çalışan bir makrodur; parametrelerin **değerini değiştirmez**, etkilerini şöyle ölçekler
+(`dsp/PitchCorrector.h`; r = robotik yarı 0…1, h = (insansı yarı)^1,6):
+
+| | ROBOTISM 0 (Robotik) | 50 (Dengeli) | 100 (İnsansı) |
+|---|---|---|---|
+| RETUNE SPEED | yok sayılır (anında, 0 ms) | olduğu gibi | 4 kat yavaş |
+| HUMANIZE | yok sayılır | olduğu gibi | en az %40'a yükselir |
+| Nota geçişi | basamak | basamak | S-eğrisi kayma 110 ms |
+| Histerezis / bekleme | 15 ct / 14 ms | 15 ct / 22 ms | 35 ct / 52 ms |
+| Cümle başı kayış (scoop) | düzeltilir | düzeltilir | 70 ms serbest |
+| PITCH CORRECTION, VIBRATO, KEY / SCALE | her konumda olduğu gibi uygulanır | | |
+
+Ara değerler iki yarıda da sürekli ve monotondur (tablo: `VSTM_TUNE_AUDIT.md` 17.4).
 
 Kullanıcı presetleri: `<kullanıcı veri klasörü>/VSTM Audio/VSTM Tune/Presets/*.vstmpreset`
 (Windows: `%APPDATA%`, macOS: `~/Library`, Linux: `~/.config`).
@@ -169,19 +225,27 @@ cmake --build build --config Release
   ```
   Çıkış, motor gecikmesini korur ve sonuna gecikme kadar sessizlik eklenir (girişin sonu kesilmez).
   Yalnız PCM 16 / 24 / 32 bit ve 32-bit float WAV okunur; bozuk veya kısa chunk'lı dosyalar reddedilir.
-- **AuditProbe:** `VSTM_TUNE_AUDIT.md` bölüm 6'daki ölçümleri (S1–S16) sentetik sinyallerle yeniden üretir:
+- **AuditProbe:** `VSTM_TUNE_AUDIT.md` bölüm 6'daki ölçümleri (S1–S17) sentetik sinyallerle yeniden üretir:
   büyük sıçramalar, NaN / Inf, REALTIME geçişi, örnekleme hızları, blok boyutları, stereo, otomasyon stresi,
-  CPU, 10 dakika, unvoiced, Auto key, formant / transpoze, MIX, ROBOTISM taraması, ROBOTISM'in bas / tenor / alto /
-  soprano'da taraması (S16). Karar vermez, ölçer:
+  CPU, 10 dakika, unvoiced, Auto key (kilit ve modülasyon izleme), formant / transpoze, MIX, ROBOTISM taraması
+  (0 / 10 / 25 / 35 / 50 / 65 / 80 / 90 / 100), ROBOTISM'in bas / tenor / alto / soprano'da taraması (S16),
+  30 dakika + bellek, otomasyon, ton istekleri ve REALTIME geçişleriyle (S17). Karar vermez, ölçer:
   ```bash
   ./build/VSTMTune_AuditProbe olcumler            # hepsi;  tek senaryo: ... olcumler S2 S3
   ```
 - **PluginTest:** parametre varsayılanları ve yazıları, 7 dilin eksiksizliği ve diller arası değer okuma, gecikme bildirimi (20 / 40 ms), bypass, oturum kaydet / geri yükle,
-  presetler, editör; `goruntuler/` klasörüne ekran görüntüleri (her dil için `07_lang_xx.png`); `--vst3` ile derlenmiş VST3'ü bir DAW gibi yükleyip sınar.
+  Auto Key kilidinin oturumda ve `prepareToPlay`'de korunması, bozuk oturum değerleri, presetlerin tonu koruması, yeniden adlandırma,
+  preset / ton / dizi değişiminde tık, KEY kutusundaki yüzdenin motorla aynı olması, klavye ve host gesture'ları, editör;
+  `goruntuler/` klasörüne ekran görüntüleri (her dil için `07_lang_xx.png`); `--vst3` ile derlenmiş VST3'ü bir DAW gibi yükleyip sınar.
+- **Dinleme paketi:** `tests/make_listening_pack.py` kör, seviye (-20 LUFS) ve gecikme eşitlenmiş çoklu karşılaştırma paketleri,
+  cevap anahtarı ayrı, Türkçe dinleme formu ve `feedback_form.csv` (1–5 puanlı 10 ölçüt + zaman damgalı not) üretir.
 
 ## Bilinen sınırlar
 
 - Plugin imzasızdır: Windows "bilinmeyen yayıncı", macOS "doğrulanamadı" uyarısı verebilir (`KURULUM.txt`).
+- **Auto Key temkinlidir ve yalnız vokali duyar:** ayırt edici kanıt yoksa (pentatonik ezgi, üçlü arpej, rap) kilitlemez ve en yakın
+  yarım sese düzeltir; 145 kaydın 21'i kilitlendi. Beat'in tonunu biliyorsan KEY'den seç. Beat / sidechain analizi yok (DAW'da
+  doğrulanamadığı için eklenmedi).
 - Bu ortamda gerçek bir DAW içinde denenmedi (REAPER / FL Studio yok); derlenmiş VST3 JUCE'un VST3 host'uyla yüklenip
   test edildi. DAW testi için kit: `daw_test/README.md` (REAPER betiği de REAPER'da çalıştırılmadı).
 - **Adaptive deneyseldir** ve hiçbir insan dinlemesiyle doğrulanmadı; özel dizi düzenleyicisinin açılır penceresi
