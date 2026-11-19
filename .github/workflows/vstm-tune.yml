@@ -134,8 +134,10 @@ jobs:
         run: cd paket && ditto -c -k --keepParent VSTM-Tune-macOS VSTM-Tune-macOS.zip && rm -rf VSTM-Tune-macOS
 
       # Cift tiklanan kurulum paketi: VST3 + AU + uygulama dogru klasorlere (installer/macos/)
+      # Paket adimi basarisiz olsa da elle kurulum zip'i yuklensin; is "macOS kurulum testi"nde yine kirmizi olur
       - name: macOS kurulum paketi
         if: runner.os == 'macOS'
+        continue-on-error: true
         run: |
           V=$(sed -n 's/^project(VSTMTune VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
           installer/macos/build_pkg.sh build/VSTMTune_artefacts/Release "$V" "paket/VSTM Tune Kurulum.pkg"

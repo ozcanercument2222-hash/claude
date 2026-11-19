@@ -49,12 +49,16 @@ component () {
     pkgbuild --analyze --root "$WORK/root/$part" "$plist"
     # Kurulum diskte ayni kimlikli baska bir kopyaya (ornegin bir build klasorune) "tasinmasin"
     # ve ayni surum her zaman yeniden yazilsin.
-    local i=0
+    # (pkgbuild --analyze does not always write these keys: delete if present, then add)
+    local i=0 key
     while /usr/libexec/PlistBuddy -c "Print :$i" "$plist" > /dev/null 2>&1; do
-        /usr/libexec/PlistBuddy -c "Set :$i:BundleIsRelocatable false" "$plist"
-        /usr/libexec/PlistBuddy -c "Set :$i:BundleIsVersionChecked false" "$plist"
+        for key in BundleIsRelocatable BundleIsVersionChecked; do
+            /usr/libexec/PlistBuddy -c "Delete :$i:$key" "$plist" > /dev/null 2>&1 || true
+            /usr/libexec/PlistBuddy -c "Add :$i:$key bool false" "$plist"
+        done
         i=$((i + 1))
     done
+    /usr/libexec/PlistBuddy -c "Print" "$plist"
     pkgbuild --root "$WORK/root/$part" --component-plist "$plist" --identifier "$identifier" \
              --version "$VER" --install-location "$location" --scripts "$HERE/scripts" \
              "$WORK/pkgs/$part.pkg"
