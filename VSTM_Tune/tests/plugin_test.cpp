@@ -183,6 +183,52 @@ void setStateValue (juce::XmlElement& state, const char* id, const char* value)
         if (e->getStringAttribute ("id") == id)
             e->setAttribute ("value", value);
 }
+
+float plain (VSTMTuneProcessor& p, const juce::String& id) { return p.apvts.getRawParameterValue (id)->load(); }
+
+/** A C major melody, a little out of tune: enough for the automatic key to lock C. */
+Voice cMajorMelody()
+{
+    Voice v;
+    v.notes = { 60, 62, 64, 65, 67, 69, 71, 72, 67, 64, 65, 62, 60, 64, 67, 60 };
+    v.noteLen = 0.35;
+    v.detune = 0.1;
+    return v;
+}
+
+/** The session XML a processor would save. */
+std::unique_ptr<juce::XmlElement> savedXml (VSTMTuneProcessor& p)
+{
+    juce::MemoryBlock mb;
+    p.getStateInformation (mb);
+    return juce::AudioProcessor::getXmlFromBinary (mb.getData(), (int) mb.getSize());
+}
+
+void restoreXml (VSTMTuneProcessor& p, const juce::XmlElement& xml)
+{
+    juce::MemoryBlock mb;
+    juce::AudioProcessor::copyXmlToBinary (xml, mb);
+    p.setStateInformation (mb.getData(), (int) mb.getSize());
+}
+
+/** Largest sample step in [a, b) seconds of a mono render. */
+double maxStep (const std::vector<float>& y, double a, double b)
+{
+    double m = 0.0;
+    for (size_t i = (size_t) std::max (1.0, a * kFs); i < (size_t) std::min ((double) y.size(), b * kFs); ++i)
+        m = std::max (m, (double) std::abs (y[i] - y[i - 1]));
+    return m;
+}
+
+/** Counts host gestures (begin / end) and value changes of the parameters. */
+struct GestureCounter : juce::AudioProcessorListener
+{
+    int begins = 0, ends = 0, changes = 0;
+    void audioProcessorParameterChanged (juce::AudioProcessor*, int, float) override { ++changes; }
+    void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails&) override {}
+    void audioProcessorParameterChangeGestureBegin (juce::AudioProcessor*, int) override { ++begins; }
+    void audioProcessorParameterChangeGestureEnd (juce::AudioProcessor*, int) override { ++ends; }
+};
 } // namespace
 
 //==============================================================================
@@ -460,6 +506,186 @@ int main (int argc, char* argv[])
         CHECK (std::min (toC, toDs) < 5.0, "custom scale C / D# / G: D +30 ct goes to %.1f Hz (%.1f ct from C, %.1f ct from D#)", hz, toC, toDs);
     }
 
+    //--------------------------------------------------------------------------
+    std::printf ("\n=== 3e) Auto key lock in the session (state version 2) ===\n");
+    {
+        VSTMTuneProcessor a;
+        a.setPlayConfigDetails (2, 2, kFs, 512);
+        a.prepareToPlay (kFs, 512);
+        auto mel = cMajorMelody();
+        processSeconds (a, mel, 9.0);
+        const int lockedA = a.engine.detectedKey.load();
+        const auto xa = savedXml (a);
+        CHECK (lockedA == 0 && xa->getIntAttribute ("autoKeyLock", -9) == 0 && xa->getIntAttribute ("version") == VSTMTuneProcessor::kStateVersion
+                   && xa->getDoubleAttribute ("autoKeyConf") > 0.49,
+               "a locked automatic key is saved: autoKeyLock %d, autoKeyConf %.2f, version %d", xa->getIntAttribute ("autoKeyLock", -9),
+               xa->getDoubleAttribute ("autoKeyConf"), xa->getIntAttribute ("version"));
+
+        // reopen: the lock is back before any audio runs (a host may save again right away), and after
+        VSTMTuneProcessor b;
+        restoreXml (b, *xa);
+        const auto xb = savedXml (b);
+        b.setPlayConfigDetails (2, 2, kFs, 512);
+        b.prepareToPlay (kFs, 512);
+        Voice silence; silence.level = 0.0f;
+        processSeconds (b, silence, 0.1);
+        const bool backAfter = b.engine.detectedKey.load() == 0 && b.engine.keyState.load() == vstm::KeyDetector::kLocked
+                            && std::abs (b.engine.keyConfidence.load() - (float) xa->getDoubleAttribute ("autoKeyConf")) < 1e-4f;
+        b.prepareToPlay (kFs, 256);                                 // the host re-prepares (block size change)
+        processSeconds (b, silence, 0.1, nullptr, 256);
+        CHECK (xb->getIntAttribute ("autoKeyLock", -9) == 0 && backAfter && b.engine.detectedKey.load() == 0,
+               "reopened session: the lock is saved again before any audio, restored with its confidence, kept through prepareToPlay");
+
+        // the singing does not move a restored lock: 6 s of G major on the reopened instance
+        Voice g;
+        g.notes = { 67, 69, 71, 72, 74, 76, 78, 79, 74, 71, 67, 66 };
+        g.noteLen = 0.35;
+        processSeconds (b, g, 6.0);
+        CHECK (b.engine.detectedKey.load() == 0 && b.engine.keySuggestion.load() == 7,
+               "6 s of G major singing after the reopen: still C (the menu offers G: suggestion %d)", b.engine.keySuggestion.load());
+
+        // a 1.0 session (no lock saved) loaded into this instance: the lock goes, the analysis starts over
+        auto old = juce::parseXML ("<VSTMTune presetName=\"Default Preset\" uiScale=\"0.75\" version=\"1\"><PARAM id=\"robotism\" value=\"30\"/></VSTMTune>");
+        restoreXml (b, *old);
+        processSeconds (b, silence, 0.1);
+        const auto xo = savedXml (b);
+        CHECK (b.engine.detectedKey.load() == -1 && b.engine.keyState.load() == vstm::KeyDetector::kListening && ! b.getFollowKeyChanges()
+                   && b.presets.getKeepTonal() && xo->getIntAttribute ("autoKeyLock", -9) == -1,
+               "1.0 session: no lock (listening again), follow key changes off, presets keep the key");
+
+        // damaged / hand-edited properties fall back to safe defaults
+        int damagedOk = 0;
+        for (const char* bad : { "nan", "57", "abc", "-1", "" })
+        {
+            auto x = savedXml (a);
+            x->setAttribute ("autoKeyLock", bad);
+            x->setAttribute ("autoKeyConf", "inf");
+            x->setAttribute ("followKeyChanges", "maybe");
+            x->setAttribute ("presetsKeepKey", "7");
+            VSTMTuneProcessor d;
+            restoreXml (d, *x);
+            d.setPlayConfigDetails (2, 2, kFs, 512);
+            d.prepareToPlay (kFs, 512);
+            processSeconds (d, silence, 0.05);
+            if (d.engine.detectedKey.load() == -1 && ! d.getFollowKeyChanges() && d.presets.getKeepTonal() && std::isfinite (d.engine.keyConfidence.load()))
+                ++damagedOk;
+        }
+        CHECK (damagedOk == 5, "damaged autoKeyLock (nan / 57 / abc / -1 / empty), autoKeyConf inf, bad flags: no lock, defaults (%d / 5)", damagedOk);
+
+        // the two options round-trip
+        VSTMTuneProcessor e;
+        e.setFollowKeyChanges (true);
+        e.setPresetsKeepKey (false);
+        VSTMTuneProcessor f;
+        restoreXml (f, *savedXml (e));
+        CHECK (f.getFollowKeyChanges() && ! f.presets.getKeepTonal(), "session: follow key changes and presets-keep-key options come back");
+    }
+
+    //--------------------------------------------------------------------------
+    std::printf ("\n=== 3f) Presets keep the key and scale ===\n");
+    {
+        VSTMTuneProcessor p;
+        auto& pm = p.presets;
+        setParam (p, vstm::ids::key, 10.0f);                                 // A (index 10 = "A")
+        setParam (p, vstm::ids::scale, (float) vstm::kMinor);
+        setParam (p, vstm::ids::customScale, 1.0f);
+        setParam (p, vstm::ids::scaleNote (2), 0.0f);
+        bool kept = true, applied = true;
+        for (int i = 0; i < pm.getNumFactoryPresets(); ++i)
+        {
+            pm.loadPreset (i);
+            kept = kept && juce::roundToInt (plain (p, vstm::ids::key)) == 10 && juce::roundToInt (plain (p, vstm::ids::scale)) == vstm::kMinor
+                        && plain (p, vstm::ids::customScale) > 0.5f && plain (p, vstm::ids::scaleNote (2)) < 0.5f && ! pm.isDirty();
+            if (pm.getPresetName (i) == "Hard Tune") applied = applied && plain (p, vstm::ids::robotism) < 0.01f;
+            if (pm.getPresetName (i) == "Chipmunk") applied = applied && std::abs (plain (p, vstm::ids::transpose) - 7.0f) < 1e-3f;
+        }
+        CHECK (kept && applied, "all %d factory presets: key A, scale Minor and the custom scale stay; their sound settings load; not 'modified'",
+               pm.getNumFactoryPresets());
+
+        setParam (p, vstm::ids::key, 3.0f);                                  // D
+        CHECK (! pm.isDirty(), "changing the key does not mark the preset as modified (it is not part of it)");
+
+        bool noScalePreset = true;
+        for (int i = 0; i < pm.getNumFactoryPresets(); ++i)
+            noScalePreset = noScalePreset && pm.getPresetName (i) != "Hicaz Vocal" && pm.getPresetName (i) != "Chromatic Fix";
+        CHECK (noScalePreset && pm.getNumFactoryPresets() == 12 && pm.getFactoryCategory (1) == "Robotic" && pm.getFactoryCategory (11) == "Effects",
+               "factory list: 12 sound presets in categories, none named after a scale");
+
+        pm.resetAll();
+        CHECK (juce::roundToInt (plain (p, vstm::ids::key)) == 0 && juce::roundToInt (plain (p, vstm::ids::scale)) == vstm::kMajor
+                   && plain (p, vstm::ids::customScale) < 0.5f && plain (p, vstm::ids::scaleNote (2)) > 0.5f && pm.getCurrentName() == "Default Preset",
+               "Reset all parameters: key Auto, scale Major, custom scale off and default notes (everything resets)");
+
+        // an older session that names a factory preset which is gone: its values and its name come back
+        auto x = savedXml (p);
+        x->setAttribute ("presetName", "Hicaz Vocal");
+        setStateValue (*x, "scale", "12");
+        setStateValue (*x, "robotism", "45");
+        VSTMTuneProcessor q;
+        restoreXml (q, *x);
+        CHECK (q.presets.getCurrentName() == "Hicaz Vocal" && juce::roundToInt (plain (q, vstm::ids::scale)) == vstm::kHicaz
+                   && std::abs (plain (q, vstm::ids::robotism) - 45.0f) < 1e-3f && q.presets.getCurrentIndex() == -1,
+               "a 1.0 session with the removed 'Hicaz Vocal': Hicaz scale and values restored, name shown");
+    }
+
+    //--------------------------------------------------------------------------
+    std::printf ("\n=== 3g) No click when presets, key or scale change while singing ===\n");
+    {
+        // a held A3 (sung 30 ct sharp) through every factory preset, 0.5 s each; and a held E4 in C major
+        // switched to C minor (E not allowed -> Eb / F), key D minor (E allowed again), Chromatic, back
+        auto clickRatio = [] (const std::vector<float>& y, const std::vector<double>& switches)
+        {
+            double worst = 0.0;
+            for (double t : switches)
+            {
+                const double around = maxStep (y, t - 0.025, t + 0.05);
+                const double steady = std::max (maxStep (y, t - 0.30, t - 0.10), maxStep (y, t + 0.15, t + 0.35));
+                worst = std::max (worst, around / std::max (steady, 1e-9));
+            }
+            return worst;
+        };
+
+        VSTMTuneProcessor p;
+        p.setPlayConfigDetails (2, 2, kFs, 512);
+        p.prepareToPlay (kFs, 512);
+        Voice v;
+        v.notes = { 57.3 };
+        std::vector<float> y;
+        std::vector<double> switches;
+        processSeconds (p, v, 1.0, &y);
+        for (int i = 1; i < p.presets.getNumFactoryPresets(); ++i)
+        {
+            switches.push_back ((double) y.size() / kFs);
+            p.presets.loadPreset (i);
+            processSeconds (p, v, 0.5, &y);
+        }
+        const double presetWorst = clickRatio (y, switches);
+
+        VSTMTuneProcessor k;
+        k.setPlayConfigDetails (2, 2, kFs, 512);
+        k.prepareToPlay (kFs, 512);
+        setParam (k, vstm::ids::key, 1.0f);                                  // C
+        setParam (k, vstm::ids::robotism, 0.0f);
+        setParam (k, vstm::ids::retune, 0.0f);
+        setParam (k, vstm::ids::humanize, 0.0f);
+        Voice e4;
+        e4.notes = { 64.3 };
+        std::vector<float> z;
+        std::vector<double> ks;
+        processSeconds (k, e4, 1.0, &z);
+        const std::pair<const char*, float> steps[] = { { "scale", (float) vstm::kMinor }, { "key", 3.0f }, { "scale", (float) vstm::kChromatic },
+                                                        { "scale", (float) vstm::kMajor }, { "key", 1.0f } };
+        for (const auto& [id, value] : steps)
+        {
+            ks.push_back ((double) z.size() / kFs);
+            setParam (k, id, value);
+            processSeconds (k, e4, 0.6, &z);
+        }
+        const double keyWorst = clickRatio (z, ks);
+        CHECK (presetWorst <= 1.5 && keyWorst <= 1.5,
+               "largest sample step at a switch / steady state: presets %.2f, key / scale (robotic, held note) %.2f (limit 1.5)", presetWorst, keyWorst);
+    }
+
     std::printf ("\n=== 3c) User preset files ===\n");
     {
         // a throw-away folder: the test never touches the real user presets
@@ -510,7 +736,39 @@ int main (int argc, char* argv[])
         pm.loadPreset (saved);
         CHECK (saved >= 0 && std::abs (p.apvts.getRawParameterValue (vstm::ids::humanize)->load() - 11.0f) < 0.06f && ! pm.isDirty(),
                "reload the overwritten preset (humanize %s)", p.apvts.getParameter (vstm::ids::humanize)->getCurrentValueAsText().toRawUTF8());
-        CHECK (pm.deleteUserPreset (saved) && ! folder.getChildFile ("Test Save.vstmpreset").exists(), "delete it");
+        // rename: the file and the shown name follow; an existing or a factory name is refused
+        pm.loadPreset (saved);
+        const bool renamed = pm.renameUserPreset (saved, "Renamed One");
+        int renamedIdx = -1;
+        for (int i = 0; i < pm.getNumPresets(); ++i)
+            if (pm.getPresetName (i) == "Renamed One") renamedIdx = i;
+        const bool refusedUser = ! pm.renameUserPreset (renamedIdx, "C range");
+        const bool refusedFactory = ! pm.renameUserPreset (renamedIdx, "Hard Tune");
+        CHECK (renamed && renamedIdx >= 0 && pm.getCurrentName() == "Renamed One" && folder.getChildFile ("Renamed One.vstmpreset").existsAsFile()
+                   && ! folder.getChildFile ("Test Save.vstmpreset").exists() && refusedUser && refusedFactory
+                   && juce::XmlDocument::parse (folder.getChildFile ("Renamed One.vstmpreset"))->getStringAttribute ("name") == "Renamed One",
+               "rename a user preset (file, name inside, shown name); an existing name or a factory name is refused");
+        saved = renamedIdx;
+
+        // a user preset still stores its key and scale: they load only with "presets keep key and scale" off
+        setParam (p, vstm::ids::key, 3.0f);                                  // D
+        setParam (p, vstm::ids::scale, (float) vstm::kDorian);
+        CHECK (pm.saveUserPreset ("Song In D"), "save a preset with key D, Dorian");
+        setParam (p, vstm::ids::key, 0.0f);
+        setParam (p, vstm::ids::scale, (float) vstm::kMajor);
+        int songIdx = -1;
+        for (int i = 0; i < pm.getNumPresets(); ++i)
+            if (pm.getPresetName (i) == "Song In D") songIdx = i;
+        pm.loadPreset (songIdx);
+        const bool keptAuto = juce::roundToInt (plain (p, vstm::ids::key)) == 0 && juce::roundToInt (plain (p, vstm::ids::scale)) == vstm::kMajor;
+        pm.setKeepTonal (false);
+        pm.loadPreset (songIdx);
+        const bool loadedD = juce::roundToInt (plain (p, vstm::ids::key)) == 3 && juce::roundToInt (plain (p, vstm::ids::scale)) == vstm::kDorian;
+        pm.setKeepTonal (true);
+        pm.deleteUserPreset (songIdx);
+        CHECK (keptAuto && loadedD, "the preset file keeps D Dorian: not applied while presets keep the key, applied when that is off (1.0 behaviour)");
+
+        CHECK (pm.deleteUserPreset (saved) && ! folder.getChildFile ("Renamed One.vstmpreset").exists(), "delete it");
 
         vstm::PresetManager::setUserPresetFolderOverride ({});
         folder.deleteRecursively();
@@ -561,6 +819,88 @@ int main (int argc, char* argv[])
                    "custom scale call-out: opened twice -> %d box, a click outside removes it (%d left), window closed while it is open -> no crash",
                    (int) open.size(), (int) afterDismiss);
             setParam (p, vstm::ids::customScale, 0.0f);
+        }
+
+        {
+            // the ROBOTISM "i" call-out is owned by the editor now: open twice, close the window while open
+            std::unique_ptr<juce::AudioProcessorEditor> base (p.createEditor());
+            auto* ed = dynamic_cast<VSTMTuneEditor*> (base.get());
+            ed->showRobotismInfo();
+            pump (30);
+            ed->showRobotismInfo();
+            pump (30);
+            int boxes = 0;
+            std::function<void (juce::Component&)> count = [&] (juce::Component& c)
+            {
+                if (dynamic_cast<juce::CallOutBox*> (&c) != nullptr) ++boxes;
+                for (auto* child : c.getChildren()) count (*child);
+            };
+            count (*ed);
+            base.reset();
+            pump (200);
+            CHECK (boxes == 1, "ROBOTISM info call-out: opened twice -> %d box, window closed while it is open -> no crash", boxes);
+        }
+
+        {
+            // the KEY box tells the truth: an unlocked guess shows the engine's own confidence; the
+            // vocal-estimate note is shown for Auto only
+            VSTMTuneProcessor q;
+            q.setPlayConfigDetails (2, 2, kFs, 512);
+            q.prepareToPlay (kFs, 512);
+            Voice penta;
+            penta.notes = { 60, 62, 64, 67, 69, 67, 64, 62 };            // C D E G A: no note tells C, F and G major apart
+            penta.noteLen = 0.3;
+            processSeconds (q, penta, 4.0);
+            std::unique_ptr<juce::AudioProcessorEditor> base (q.createEditor());
+            auto* ed = dynamic_cast<VSTMTuneEditor*> (base.get());
+            pump (120);
+            const int cand = q.engine.keyCandidate.load();
+            const auto pct = juce::String (juce::roundToInt (q.engine.keyConfidence.load() * 100.0f)) + "%";
+            const auto expect = juce::String (juce::CharPointer_UTF8 ("\xc2\xb7 ")) + vstm::noteName (juce::jmax (0, cand)) + "? " + pct;
+            const bool guessOk = q.engine.keyState.load() == vstm::KeyDetector::kCandidate && ed->keyStatusText() == expect
+                              && ! ed->keyStatusLocked() && ed->autoKeyMenuStatus().contains (pct) && ed->isKeyHintShown();
+            CHECK (guessOk, "unlocked guess: KEY box \"%s\", menu \"%s\" (engine confidence %.4f)", ed->keyStatusText().toRawUTF8(),
+                   ed->autoKeyMenuStatus().toRawUTF8(), q.engine.keyConfidence.load());
+
+            auto mel = cMajorMelody();
+            processSeconds (q, mel, 9.0);
+            pump (120);
+            const bool lockedOk = ed->keyStatusLocked() && ed->keyStatusText() == juce::String (juce::CharPointer_UTF8 ("\xc2\xb7 ")) + "C"
+                               && ed->autoKeyMenuStatus().contains (juce::String (juce::roundToInt (q.engine.keyConfidence.load() * 100.0f)) + "%");
+            setParam (q, vstm::ids::key, 1.0f);                                  // C chosen by hand
+            pump (150);
+            CHECK (lockedOk && ed->keyStatusText().isEmpty() && ! ed->keyStatusLocked() && ! ed->isKeyHintShown(),
+                   "locked: \"%s\" + padlock; a key chosen by hand: no suffix, no vocal-estimate note", "C");
+            base.reset();
+        }
+
+        {
+            // keyboard: arrows move a knob 1 % (Shift 0.1 %), Delete resets; every key press is one host gesture
+            std::unique_ptr<juce::AudioProcessorEditor> base (p.createEditor());
+            GestureCounter counter;
+            p.addListener (&counter);
+            vui::MiniKnobSlider* formant = nullptr;
+            std::function<void (juce::Component&)> find = [&] (juce::Component& c)
+            {
+                if (auto* k = dynamic_cast<vui::MiniKnob*> (&c))
+                    if (k->getParameter().paramID == vstm::ids::formant) formant = &k->knob;
+                for (auto* child : c.getChildren()) find (*child);
+            };
+            find (*base);
+            const float before = plain (p, vstm::ids::formant);
+            formant->keyPressed (juce::KeyPress (juce::KeyPress::upKey));
+            const float up = plain (p, vstm::ids::formant);
+            formant->keyPressed (juce::KeyPress (juce::KeyPress::downKey, juce::ModifierKeys::shiftModifier, 0));
+            const float fine = plain (p, vstm::ids::formant);
+            formant->keyPressed (juce::KeyPress (juce::KeyPress::deleteKey));
+            const float reset = plain (p, vstm::ids::formant);
+            const bool spacePassesOn = ! formant->keyPressed (juce::KeyPress (juce::KeyPress::spaceKey));
+            p.removeListener (&counter);
+            // 1 % of +-12 st = 0.24 st -> 0.2 (the parameter's 0.1 st steps); Shift: 0.024 st -> one step, 0.1 st
+            CHECK (std::abs (up - before - 0.2f) < 1e-3f && std::abs (fine - up + 0.1f) < 1e-3f && std::abs (reset) < 1e-4f
+                       && counter.begins == 3 && counter.ends == 3 && spacePassesOn,
+                   "keyboard on FORMANT: up %+.2f st, Shift+down %+.3f st, Delete -> %.1f; %d gestures; Space goes on to the host",
+                   up - before, fine - up, reset, counter.begins);
         }
 
         if (shotDir != juce::File())

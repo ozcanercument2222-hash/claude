@@ -161,6 +161,92 @@ double rmsDb (const std::vector<float>& x, int start, int len)
     for (int i = 0; i < len; ++i) s += (double) x[(size_t) (start + i)] * x[(size_t) (start + i)];
     return 10.0 * std::log10 (s / len + 1.0e-20);
 }
+
+/** A sung line: notes (MIDI, seconds), each with its own detune and vibrato, joined by short slides. */
+struct Note { double midi, len, detune = 0.0, vibCt = 0.0; };
+std::function<double (double)> melodyF0 (std::vector<Note> notes, double slide = 0.025)
+{
+    std::vector<double> starts;
+    double t0 = 0.0;
+    for (const auto& n : notes) { starts.push_back (t0); t0 += n.len; }
+    return [notes, starts, slide] (double t)
+    {
+        size_t i = 0;
+        while (i + 1 < notes.size() && t >= starts[i + 1]) ++i;
+        const auto& n = notes[i];
+        const double tin = t - starts[i];
+        double m = n.midi + n.detune + 0.01 * n.vibCt * std::sin (2.0 * kPi * 5.6 * tin) * std::min (1.0, tin / 0.15);
+        if (i > 0 && tin < slide)
+        {
+            const auto& p = notes[i - 1];
+            m = p.midi + p.detune + (m - p.midi - p.detune) * tin / slide;
+        }
+        return midiToHz (m);
+    };
+}
+double totalLen (const std::vector<Note>& notes) { double s = 0.0; for (const auto& n : notes) s += n.len; return s; }
+
+/** Runs a key-detection performance in 100 ms blocks; the trace holds detectedKey after every block. */
+std::vector<int> keyTrace (TuneEngine& e, std::vector<float> x, double sr)
+{
+    std::vector<int> trace;
+    const size_t blk = (size_t) (0.1 * sr);
+    for (size_t pos = 0; pos < x.size(); pos += blk)
+    {
+        const int n = (int) std::min (blk, x.size() - pos);
+        float* chans[2] = { x.data() + pos, nullptr };
+        e.process (chans, 1, n);
+        trace.push_back (e.detectedKey.load());
+    }
+    return trace;
+}
+
+/** Changes of the detected key after it was first locked, and the first lock time (s, -1 = never). */
+std::pair<int, double> keyChangesAfterLock (const std::vector<int>& trace)
+{
+    int changes = 0, last = -1;
+    double first = -1.0;
+    for (size_t i = 0; i < trace.size(); ++i)
+    {
+        if (trace[i] < 0 && last < 0) continue;
+        if (last < 0) { first = 0.1 * (double) (i + 1); last = trace[i]; continue; }
+        if (trace[i] != last) { ++changes; last = trace[i]; }
+    }
+    return { changes, first };
+}
+
+/** 48 s performance in C major that leans elsewhere on purpose: a G major stretch with many F#,
+    wrong notes and chromatic passing notes, an A harmonic minor stretch (G#), a fast melisma and
+    wide vibrato. A singer's notes, not the beat: the key must stay C once it is locked. */
+std::vector<Note> wanderingPerformance()
+{
+    std::vector<Note> v;
+    auto add = [&v] (std::initializer_list<double> ms, double len, double vib = 0.0, double det = 0.12)
+    {
+        int k = 0;
+        for (double m : ms) v.push_back ({ m, len, det * std::sin (1.7 * (double) (k++) + m), vib });
+    };
+    for (int r = 0; r < 2; ++r)                                                       // 0 - 12 s: C major
+    {
+        add ({ 60, 62, 64, 65, 67, 65, 64, 62 }, 0.4);
+        add ({ 60, 64, 67, 72, 71, 69, 67, 65 }, 0.35);
+        add ({ 64, 62, 60 }, 0.6, 35.0);
+    }
+    for (int r = 0; r < 2; ++r)                                                       // G major stretch, many F#
+        add ({ 67, 69, 71, 72, 74, 76, 78, 79, 78, 76, 74, 71, 67, 66, 67 }, 0.27);
+    for (int r = 0; r < 2; ++r)                                                       // C again, with wrong / passing notes
+    {
+        add ({ 60, 62 }, 0.4); add ({ 63 }, 0.12); add ({ 64, 65, 67 }, 0.4); add ({ 68 }, 0.12);
+        add ({ 69, 67, 65 }, 0.4); add ({ 61 }, 0.15); add ({ 62, 60 }, 0.5, 40.0);
+    }
+    for (int r = 0; r < 2; ++r)                                                       // A harmonic minor (G#)
+        add ({ 69, 71, 72, 74, 76, 77, 80, 81, 80, 76, 72, 71, 69 }, 0.3);
+    for (int r = 0; r < 3; ++r)                                                       // fast melisma
+        add ({ 60, 62, 64, 65, 67, 69, 71, 72, 71, 69, 67, 65, 64, 62 }, 0.085);
+    add ({ 67 }, 2.0, 60.0);                                                          // long note, wide vibrato
+    add ({ 64, 62, 60 }, 0.8, 30.0);
+    return v;
+}
 } // namespace
 
 int main()
@@ -437,15 +523,16 @@ int main()
         check (human > 60.0, "Insansi keeps the vibrato: " + std::to_string (human) + " ct p-p");
     }
 
-    // 8) automatic key: a C major melody sung slightly out of tune
+    // 8) automatic key: a C major melody sung slightly out of tune (4 times: the one-shot lock waits
+    //    for several phrases, see KeyDetector)
     {
         const double notes[] = { 60, 62, 64, 65, 67, 69, 71, 72, 67, 64, 60, 62, 64, 65, 67, 72 };
         auto f0 = [&] (double t)
         {
-            const int i = std::min (15, (int) (t / 0.35));
-            return midiToHz (notes[i] + 0.18 * std::sin (i * 1.7));
+            const int i = std::min (63, (int) (t / 0.35));
+            return midiToHz (notes[i % 16] + 0.18 * std::sin (i * 1.7));
         };
-        auto x = makeVoice (sr, 5.6, f0);
+        auto x = makeVoice (sr, 22.4, f0);
         TuneEngine e;
         e.prepare (sr, true);
         auto p = baseParams();
@@ -461,25 +548,42 @@ int main()
         const double notes[] = { 64, 64, 65, 64, 62, 64, 67, 65, 64, 64, 69, 64, 62, 70, 64, 72, 64, 65, 64, 62 };
         auto f0 = [&] (double t)
         {
-            const int i = std::min (19, (int) (t / 0.3));
-            return midiToHz (notes[i] - 12.0 + 0.15 * std::sin (i * 1.3));
+            const int i = std::min (79, (int) (t / 0.3));
+            return midiToHz (notes[i % 20] - 12.0 + 0.15 * std::sin (i * 1.3));
         };
-        auto x = makeVoice (sr, 6.0, f0);
+        auto x = makeVoice (sr, 24.0, f0);
         TuneEngine e;
         e.prepare (sr, true);
         auto p = baseParams();
         p.key = -1;
         p.scale = kMinor;
         e.setParams (p);
-        run (e, x, 512);
-        check (e.detectedKey.load() == 2, "Auto key finds D minor even when E is the most sung note (got " + std::to_string (e.detectedKey.load()) + ")");
+        bool neverWrong = true;
+        for (size_t pos = 0; pos < x.size(); pos += 512)
+        {
+            const int n = (int) std::min ((size_t) 512, x.size() - pos);
+            float* chans[2] = { x.data() + pos, nullptr };
+            e.process (chans, 1, n);
+            neverWrong = neverWrong && (e.detectedKey.load() == -1 || e.detectedKey.load() == 2);
+        }
+        // E is 45 % of the singing: the minor profile leans to A minor and only one Bb per phrase says D,
+        // so the one-shot lock (final quality pass) waits; before, it locked D at 5 s. The guess is D and
+        // "Lock now" takes it.
+        const int cand = e.keyCandidate.load();
+        e.requestKeyLock (cand, e.keyConfidence.load());
+        std::vector<float> z ((size_t) 256, 0.0f);
+        float* zc[2] = { z.data(), nullptr };
+        e.process (zc, 1, 256);
+        check (neverWrong && cand == 2 && e.detectedKey.load() == 2,
+               "Auto key, D minor sung mostly on E: candidate D (never A), not locked by itself on borderline evidence; Lock now -> D (got "
+                   + std::to_string (e.detectedKey.load()) + ")");
     }
 
     // 8e) Auto key confidence (VSTM_TUNE_AUDIT.md R7). Before: one sung note or two alternating notes
     //     gave a "certain" key after 2 s, an A minor melody with Scale = Major was first called G,
     //     and nothing told the user how sure the guess was.
     {
-        auto keyRun = [&] (const std::vector<double>& notes, double noteLen, int scale, std::vector<int>* trace = nullptr)
+        auto keyRun = [&] (const std::vector<double>& notes, double noteLen, int scale, std::vector<int>* trace = nullptr, bool follow = false)
         {
             auto x = makeVoice (sr, noteLen * (double) notes.size(), [&] (double t)
             {
@@ -494,6 +598,7 @@ int main()
             auto p = baseParams();
             p.key = -1;
             p.scale = scale;
+            p.followKeyChanges = follow;
             e->setParams (p);
             for (size_t pos = 0; pos < x.size(); pos += 4800)              // one look per 100 ms
             {
@@ -517,38 +622,161 @@ int main()
         keyRun ({ 60, 67, 60, 67, 60, 67, 60, 67, 60, 67, 60, 67 }, 0.5, kMajor, &tr);
         check (none (tr), "Auto key: two alternating notes (C4 / G4, 6 s) are not a key: none locked");
 
-        const std::vector<double> aMin { 57, 59, 60, 62, 64, 65, 67, 69, 64, 60, 62, 59, 57, 60, 64, 57 };
+        auto times = [] (const std::vector<double>& v, int n) { std::vector<double> r; for (int i = 0; i < n; ++i) r.insert (r.end(), v.begin(), v.end()); return r; };
+        const std::vector<double> aMin = times ({ 57, 59, 60, 62, 64, 65, 67, 69, 64, 60, 62, 59, 57, 60, 64, 57 }, 3);
         tr.clear();
         keyRun (aMin, 0.5, kMajor, &tr);
         check (only (tr, 0) && tr.back() == 0, "Auto key: A minor melody with Scale = Major: only C (relative major) is ever shown, from "
                                                     + std::to_string (firstAt (tr, 0)) + " s");
 
-        const std::vector<double> cMaj { 60, 62, 64, 65, 67, 69, 71, 72, 67, 64, 65, 62, 60, 64, 67, 60 };
+        const std::vector<double> cMaj = times ({ 60, 62, 64, 65, 67, 69, 71, 72, 67, 64, 65, 62, 60, 64, 67, 60 }, 4);
         auto e2 = keyRun (cMaj, 0.35, kMajor);
         check (e2->detectedKey.load() == 0 && e2->keyConfidence.load() >= 0.6f,
                "Auto key: C major melody: C with confidence " + std::to_string (e2->keyConfidence.load()));
 
-        // modulation to G major (F# four times in 8 s): followed; chromatic passing notes (F#, Bb) in C: ignored
-        std::vector<double> mod = cMaj;
+        // a stretch in G major (F# four times in 8 s) after 24 s of C major. The lock stays C (final quality
+        // pass: the singing never moves a locked key; before, it was followed after ~5 s). Only the opt-in
+        // "follow key changes" mode follows it. Chromatic passing notes (F#, Bb) in C: ignored in both.
+        std::vector<double> mod = times ({ 60, 62, 64, 65, 67, 69, 71, 72, 67, 64, 65, 62, 60, 64, 67, 60 }, 3);
         for (double n : { 67, 69, 71, 72, 74, 76, 78, 79, 78, 74, 71, 66, 67, 69, 71, 78 }) mod.push_back (n);
         tr.clear();
         keyRun (mod, 0.5, kMajor, &tr);
+        const double cAt = firstAt (tr, 0);
+        check (only (tr, 0) && tr.back() == 0 && cAt > 0.0 && cAt < 24.0, "Auto key: C major (locked at " + std::to_string (cAt)
+                                                                              + " s), then 8 s in G major: the lock stays C (follow key changes off)");
+        tr.clear();
+        keyRun (mod, 0.5, kMajor, &tr, true);
         const double gAt = firstAt (tr, 7);
-        check (tr.back() == 7 && gAt > 8.0 && gAt < 15.0, "Auto key: C major -> G major at 8 s is followed at " + std::to_string (gAt) + " s");
+        check (tr.back() == 7 && gAt > 24.0 && gAt < 31.0, "Auto key, follow key changes ON: C major -> G major at 24 s is followed at " + std::to_string (gAt) + " s");
 
-        std::vector<double> passing = cMaj;
-        passing.insert (passing.end(), cMaj.begin(), cMaj.end());
-        passing[10] = 66; passing[16] = 70; passing[22] = 66; passing[28] = 70;
+        // 16 s of C major (the key locks), then the 1.0 test's melody with four passing notes (F#, Bb) twice.
+        // (With the passing notes from the very start the pitch counts tie C, F and G major: 2 F, 2 F#,
+        // 1 B, 2 Bb in 32 notes. Then nothing locks, which is the safe answer, not a wrong key.)
+        std::vector<double> passing = times ({ 60, 62, 64, 65, 67, 69, 71, 72, 67, 64, 65, 62, 60, 64, 67, 60 }, 4);
+        passing[42] = 66; passing[48] = 70; passing[54] = 66; passing[60] = 70;
         tr.clear();
         keyRun (passing, 0.5, kMajor, &tr);
         check (only (tr, 0) && tr.back() == 0, "Auto key: chromatic passing notes (F#, Bb) in a C major melody do not move the key");
+    }
+
+    // 8h) Auto key = one analysis, then a lock (final quality pass). The singer's notes estimate the
+    //     key; once it is locked, wrong notes, passing notes, a stretch in another key, melisma and
+    //     vibrato never move it (before: "modulation" / "drift" votes switched it after ~1 s).
+    //     Without notes that tell keys apart (pentatonic: C D E G A fit C, F and G major alike) it
+    //     does not lock at all: the guess stays a candidate and notes go to the nearest semitone.
+    {
+        const auto perf = wanderingPerformance();
+        auto x = makeVoice (sr, totalLen (perf), melodyF0 (perf));
+        TuneEngine e;
+        e.prepare (sr, true);
+        auto p = baseParams();
+        p.key = -1;
+        p.scale = kMajor;
+        e.setParams (p);
+        const auto tr = keyTrace (e, x, sr);
+        const auto [changes, firstAt] = keyChangesAfterLock (tr);
+        check (tr.back() == 0 && changes == 0 && firstAt > 0.0 && firstAt < 8.0,
+               "Auto key: 48 s of singing (G major stretch, wrong / passing notes, G#, melisma, vibrato): locked C at "
+                   + std::to_string (firstAt) + " s, " + std::to_string (changes) + " key changes after the lock");
+
+        std::vector<Note> penta;
+        for (int r = 0; r < 4; ++r)
+            for (double m : { 60.0, 62.0, 64.0, 67.0, 69.0, 67.0, 64.0, 62.0, 60.0, 64.0, 67.0, 72.0 })
+                penta.push_back ({ m, 0.3, 0.1 * std::sin (m + r) });
+        auto y = makeVoice (sr, totalLen (penta), melodyF0 (penta));
+        TuneEngine q;
+        q.prepare (sr, true);
+        q.setParams (p);
+        const auto tp = keyTrace (q, y, sr);
+        const auto [pc, pFirst] = keyChangesAfterLock (tp);
+        check (pFirst < 0.0 && q.keyCandidate.load() >= 0 && q.keyConfidence.load() < 0.5f,
+               "Auto key: pentatonic melody (C D E G A only, 14 s) is not locked: candidate " + std::to_string (q.keyCandidate.load())
+                   + ", confidence " + std::to_string (q.keyConfidence.load()) + (pFirst < 0.0 ? "" : ", locked at " + std::to_string (pFirst) + " s"));
+        (void) pc;
+
+        // the same 48 s with the opt-in "follow key changes": the key does move (the mode is real)
+        TuneEngine f;
+        f.prepare (sr, true);
+        auto pf = p;
+        pf.followKeyChanges = true;
+        f.setParams (pf);
+        const auto [fChanges, fFirst] = keyChangesAfterLock (keyTrace (f, x, sr));
+        check (fChanges >= 1, "Auto key, follow key changes ON: the same 48 s move the key " + std::to_string (fChanges)
+                                  + " time(s) (lock at " + std::to_string (fFirst) + " s)");
+    }
+
+    // 8i) Auto key requests from the user and the host: Re-analyze, Lock now, a restored lock, host
+    //     re-prepare (prepareToPlay), scale changes and the chromatic scale.
+    {
+        auto sing = [&] (TuneEngine& e, std::initializer_list<double> notes, double noteLen, int repeats)
+        {
+            std::vector<Note> v;
+            for (int r = 0; r < repeats; ++r)
+                for (double m : notes) v.push_back ({ m, noteLen, 0.1 * std::sin (m * 0.7 + r) });
+            keyTrace (e, makeVoice (sr, totalLen (v), melodyF0 (v)), sr);
+        };
+        auto tick = [&] (TuneEngine& e) { std::vector<float> z ((size_t) 256, 0.0f); float* c[2] = { z.data(), nullptr }; e.process (c, 1, 256); };
+        auto params = [] (int scale) { auto p = baseParams(); p.key = -1; p.scale = scale; return p; };
+
+        TuneEngine e;
+        e.prepare (sr, true);
+        e.setParams (params (kMajor));
+        sing (e, { 60, 62, 64, 65, 67, 69, 71, 72, 67, 64 }, 0.35, 6);                        // C major, 21 s
+        const bool lockedC = e.detectedKey.load() == 0 && e.keyState.load() == KeyDetector::kLocked;
+        e.requestKeyReanalyze();
+        tick (e);
+        const bool listening = e.detectedKey.load() == -1 && e.keyCandidate.load() == -1 && e.keyState.load() == KeyDetector::kListening;
+        sing (e, { 67, 69, 71, 72, 74, 76, 78, 79, 74, 71 }, 0.35, 6);                        // G major only now
+        const int afterReanalyze = e.detectedKey.load();
+        check (lockedC && listening && afterReanalyze == 7,
+               "Re-analyze: C forgotten (listening, no candidate), then G major singing locks G (got " + std::to_string (afterReanalyze) + ")");
+
+        e.requestKeyLock (9, 0.42f);
+        const int pending = e.getKeyLockForState();
+        tick (e);
+        const bool userLock = e.detectedKey.load() == 9 && std::abs (e.keyConfidence.load() - 0.42f) < 1e-6f;
+        sing (e, { 67, 69, 71, 72, 74, 76, 78, 79, 74, 71 }, 0.35, 6);                        // G major singing again
+        const bool held = e.detectedKey.load() == 9;
+        const int suggestion = e.keySuggestion.load();
+        e.prepare (sr, false);                                                               // host re-prepares (HQ)
+        tick (e);
+        check (pending == 9 && userLock && held && suggestion == 7 && e.detectedKey.load() == 9,
+               "Lock now (A, 42 %): saved while pending, applied, kept through 21 s of G major singing (suggests "
+                   + std::to_string (suggestion) + "), kept through prepare()");
+
+        // a scale TYPE change moves the lock only when the evidence clearly names another tonic
+        TuneEngine m;
+        m.prepare (sr, true);
+        m.setParams (params (kMinor));
+        sing (m, { 57, 59, 60, 62, 64, 65, 67, 69, 64, 60 }, 0.35, 6);                        // A natural minor
+        const int minorKey = m.detectedKey.load();
+        m.setParams (params (kMajor));
+        tick (m);
+        const int majorKey = m.detectedKey.load();
+        TuneEngine r;                                                                        // restored lock, no evidence yet
+        r.prepare (sr, true);
+        r.setParams (params (kMinor));
+        r.requestKeyLock (9, 0.8f);
+        tick (r);
+        r.setParams (params (kMajor));
+        tick (r);
+        check (minorKey == 9 && majorKey == 0 && r.detectedKey.load() == 9,
+               "Scale Minor -> Major: A becomes C with the A minor evidence (" + std::to_string (minorKey) + " -> " + std::to_string (majorKey)
+                   + "); a restored lock without evidence keeps A (" + std::to_string (r.detectedKey.load()) + ")");
+
+        TuneEngine c;
+        c.prepare (sr, true);
+        c.setParams (params (kChromatic));
+        sing (c, { 60, 62, 64, 65, 67, 69, 71, 72 }, 0.35, 2);
+        check (c.keyState.load() == KeyDetector::kNotNeeded && c.detectedKey.load() == -1,
+               "Chromatic scale: the key is not needed, nothing is locked or shown");
     }
 
     // 8g) custom scale: the note set counts from the key like a scale; Auto finds the key with it.
     //     A minor pentatonic as a custom set (1 b3 4 5 b7), a melody in A minor pentatonic, key Auto.
     {
         const double notes[] = { 57, 60, 62, 64, 67, 69, 67, 64, 62, 60, 57, 60, 64, 62, 57, 69, 67, 64, 60, 57 };
-        auto x = makeVoice (sr, 6.0, [&] (double t) { return midiToHz (notes[std::min (19, (int) (t / 0.3))] + 0.2); });
+        auto x = makeVoice (sr, 24.0, [&] (double t) { return midiToHz (notes[std::min (79, (int) (t / 0.3)) % 20] + 0.2); });
         TuneEngine e;
         e.prepare (sr, true);
         auto p = baseParams();
@@ -559,7 +787,7 @@ int main()
         e.setParams (p);
         auto y = run (e, x, 512);
         const int L = e.getLatencySamples();
-        const double hz = measureHz (y, sr, (int) (sr * 5.47) + L, (int) (sr * 0.15), midiToHz (60.0));  // note 18: C4 sung 20 ct sharp
+        const double hz = measureHz (y, sr, (int) (sr * 23.47) + L, (int) (sr * 0.15), midiToHz (60.0));  // last pass, note 18: C4 sung 20 ct sharp
         check (e.detectedKey.load() == 9 && std::abs (cents (hz, midiToHz (60.0))) < 5.0,
                "custom scale (A minor pentatonic set): Auto finds A (got " + std::to_string (e.detectedKey.load()) + "), C4 +20 ct -> "
                    + std::to_string (cents (hz, midiToHz (60.0))) + " ct");
@@ -832,12 +1060,14 @@ int main()
                    + " vs steady " + std::to_string (steady) + ", latency " + std::to_string (latHQ) + " / " + std::to_string (latRT)
                    + ", tuning " + std::to_string (c1) + " / " + std::to_string (c2) + " ct");
 
-        // the automatic key survives the switch (C major melody, switched at 3.0 s, after the key is found)
+        // the automatic key survives the switch (C major melody sung five times, switched at 24 s, after the
+        // key is locked; the one-shot lock of the final quality pass waits for several phrases, this test
+        // used to switch at 3.0 s)
         const double notes[] = { 60, 62, 64, 65, 67, 69, 71, 72, 67, 64, 60, 62, 64, 65, 67, 72 };
-        auto mel = makeVoice (sr, 5.6, [&] (double t)
+        auto mel = makeVoice (sr, 28.0, [&] (double t)
         {
-            const int i = std::min (15, (int) (t / 0.35));
-            return midiToHz (notes[i] + 0.18 * std::sin (i * 1.7));
+            const int i = std::min (79, (int) (t / 0.35));
+            return midiToHz (notes[i % 16] + 0.18 * std::sin (i * 1.7));
         });
         TuneEngine k;
         k.prepare (sr, true);
@@ -849,7 +1079,7 @@ int main()
         int before = -2;
         for (size_t pos = 0; pos < mel.size(); pos += 512)
         {
-            if (pos == (size_t) (3.0 * sr) / 512 * 512) { before = k.detectedKey.load(); k.setRealtime (false); }
+            if (pos == (size_t) (24.0 * sr) / 512 * 512) { before = k.detectedKey.load(); k.setRealtime (false); }
             const int n = (int) std::min ((size_t) 512, mel.size() - pos);
             float* chans[2] = { mel.data() + pos, nullptr };
             k.process (chans, 1, n);

@@ -5,6 +5,9 @@
 //
 //  Etkilesim (tum knob'larda ayni):  dikey surukle | Shift = ince ayar |
 //  cift tik = varsayilan | tekerlek | degere tikla = yazarak gir | sag tik = host menusu
+//  Klavye (Tab ile odak; odak halkasi yalniz klavyeyle gelince gorunur):
+//    ok tuslari = %1 | Shift + ok = %0,1 | PageUp / PageDown = %10 | Home / End = uclar |
+//    Delete / Backspace = varsayilan | secici ve anahtarlarda Enter / Bosluk
 //==============================================================================
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "Theme.h"
@@ -201,7 +204,52 @@ private:
 };
 
 //==============================================================================
-/** Rotary slider with pro gestures: vertical drag, Shift = fine, wheel, double-click reset. */
+/** Keyboard steps for a parameter slider (JUCE's own: 0.1 % per key and no host gesture). One key
+    press = one complete host gesture, so automation records it like a mouse edit. Returns false
+    for keys it does not use (they go on to the host: transport keys keep working). */
+inline bool sliderKeyPressed (juce::Slider& s, juce::RangedAudioParameter* param, const juce::KeyPress& k)
+{
+    const int code = k.getKeyCode();
+    const auto mods = k.getModifiers();
+    if (mods.isCommandDown() || mods.isAltDown() || mods.isCtrlDown())
+        return false;
+    const bool fine = mods.isShiftDown();
+    double target = -1.0;                                       // proportion of the range
+    int dir = 0;
+    const double now = s.valueToProportionOfLength (s.getValue());
+    if (code == juce::KeyPress::upKey || code == juce::KeyPress::rightKey)        { target = now + (fine ? 0.001 : 0.01); dir = 1; }
+    else if (code == juce::KeyPress::downKey || code == juce::KeyPress::leftKey)  { target = now - (fine ? 0.001 : 0.01); dir = -1; }
+    else if (code == juce::KeyPress::pageUpKey)                                   { target = now + 0.1; dir = 1; }
+    else if (code == juce::KeyPress::pageDownKey)                                 { target = now - 0.1; dir = -1; }
+    else if (code == juce::KeyPress::homeKey)                                     target = 0.0;
+    else if (code == juce::KeyPress::endKey)                                      target = 1.0;
+    else if (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey)
+        target = s.valueToProportionOfLength (s.getDoubleClickReturnValue());
+    else
+        return false;
+
+    const double cur = s.getValue();
+    double v = s.proportionOfLengthToValue (juce::jlimit (0.0, 1.0, target));
+    const double interval = s.getInterval();
+    if (dir != 0 && interval > 0.0 && std::abs (v - cur) < 0.5 * interval)
+        v = cur + dir * interval;                               // at least one step of the parameter's own resolution
+    if (param != nullptr) param->beginChangeGesture();
+    s.setValue (juce::jlimit (s.getMinimum(), s.getMaximum(), v), juce::sendNotificationSync);
+    if (param != nullptr) param->endChangeGesture();
+    return true;
+}
+
+/** Remembers whether keyboard focus came from the Tab key: only then a focus ring is drawn, so a
+    mouse click (which also focuses, to take arrow keys) leaves the look as it was. */
+struct TabFocus
+{
+    bool shown = false;
+    void gained (juce::Component& c, juce::Component::FocusChangeType cause) { shown = cause == juce::Component::focusChangedByTabKey; c.repaint(); }
+    void lost (juce::Component& c)                                           { shown = false; c.repaint(); }
+};
+
+//==============================================================================
+/** Rotary slider with pro gestures: vertical drag, Shift = fine, wheel, double-click reset, keys. */
 class ProKnob : public juce::Slider
 {
 public:
@@ -212,9 +260,17 @@ public:
         setVelocityBasedMode (false);
         setScrollWheelEnabled (true);
         setPopupMenuEnabled (false);
+        setWantsKeyboardFocus (true);
     }
 
     std::function<void()> onContextMenu;
+    /** The parameter behind the knob: keyboard edits are sent to the host as gestures. */
+    juce::RangedAudioParameter* gestureParam = nullptr;
+
+    bool keyPressed (const juce::KeyPress& k) override             { return sliderKeyPressed (*this, gestureParam, k); }
+    void focusGained (FocusChangeType cause) override              { tabFocus.gained (*this, cause); }
+    void focusLost (FocusChangeType) override                      { tabFocus.lost (*this); }
+    bool showsFocusRing() const noexcept                           { return tabFocus.shown && hasKeyboardFocus (false); }
 
     void mouseDown (const juce::MouseEvent& e) override
     {
@@ -262,6 +318,7 @@ protected:
 private:
     juce::Point<float> lastPos;
     bool dragging = false;
+    TabFocus tabFocus;
 };
 
 //==============================================================================
@@ -329,7 +386,7 @@ public:
         g.setColour ((hot ? col::accentHi : juce::Colour (0xfff2f0f8)));
         g.drawLine (juce::Line<float> (at (19.0f * k), at (35.5f * k)), 3.0f * k);
 
-        if (hasKeyboardFocus (false))
+        if (showsFocusRing())
         {
             g.setColour (col::accent.withAlpha (0.7f));
             g.drawEllipse (c.x - 50.0f * k, c.y - 50.0f * k, 100.0f * k, 100.0f * k, 1.0f);
@@ -351,6 +408,7 @@ public:
         : param (p), label (labelText), attachment (p, knob)
     {
         addAndMakeVisible (knob);
+        knob.gestureParam = &p;
         knob.setTooltip (tip);
         knob.setTitle (p.getName (64));
         knob.onValueChange = [this] { repaint (valueArea().toNearestInt().expanded (4)); };
@@ -405,9 +463,15 @@ public:
         setScrollWheelEnabled (true);
         setVelocityModeParameters (0.3, 1, 0.0, true, juce::ModifierKeys::shiftModifier);
         setPopupMenuEnabled (false);
+        setWantsKeyboardFocus (true);
     }
 
     std::function<void()> onContextMenu;
+    juce::RangedAudioParameter* gestureParam = nullptr;
+
+    bool keyPressed (const juce::KeyPress& k) override             { return sliderKeyPressed (*this, gestureParam, k); }
+    void focusGained (FocusChangeType cause) override              { tabFocus.gained (*this, cause); }
+    void focusLost (FocusChangeType) override                      { tabFocus.lost (*this); }
 
     void mouseDown (const juce::MouseEvent& e) override
     {
@@ -457,7 +521,15 @@ public:
         g.drawEllipse (c.x - r + 0.6f, c.y - r + 0.6f, r * 2.0f - 1.2f, r * 2.0f - 1.2f, 1.0f);
         g.setColour (juce::Colour (0xff5b5678).withAlpha (0.6f));
         g.drawEllipse (c.x - r, c.y - r, r * 2.0f, r * 2.0f, 0.8f);
+        if (tabFocus.shown && hasKeyboardFocus (false))
+        {
+            g.setColour (col::accent.withAlpha (0.8f));
+            g.drawEllipse (c.x - r - 4.0f, c.y - r - 4.0f, r * 2.0f + 8.0f, r * 2.0f + 8.0f, 1.2f);
+        }
     }
+
+private:
+    TabFocus tabFocus;
 };
 
 /** Value box (inset well) above a TrackSlider. */
@@ -470,6 +542,7 @@ public:
         : param (p), align (a), attachment (p, slider)
     {
         addAndMakeVisible (slider);
+        slider.gestureParam = &p;
         slider.setTooltip (tip);
         slider.setTitle (p.getName (64));
         slider.onValueChange = [this] { repaint (boxArea().toNearestInt()); };
@@ -559,16 +632,19 @@ public:
         setTooltip (tip);
         setTitle (p.getName (64));
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        setWantsKeyboardFocus (true);
     }
 
     /** Optional dim text after the value, e.g. the detected key next to "Auto". */
     std::function<juce::String()> suffix;
+    /** Optional: draw a padlock after the suffix (a locked automatic key). */
+    std::function<bool()> suffixLocked;
     /** Optional separators: menu item indices after which a separator is inserted. */
     juce::Array<int> separatorsAfter;
     /** Optional text shown instead of the parameter's choice (e.g. "Custom"); empty = the choice.
         While it is shown, no choice is ticked in the menu. */
     std::function<juce::String()> textOverride;
-    /** Optional extra menu items after a separator (ids >= kExtraItem) and what they do. */
+    /** Optional extra menu items after the choices (ids >= kExtraItem; add your own separator) and what they do. */
     std::function<void (juce::PopupMenu&)> addExtraItems;
     std::function<void (int)> onExtraItem;
     /** Called after one of the parameter's choices was picked from the menu. */
@@ -584,19 +660,47 @@ public:
         const auto over = textOverride ? textOverride() : juce::String();
         const auto text = over.isNotEmpty() ? over : choices[juce::jlimit (0, choices.size() - 1, idx)];
         const auto s = suffix ? suffix() : juce::String();
+        const bool locked = suffixLocked && suffixLocked();
         const auto fs = font (17.0f);
-        const float room = r.getWidth() - 25.0f - 62.0f - (s.isNotEmpty() ? textWidth (fs, s) + 10.0f : 0.0f);
+        const float lockW = locked ? 20.0f : 0.0f;
+        const float room = r.getWidth() - 25.0f - 62.0f - (s.isNotEmpty() ? textWidth (fs, s) + 10.0f : 0.0f) - lockW;
         const auto f = fitted (font (22.5f), text, room);       // long scale names in some languages
         drawText (g, text, { r.getX() + 25.0f, r.getCentreY() }, f, col::text, juce::Justification::left);
+        float x = r.getX() + 25.0f + textWidth (f, text) + 10.0f;
         if (s.isNotEmpty())
-            drawText (g, s, { r.getX() + 25.0f + textWidth (f, text) + 10.0f, r.getCentreY() }, fs, col::accentText.withAlpha (0.9f), juce::Justification::left);
+        {
+            drawText (g, s, { x, r.getCentreY() }, fs, col::accentText.withAlpha (0.9f), juce::Justification::left);
+            x += textWidth (fs, s);
+        }
+        if (locked)
+            icons::drawCentred (g, icons::padlock(), { x + 12.0f, r.getCentreY() - 0.5f }, col::accentText.withAlpha (0.9f), 1.5f);
         icons::drawCentred (g, icons::chevronDown(), { r.getRight() - 36.0f, r.getCentreY() }, isMouseOver() ? col::text : col::label, 2.2f);
+        if (tabFocus.shown && hasKeyboardFocus (false))
+        {
+            g.setColour (col::accent.withAlpha (0.8f));
+            g.drawRoundedRectangle (r.reduced (1.0f), 13.0f, 1.2f);
+        }
     }
+
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        const int code = k.getKeyCode();
+        if (code == juce::KeyPress::returnKey || code == juce::KeyPress::spaceKey || code == juce::KeyPress::downKey)
+        {
+            showMenu();
+            return true;
+        }
+        return false;
+    }
+    void focusGained (FocusChangeType cause) override   { tabFocus.gained (*this, cause); }
+    void focusLost (FocusChangeType) override           { tabFocus.lost (*this); }
 
     void mouseEnter (const juce::MouseEvent&) override { repaint(); }
     void mouseExit (const juce::MouseEvent&) override  { repaint(); }
 
-    void mouseDown (const juce::MouseEvent&) override
+    void mouseDown (const juce::MouseEvent&) override { showMenu(); }
+
+    void showMenu()
     {
         juce::PopupMenu m;
         const auto choices = param.getAllValueStrings();
@@ -609,10 +713,7 @@ public:
                 m.addSeparator();
         }
         if (addExtraItems)
-        {
-            m.addSeparator();
             addExtraItems (m);
-        }
         juce::Component::SafePointer<DropSelector> safe (this);
         m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMinimumWidth (getWidth()).withStandardItemHeight (32),
                          [safe] (int result)
@@ -632,6 +733,7 @@ public:
 private:
     juce::RangedAudioParameter& param;
     juce::ParameterAttachment attachment;
+    TabFocus tabFocus;
 };
 
 //==============================================================================
@@ -710,9 +812,20 @@ public:
         attachment.sendInitialUpdate();
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
         setTitle (p.getName (64));
+        setWantsKeyboardFocus (true);
     }
 
     bool isOn() const { return (param.getValue() > 0.5f) != invert; }
+
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        if (k.getKeyCode() != juce::KeyPress::returnKey && k.getKeyCode() != juce::KeyPress::spaceKey)
+            return false;
+        attachment.setValueAsCompleteGesture (param.getValue() > 0.5f ? 0.0f : 1.0f);
+        return true;
+    }
+    void focusGained (FocusChangeType cause) override   { tabFocus.gained (*this, cause); }
+    void focusLost (FocusChangeType) override           { tabFocus.lost (*this); }
 
     /** Width this toggle needs for its longer text plus the dot and margins (layout follows the language). */
     float preferredWidth() const
@@ -740,6 +853,11 @@ public:
             drawText (g, text, { r.getX() + 55.0f, cy }, f, tc, juce::Justification::left);
         else
             drawText (g, text, { r.getRight() - 54.0f, cy }, f, tc, juce::Justification::right);
+        if (tabFocus.shown && hasKeyboardFocus (false))
+        {
+            g.setColour (col::accent.withAlpha (0.8f));
+            g.drawRoundedRectangle (r.reduced (2.0f), r.getHeight() * 0.5f - 2.0f, 1.2f);
+        }
     }
 
     void mouseEnter (const juce::MouseEvent&) override { repaint(); }
@@ -757,5 +875,6 @@ private:
     bool invert, leftDot;
     juce::String textOn, textOff;
     juce::ParameterAttachment attachment;
+    TabFocus tabFocus;
 };
 } // namespace vui

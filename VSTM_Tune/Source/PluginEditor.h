@@ -13,6 +13,9 @@ public:
     explicit PresetBar (vstm::PresetManager& pm) : presets (pm) { setTitle ("Presets"); }
 
     std::function<void()> onSaveRequest;
+    std::function<void()> onRenameRequest;
+    /** "Presets keep key and scale" was toggled (the owner saves it and tells the host). */
+    std::function<void (bool)> onKeepKeyChanged;
 
     void refresh()
     {
@@ -34,6 +37,21 @@ private:
     juce::String shownName;
     bool shownDirty = false;
     int hoverZone = -1;
+};
+
+//==============================================================================
+/** Dim note right of the KEY label while the key is Auto: the key is an estimate from the vocal
+    (the plugin does not hear the beat). */
+class KeyHint : public juce::Component
+{
+public:
+    KeyHint() { setInterceptsMouseClicks (false, false); }
+    void setShown (bool s) { if (s != shown) { shown = s; repaint(); } }
+    bool isShown() const noexcept { return shown; }
+    void paint (juce::Graphics& g) override;
+
+private:
+    bool shown = false;
 };
 
 //==============================================================================
@@ -65,13 +83,25 @@ public:
     void showCustomScaleEditor() { setCustomScale (true); openScaleEditor(); }
     /** Closes the custom scale call-out if it is open. */
     void closeScaleEditor();
+    /** The ROBOTISM "i" call-out (owned like the scale editor: it goes with the editor). */
+    void showRobotismInfo();
+    void closeRobotismInfo();
+    /** What the KEY box shows after "Auto" ("· A", "· A? 41%", "· …", nothing) and whether a padlock follows. */
+    juce::String keyStatusText() const;
+    bool keyStatusLocked() const;
+    /** The status line of the Auto key menu (tests: it must state the same confidence the engine holds). */
+    juce::String autoKeyMenuStatus() const;
+    bool isKeyHintShown() const noexcept { return keyHint.isShown(); }
 
 private:
     void timerCallback() override;
     void showSizeMenu();
     void showSettingsMenu();
-    void showRobotismInfo();
     void openScaleEditor();
+    bool isAutoKey();
+    void addAutoKeyItems (juce::PopupMenu& m);
+    void autoKeyAction (int itemId);
+    void askRenamePreset();
     void setCustomScale (bool on);
     void askPresetName();
     void showHostMenu (juce::RangedAudioParameter& p);
@@ -85,6 +115,7 @@ private:
     vui::IconButton saveButton, sizeButton, settingsButton;
     vui::PitchDisplay display;
     vui::DropSelector keySelector, scaleSelector;
+    KeyHint keyHint;
     vui::ValueSlider correction, retune, humanize;
     vui::RobotKnob robot;
     juce::SliderParameterAttachment robotAttachment;
@@ -95,14 +126,17 @@ private:
     juce::TooltipWindow tooltips { this, 650 };
 
     bool lastActive = true;
-    int lastDetectedKey = -2;
+    int lastKeyShown = -1;
     bool lastCustom = false;
     // The custom scale call-out and its content are owned here and deleted with the editor.
     // (CallOutBox::launchAsynchronously owns its box inside a JUCE object: the editor can neither
     // delete that box nor be sure it is gone before the editor itself is.)
     std::unique_ptr<vui::ScaleNoteEditor> scaleContent;
     std::unique_ptr<juce::CallOutBox> scaleCallout;
-    static constexpr float kSureKey = 0.5f;      // Auto key confidence below this shows "?"
+    std::unique_ptr<juce::Label> infoContent;
+    std::unique_ptr<juce::CallOutBox> infoCallout;
+    // ids of the Auto key items in the KEY menu (after the 13 choices)
+    enum { kLockNow = vui::DropSelector::kExtraItem + 11, kUseSuggestion, kReanalyze, kFollow };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VSTMTuneEditor)
 };

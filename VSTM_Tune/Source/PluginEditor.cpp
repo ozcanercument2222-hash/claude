@@ -1,10 +1,15 @@
 #include "PluginEditor.h"
 #include "Parameters.h"
 
+#ifndef VSTM_TUNE_VERSION
+ #define VSTM_TUNE_VERSION "1.1.0"
+#endif
+
 using namespace vui;
 namespace ids = vstm::ids;
 using vstm::i18n::tr;
 using vstm::i18n::trf;
+using vstm::KeyDetector;
 
 namespace
 {
@@ -13,6 +18,12 @@ constexpr float kKnobAxis = 769.0f;
 constexpr float kCaptionOffset = 236.0f;           // Robotik / Insansi captions, symmetric about the axis
 
 juce::Font titleFont()                             { return font (24.0f, Weight::medium, 0.43f); }
+
+/** "41%": the confidence exactly as the engine holds it, rounded for display only. */
+juce::String percent (float v)                     { return juce::String (juce::roundToInt (vstm::clamp01 (v) * 100.0f)) + "%"; }
+
+/** tr() with "%1" and "%2" replaced. */
+juce::String trf2 (const char* key, const juce::String& a, const juce::String& b) { return tr (key).replace ("%1", a).replace ("%2", b); }
 juce::Font sectionFont (float size = 17.0f, float tracking = 0.13f) { return font (size, Weight::semibold, tracking); }
 
 /** Tracked UPPERCASE label at x (left edge or centre), optically centred on y, shrunk to fit maxWidth. */
@@ -188,6 +199,16 @@ void Canvas::paint (juce::Graphics& g)
 }
 
 //==============================================================================
+void KeyHint::paint (juce::Graphics& g)
+{
+    if (! shown)
+        return;
+    const auto text = vstm::i18n::upper (tr ("autokey.hint"));
+    const auto f = fitted (font (12.5f, Weight::semibold, 0.12f), text, (float) getWidth());
+    drawText (g, text, { (float) getWidth(), (float) getHeight() * 0.5f }, f, col::dim, juce::Justification::right);
+}
+
+//==============================================================================
 void PresetBar::paint (juce::Graphics& g)
 {
     const auto r = getLocalBounds().toFloat().reduced (0.5f);
@@ -230,8 +251,15 @@ void PresetBar::showMenu()
     juce::PopupMenu m;
     const int current = presets.getCurrentIndex();
     m.addSectionHeader (tr ("Factory"));
+    juce::String category;
     for (int i = 0; i < presets.getNumFactoryPresets(); ++i)
+    {
+        const auto c = presets.getFactoryCategory (i);         // Robotic / Natural / Effects (Default has none)
+        if (c != category && c.isNotEmpty())
+            m.addSectionHeader (tr (c.toRawUTF8()));
+        category = c;
         m.addItem (i + 1, presets.getPresetName (i), true, i == current);
+    }
     if (presets.getNumPresets() > presets.getNumFactoryPresets())
     {
         m.addSectionHeader (tr ("User"));
@@ -241,8 +269,14 @@ void PresetBar::showMenu()
     m.addSeparator();
     m.addItem (10001, tr ("Save preset..."));
     if (current >= presets.getNumFactoryPresets())
+    {
+        m.addItem (10004, trf ("Rename \"%1\"…", presets.getCurrentName()));
         m.addItem (10002, trf ("Delete \"%1\"", presets.getCurrentName()));
+    }
     m.addItem (10003, tr ("Open preset folder"));
+    m.addSeparator();
+    // the song's key and scale stay when a preset is loaded (off: presets set them, as in 1.0)
+    m.addItem (10005, tr ("Presets keep key and scale"), true, presets.getKeepTonal());
 
     juce::Component::SafePointer<PresetBar> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMinimumWidth (getWidth()).withStandardItemHeight (32),
@@ -252,6 +286,8 @@ void PresetBar::showMenu()
                          auto& pm = safe->presets;
                          if (result == 10001) { if (safe->onSaveRequest) safe->onSaveRequest(); }
                          else if (result == 10002) { pm.deleteUserPreset (pm.getCurrentIndex()); pm.loadPreset (0); }
+                         else if (result == 10004) { if (safe->onRenameRequest) safe->onRenameRequest(); }
+                         else if (result == 10005) { if (safe->onKeepKeyChanged) safe->onKeepKeyChanged (! pm.getKeepTonal()); }
                          else if (result == 10003)
                          {
                              auto folder = vstm::PresetManager::getUserPresetFolder();
@@ -273,7 +309,7 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
       sizeButton (icons::windowIcon(), 2.2f),
       settingsButton (icons::gear(), 2.1f),
       display (p.engine),
-      keySelector (param (ids::key), tr ("Key: the tonic notes are snapped to. Auto listens to the singing and finds it; a question mark means it is not sure yet, until then notes go to the nearest semitone.")),
+      keySelector (param (ids::key), tr ("tip.key")),
       scaleSelector (param (ids::scale), tr ("Scale: which notes are allowed. Chromatic = all 12 notes. Custom scale: pick your own notes.")),
       // all three value boxes centre their value (no text that sits left in one box and centred in another)
       correction (param (ids::correction), ValueSlider::Align::centre, tr ("Pitch Correction: how much of the distance to the target note is corrected.")),
@@ -294,7 +330,7 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
 
     addAndMakeVisible (canvas);
     for (juce::Component* c : std::initializer_list<juce::Component*> {
-             &presetBar, &saveButton, &sizeButton, &settingsButton, &display, &keySelector, &scaleSelector,
+             &presetBar, &saveButton, &sizeButton, &settingsButton, &display, &keySelector, &keyHint, &scaleSelector,
              &correction, &retune, &humanize, &robot, &infoButton, &vibratoKnob, &formantKnob, &transposeKnob,
              &mixKnob, &autotuneToggle, &waveButton, &realtimeToggle, &adaptiveToggle })
         canvas.addAndMakeVisible (c);
@@ -306,6 +342,11 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
     settingsButton.setBounds (1443, 26, 44, 44);
     display.setBounds (30, 88, 1476, 176);
     keySelector.setBounds (96, 401, 292, 60);
+    {
+        // right of the KEY label, up to the box's right edge (the label's width depends on the language)
+        const float labelEnd = 99.0f + textWidth (fitted (sectionFont(), tr ("KEY"), 288.0f), tr ("KEY")) + 14.0f;
+        keyHint.setBounds (juce::roundToInt (labelEnd), 368, 388 - juce::roundToInt (labelEnd), 24);
+    }
     scaleSelector.setBounds (96, 524, 292, 60);
     correction.setBounds (96, 648, 298, 90);
     correction.setLayout ({ 1, 2, 293, 58 }, { 5, 51, 287, 34 });
@@ -337,6 +378,7 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
     scaleSelector.textOverride = [this, customOn] { return customOn() ? tr ("Custom") : juce::String(); };
     scaleSelector.addExtraItems = [customOn] (juce::PopupMenu& m)
     {
+        m.addSeparator();
         m.addItem (vui::DropSelector::kExtraItem + 1, tr ("Custom scale…"), true, customOn());
         if (customOn())
             m.addItem (vui::DropSelector::kExtraItem + 2, tr ("Edit custom scale…"));
@@ -345,21 +387,15 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
     scaleSelector.onChoice = [this] (int) { setCustomScale (false); };
     adaptiveToggle.setTooltip (tr ("Adaptive (experimental): follows the performance within fixed limits. A sung vibrato and deliberate slides are kept (not at the robotic end), fast runs are tuned quicker, uncertain pitch is pulled less. Your settings are not changed."));
     keySelector.separatorsAfter = { 0 };
-    keySelector.suffix = [this]
-    {
-        if (juce::roundToInt (param (ids::key).convertFrom0to1 (param (ids::key).getValue())) != 0)
-            return juce::String();
-        // locked and sure: "C"; locked but unsure (singing left the key) or still listening with a
-        // best guess: "C?"; nothing to judge yet: an ellipsis. Correction uses only a locked key.
-        const auto dot = juce::String (juce::CharPointer_UTF8 ("\xc2\xb7 "));
-        const int k = audio.engine.detectedKey.load();
-        if (k >= 0)
-            return dot + vstm::noteName (k) + (audio.engine.keyConfidence.load() < kSureKey ? "?" : "");
-        const int c = audio.engine.keyCandidate.load();
-        return c >= 0 ? dot + vstm::noteName (c) + "?" : dot + juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xa6"));
-    };
+    // Auto: "· A" + padlock (locked), "· A? 41%" (a guess, not used yet), "· …" (listening); the
+    // Lock / Re-analyze / Follow items are added to the menu while Auto is selected
+    keySelector.suffix = [this] { return keyStatusText(); };
+    keySelector.suffixLocked = [this] { return keyStatusLocked(); };
+    keySelector.addExtraItems = [this] (juce::PopupMenu& m) { addAutoKeyItems (m); };
+    keySelector.onExtraItem = [this] (int id) { autoKeyAction (id); };
 
     robot.setTooltip (tr ("ROBOTISM: turn left for the hard, robotic effect; turn right for natural, human transitions."));
+    robot.gestureParam = &param (ids::robotism);
     robot.onContextMenu = [this] { showHostMenu (param (ids::robotism)); };
     for (auto* k : { &vibratoKnob, &formantKnob, &transposeKnob, &mixKnob })
         k->knob.onContextMenu = [this, k] { showHostMenu (k->getParameter()); };
@@ -372,6 +408,8 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
     saveButton.setTooltip (tr ("Save preset"));
     saveButton.onClick = [this] { askPresetName(); };
     presetBar.onSaveRequest = [this] { askPresetName(); };
+    presetBar.onRenameRequest = [this] { askRenamePreset(); };
+    presetBar.onKeepKeyChanged = [this] (bool keep) { audio.setPresetsKeepKey (keep); presetBar.refresh(); presetBar.repaint(); };
     sizeButton.setTooltip (tr ("Window size"));
     sizeButton.onClick = [this] { showSizeMenu(); };
     settingsButton.setTooltip (tr ("Settings"));
@@ -395,6 +433,7 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
 
 VSTMTuneEditor::~VSTMTuneEditor()
 {
+    closeRobotismInfo();
     closeScaleEditor();
     tooltips.setLookAndFeel (nullptr);
     setLookAndFeel (nullptr);
@@ -429,14 +468,89 @@ void VSTMTuneEditor::timerCallback()
         scaleSelector.repaint();
     }
 
-    // what the key box shows: locked key, best guess, and whether a "?" is drawn
-    const int k = audio.engine.detectedKey.load();
-    const int shown = (k + 1) * 64 + (audio.engine.keyCandidate.load() + 1) * 2 + (audio.engine.keyConfidence.load() < kSureKey ? 1 : 0);
-    if (shown != lastDetectedKey)
+    // what the key box shows (locked key, guess and its percentage, state) and the vocal-estimate note
+    const bool autoKey = isAutoKey();
+    keyHint.setShown (autoKey);
+    const int shown = autoKey ? (int) std::hash<std::string>{} ((keyStatusText() + (keyStatusLocked() ? "L" : "")).toStdString()) : 0;
+    if (shown != lastKeyShown)
     {
-        lastDetectedKey = shown;
+        lastKeyShown = shown;
         keySelector.repaint();
     }
+}
+
+bool VSTMTuneEditor::isAutoKey()
+{
+    return juce::roundToInt (param (ids::key).convertFrom0to1 (param (ids::key).getValue())) == 0;
+}
+
+juce::String VSTMTuneEditor::keyStatusText() const
+{
+    auto& keyParam = *audio.apvts.getParameter (ids::key);
+    if (juce::roundToInt (keyParam.convertFrom0to1 (keyParam.getValue())) != 0)
+        return {};                                               // a key chosen by the user: nothing to add
+    const auto& e = audio.engine;
+    const auto dot = juce::String (juce::CharPointer_UTF8 ("\xc2\xb7 "));
+    switch (e.keyState.load())
+    {
+        case KeyDetector::kNotNeeded: return {};                 // chromatic: the key does not matter
+        case KeyDetector::kLocked:    return e.detectedKey.load() >= 0 ? dot + vstm::noteName (e.detectedKey.load()) : juce::String();
+        case KeyDetector::kCandidate: return e.keyCandidate.load() >= 0 ? dot + vstm::noteName (e.keyCandidate.load()) + "? " + percent (e.keyConfidence.load())
+                                                                        : dot + juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xa6"));
+        default:                      return dot + juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xa6"));
+    }
+}
+
+bool VSTMTuneEditor::keyStatusLocked() const
+{
+    auto& keyParam = *audio.apvts.getParameter (ids::key);
+    return juce::roundToInt (keyParam.convertFrom0to1 (keyParam.getValue())) == 0
+        && audio.engine.keyState.load() == KeyDetector::kLocked && audio.engine.detectedKey.load() >= 0;
+}
+
+juce::String VSTMTuneEditor::autoKeyMenuStatus() const
+{
+    const auto& e = audio.engine;
+    const int state = e.keyState.load();
+    if (state == KeyDetector::kNotNeeded)
+        return tr ("autokey.notneeded");
+    if (state == KeyDetector::kLocked && e.detectedKey.load() >= 0)
+        return trf2 ("autokey.locked", vstm::noteName (e.detectedKey.load()), percent (e.keyConfidence.load()));
+    if (state == KeyDetector::kCandidate && e.keyCandidate.load() >= 0)
+        return trf2 ("autokey.guess", vstm::noteName (e.keyCandidate.load()), percent (e.keyConfidence.load()));
+    return tr ("autokey.listening");
+}
+
+void VSTMTuneEditor::addAutoKeyItems (juce::PopupMenu& m)
+{
+    if (! isAutoKey())
+        return;                                                  // a fixed key: nothing to lock or analyse
+    const auto& e = audio.engine;
+    const int state = e.keyState.load();
+    m.addSeparator();
+    m.addSectionHeader (tr ("autokey.header"));
+    m.addItem (vui::DropSelector::kExtraItem + 10, autoKeyMenuStatus(), false);
+    if (state == KeyDetector::kCandidate && e.keyCandidate.load() >= 0)
+        m.addItem (kLockNow, trf ("autokey.lock", vstm::noteName (e.keyCandidate.load())));
+    if (state == KeyDetector::kLocked && e.keySuggestion.load() >= 0)
+        m.addItem (kUseSuggestion, trf2 ("autokey.use", vstm::noteName (e.keySuggestion.load()), percent (e.keySuggestionConfidence.load())));
+    m.addItem (kReanalyze, tr ("autokey.reanalyze"), state == KeyDetector::kLocked || state == KeyDetector::kCandidate);
+    m.addItem (kFollow, tr ("autokey.follow"), true, audio.getFollowKeyChanges());
+}
+
+void VSTMTuneEditor::autoKeyAction (int itemId)
+{
+    const auto& e = audio.engine;
+    // the key shown in the menu when it was opened is the one locked (the engine may have moved on)
+    if (itemId == kLockNow && e.keyCandidate.load() >= 0)
+        audio.lockAutoKey (e.keyCandidate.load(), e.keyConfidence.load());
+    else if (itemId == kUseSuggestion && e.keySuggestion.load() >= 0)
+        audio.lockAutoKey (e.keySuggestion.load(), e.keySuggestionConfidence.load());
+    else if (itemId == kReanalyze)
+        audio.reanalyzeAutoKey();
+    else if (itemId == kFollow)
+        audio.setFollowKeyChanges (! audio.getFollowKeyChanges());
+    keySelector.repaint();
 }
 
 void VSTMTuneEditor::setCustomScale (bool on)
@@ -565,15 +679,16 @@ void VSTMTuneEditor::showSettingsMenu()
             rp.endChangeGesture();
         }
         else if (r == 2) ed.waveButton.onClick();
-        else if (r == 3) ed.audio.presets.loadPreset (0);
+        else if (r == 3) { ed.audio.presets.resetAll(); ed.presetBar.refresh(); }
         else if (r == 4)
-            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::NoIcon, "VSTM Tune 1.0.0",
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::NoIcon, juce::String ("VSTM Tune ") + VSTM_TUNE_VERSION,
                 trf ("about.text", juce::String (ed.audio.getLatencySamples())), tr ("OK"), &ed);
     });
 }
 
 void VSTMTuneEditor::showRobotismInfo()
 {
+    closeRobotismInfo();
     auto text = std::make_unique<juce::Label>();
     const auto info = tr ("robotism.info");
     text->setText (info, juce::dontSendNotification);
@@ -590,7 +705,48 @@ void VSTMTuneEditor::showRobotismInfo()
         layout.createLayout (as, 380.0f - 24.0f);
         text->setSize (380, juce::jlimit (150, 520, juce::roundToInt (layout.getHeight() * 1.08f) + 24));
     }
-    juce::CallOutBox::launchAsynchronously (std::move (text), canvas.getLocalArea (&infoButton, infoButton.getLocalBounds()), &canvas);
+    // owned here like the custom scale call-out (not launchAsynchronously): it closes with the editor
+    // and can never be left behind to swallow a click in another VSTM Tune window
+    infoContent = std::move (text);
+    infoCallout = std::make_unique<juce::CallOutBox> (*infoContent, canvas.getLocalArea (&infoButton, infoButton.getLocalBounds()), &canvas);
+    juce::Component::SafePointer<VSTMTuneEditor> self (this);
+    juce::Component::SafePointer<juce::CallOutBox> box (infoCallout.get());
+    infoCallout->enterModalState (true, juce::ModalCallbackFunction::create ([self, box] (int)
+    {
+        if (auto* ed = self.getComponent())
+            if (box != nullptr && box.getComponent() == ed->infoCallout.get())
+                ed->closeRobotismInfo();
+    }), false);
+}
+
+void VSTMTuneEditor::closeRobotismInfo()
+{
+    infoCallout.reset();                    // the box first: the label is its child
+    infoContent.reset();
+}
+
+void VSTMTuneEditor::askRenamePreset()
+{
+    auto& pm = audio.presets;
+    const int index = pm.getCurrentIndex();
+    if (index < pm.getNumFactoryPresets())
+        return;
+    auto* w = new juce::AlertWindow (tr ("Rename preset"), tr ("New name:"), juce::MessageBoxIconType::NoIcon, this);
+    w->setLookAndFeel (&lnf);
+    w->addTextEditor ("name", pm.getCurrentName());
+    w->addButton (tr ("Rename"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+    w->addButton (tr ("Cancel"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    juce::Component::SafePointer<VSTMTuneEditor> safe (this);
+    w->enterModalState (true, juce::ModalCallbackFunction::create ([safe, w, index] (int result)
+    {
+        if (safe == nullptr || result != 1)
+            return;
+        if (! safe->audio.presets.renameUserPreset (index, w->getTextEditorContents ("name")))
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::NoIcon, tr ("Rename preset"),
+                                                    tr ("A preset with this name already exists."), tr ("OK"), safe.getComponent());
+        safe->presetBar.refresh();
+        safe->presetBar.repaint();
+    }), true);
 }
 
 void VSTMTuneEditor::askPresetName()

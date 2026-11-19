@@ -7,7 +7,8 @@
 //        humanize (0..1), robotism (0..1), vibrato (0..2), formant (st),
 //        transpose (st), mix (0..1), realtime (0/1), range (0..2), block (samples),
 //        custom (custom scale: note mask 0..4095, bit i = i semitones above the key),
-//        adaptive (0/1)
+//        adaptive (0/1), follow (Auto key: follow key changes after the lock, 0/1),
+//        lock (Auto key: start locked to this tonic 0..11, like a restored session)
 //
 //  CSV: her analiz adimi (~2.9 ms) icin zaman (giris zaman cizgisinde, saniye),
 //  voiced, giris perdesi, cikis perdesi (MIDI), hedef nota, sapma ve bayraklar.
@@ -127,6 +128,7 @@ int main (int argc, char** argv)
     TuneEngine::Params p;
     bool realtime = true;
     int block = 512;
+    int lockKey = -1;
     const char* csvPath = nullptr;
     for (int i = 3; i < argc; ++i)
     {
@@ -149,6 +151,8 @@ int main (int argc, char** argv)
         else if (k == "range")     p.range = (int) v;
         else if (k == "custom")    { p.customScale = true; p.customMask = (uint16_t) ((int) v & 0x0fff); }
         else if (k == "adaptive")  p.adaptive = v != 0.0;
+        else if (k == "follow")    p.followKeyChanges = v != 0.0;
+        else if (k == "lock")      lockKey = (int) v;
         else if (k == "realtime")  realtime = v != 0.0;
         else if (k == "block")     block = std::max (1, (int) v);
         else { std::fprintf (stderr, "unknown param %s\n", k.c_str()); return 2; }
@@ -157,6 +161,8 @@ int main (int argc, char** argv)
     TuneEngine e;
     e.prepare (w.rate, realtime);
     e.setParams (p);
+    if (lockKey >= 0)
+        e.requestKeyLock (lockKey, 1.0f);
     const int nc = std::min (2, w.channels);
     const int latency = e.getLatencySamples();
     const size_t inFrames = w.data[0].size();
@@ -165,7 +171,7 @@ int main (int argc, char** argv)
     const size_t frames = w.data[0].size();
 
     FILE* csv = csvPath ? std::fopen (csvPath, "w") : nullptr;
-    if (csv) std::fprintf (csv, "time_s,voiced,in_midi,out_midi,note,deviation,note_change,settled\n");
+    if (csv) std::fprintf (csv, "time_s,voiced,in_midi,out_midi,note,deviation,note_change,settled,auto_key,key_state,key_conf\n");
     const double hopS = e.getHopSeconds();
     const double latS = e.getLatencySamples() / w.rate;
     int64_t hopIndex = 0;
@@ -180,9 +186,10 @@ int main (int argc, char** argv)
         {
             ++hopIndex;
             if (csv)
-                std::fprintf (csv, "%.5f,%d,%.4f,%.4f,%d,%.4f,%d,%d\n", hopIndex * hopS, (d.flags & TuneEngine::kVoiced) ? 1 : 0,
+                std::fprintf (csv, "%.5f,%d,%.4f,%.4f,%d,%.4f,%d,%d,%d,%d,%.3f\n", hopIndex * hopS, (d.flags & TuneEngine::kVoiced) ? 1 : 0,
                               d.inMidi, d.outMidi, (int) d.note, d.deviation,
-                              (d.flags & TuneEngine::kNoteChange) ? 1 : 0, (d.flags & TuneEngine::kSettled) ? 1 : 0);
+                              (d.flags & TuneEngine::kNoteChange) ? 1 : 0, (d.flags & TuneEngine::kSettled) ? 1 : 0,
+                              e.detectedKey.load(), e.keyState.load(), e.keyConfidence.load());
         }
     }
     if (csv) std::fclose (csv);

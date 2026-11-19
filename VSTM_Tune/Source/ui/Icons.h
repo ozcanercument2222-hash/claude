@@ -139,6 +139,18 @@ inline juce::Path pulse()
     return p;
 }
 
+/** Padlock (stroked): a locked automatic key. About 12 x 15 units, centred on 0. */
+inline juce::Path padlock()
+{
+    juce::Path p;
+    p.addRoundedRectangle (-6.0f, -1.5f, 12.0f, 9.0f, 1.8f);
+    p.startNewSubPath (-3.6f, -1.5f);
+    p.lineTo (-3.6f, -4.0f);
+    p.addCentredArc (0.0f, -4.0f, 3.6f, 3.4f, 0.0f, -juce::MathConstants<float>::halfPi, juce::MathConstants<float>::halfPi);
+    p.lineTo (3.6f, -1.5f);
+    return p;
+}
+
 inline void drawCentred (juce::Graphics& g, const juce::Path& p, juce::Point<float> c, juce::Colour colour, float width, float scale = 1.0f)
 {
     g.setColour (colour);

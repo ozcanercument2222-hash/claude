@@ -29,6 +29,10 @@
 //  degisirse motor sifirlanmaz: cikis 5 ms kisilir, sentez yeni gecikmenin zaman cizgisine
 //  tasinir, 5 ms'de geri acilir; giris gecmisi, perde analizi ve bulunan ton korunur.
 //  Motor blok boyutundan bagimsizdir: ayni giris her blok boyutunda ayni cikisi verir.
+//
+//  Otomatik ton (KeyDetector) vokalden bir TAHMINDIR ve bir kez kilitlenir; host'un yeniden
+//  hazirlamasi (prepare) onu silmez. Kullanici istekleri (kilitle / yeniden analiz) UI'dan
+//  kilitsiz bir posta kutusuyla gelir ve ses is parcaciginda blok basinda uygulanir.
 //==============================================================================
 #include "DspCommon.h"
 #include "Scales.h"
@@ -58,6 +62,7 @@ public:
         bool  customScale = false;      // true: customMask decides the allowed notes, not the scale
         uint16_t customMask = 0x0AB5;   // bit i = the note i semitones above the key (default: major)
         bool  adaptive = false;         // Adaptive correction (PitchCorrector); off = unchanged engine
+        bool  followKeyChanges = false; // Auto key: opt-in modulation tracking after the lock (off = the lock stays)
     };
 
     struct DisplayPoint
@@ -103,7 +108,7 @@ public:
         levelMinCount = (int) std::lround (0.02 * sr);
 
         applyRange();
-        reset();
+        reset();                        // the key analysis (evidence and lock) is kept: it does not depend on the rate
     }
 
     /** REALTIME (20 ms) <-> HQ (40 ms) while audio runs. Called on the audio thread at a block
@@ -124,6 +129,36 @@ public:
         switchState = 1;
     }
 
+    //------------------------------------------------------------ Auto key requests (any thread)
+    /** Lock the automatic key to `key` (0..11) now: "Lock now", "Use the suggested key", a restored
+        session. conf = the confidence shown / saved with it. Applied at the next block. */
+    void requestKeyLock (int key, float conf) noexcept
+    {
+        if (key < 0 || key > 11)
+            return;
+        keyRequestConf.store (std::isfinite (conf) ? clamp01 (conf) : 0.0f, std::memory_order_relaxed);
+        keyRequest.store (key, std::memory_order_release);
+    }
+    /** Forget the evidence and the lock and listen again ("Re-analyze"). Applied at the next block. */
+    void requestKeyReanalyze() noexcept     { keyRequest.store (kKeyReanalyze, std::memory_order_release); }
+
+    /** What a saved session should hold: a lock request that has not reached the audio thread yet
+        counts (a host may save right after restoring a session, before any audio ran). */
+    int getKeyLockForState() const noexcept
+    {
+        const int r = keyRequest.load (std::memory_order_acquire);
+        if (r >= 0) return r;
+        if (r == kKeyReanalyze) return -1;
+        return detectedKey.load();
+    }
+    float getKeyConfidenceForState() const noexcept
+    {
+        const int r = keyRequest.load (std::memory_order_acquire);
+        if (r >= 0) return keyRequestConf.load (std::memory_order_relaxed);
+        if (r == kKeyReanalyze || detectedKey.load() < 0) return 0.0f;
+        return keyConfidence.load();
+    }
+
     int getLatencySamples() const noexcept  { return latency; }
     bool isRealtime() const noexcept        { return realtime; }
     double getHopSeconds() const noexcept   { return hop / sr; }
@@ -138,7 +173,6 @@ public:
         aa1.reset(); aa2.reset();
         detector.reset();
         tracker.reset();
-        keys.reset();
         corrector.reset();
 
         nIn = 0;
@@ -171,9 +205,6 @@ public:
         levelPd = levelPv = levelFd = levelFv = 0.0f;
         levelCount = 0;
         levelHeld = levelActive ? levelPrior (params.formant - params.transpose) : 1.0f;
-        detectedKey.store (-1);
-        keyCandidate.store (-1);
-        keyConfidence.store (0.0f);
         currentNote.store (-1);
         currentVoiced.store (false);
     }
@@ -219,6 +250,7 @@ public:
     {
         const int nc = std::min (2, std::max (1, numChannels));
         numCh = nc;
+        applyKeyRequest();
         const float smoothCoef = 1.0f - std::exp (-1.0f / (0.02f * (float) sr));
         const float wetTarget = params.active ? 1.0f : 0.0f;
         if (! std::isfinite (mixSmooth)) mixSmooth = params.mix;      // never stay stuck on a bad value
@@ -290,9 +322,12 @@ public:
     //==========================================================================
     //  read by the UI thread
     SpscQueue<DisplayPoint, 4096> display;
-    std::atomic<int>   detectedKey { -1 };          // Auto: locked tonic, -1 = still listening
-    std::atomic<int>   keyCandidate { -1 };         // Auto: best tonic so far (also before the lock)
-    std::atomic<float> keyConfidence { 0.0f };      // Auto: 0..1, see KeyDetector
+    std::atomic<int>   detectedKey { -1 };          // Auto: locked tonic, -1 = not locked
+    std::atomic<int>   keyCandidate { -1 };         // Auto: best tonic of the evidence (also before the lock)
+    std::atomic<float> keyConfidence { 0.0f };      // Auto: unlocked = the candidate's, locked = at the lock (KeyDetector)
+    std::atomic<int>   keyState { KeyDetector::kListening };   // KeyDetector::State
+    std::atomic<int>   keySuggestion { -1 };        // locked: a key the evidence now clearly prefers (shown only)
+    std::atomic<float> keySuggestionConfidence { 0.0f };
     std::atomic<int>   currentNote { -1 };
     std::atomic<bool>  currentVoiced { false };
     std::atomic<float> currentInMidi { 0.0f };
@@ -302,6 +337,44 @@ public:
     const PitchCorrector::AdaptiveState& getAdaptiveState() const noexcept { return corrector.getAdaptiveState(); }
 
 private:
+    static constexpr int kNoKeyRequest = -100;
+    static constexpr int kKeyReanalyze = -2;
+    std::atomic<int> keyRequest { kNoKeyRequest };
+    std::atomic<float> keyRequestConf { 0.0f };
+
+    /** The note set the corrector uses: the scale's, or the custom one (relative to the key). */
+    uint16_t allowedMask() const noexcept
+    {
+        return params.customScale ? (uint16_t) (params.customMask & 0x0fff) : scaleMask (params.scale);
+    }
+
+    void applyKeyRequest() noexcept
+    {
+        if (keyRequest.load (std::memory_order_relaxed) == kNoKeyRequest)
+            return;                                      // the normal case: one relaxed load per block
+        const int r = keyRequest.exchange (kNoKeyRequest, std::memory_order_acquire);
+        if (r == kKeyReanalyze)
+            keys.reset();
+        else if (r >= 0 && r <= 11)
+        {
+            keys.lockTo (r, keyRequestConf.load (std::memory_order_relaxed));
+            keys.noteScale (params.customScale ? -1 : params.scale, allowedMask());
+        }
+        else
+            return;
+        publishKey();
+    }
+
+    void publishKey() noexcept
+    {
+        detectedKey.store (keys.getKey());
+        keyCandidate.store (keys.getCandidate());
+        keyConfidence.store (keys.getConfidence());
+        keyState.store (keys.getState());
+        keySuggestion.store (keys.getSuggestion());
+        keySuggestionConfidence.store (keys.getSuggestionConfidence());
+    }
+
     static constexpr int kRing = 1 << 16;
     static constexpr int64_t kMask = kRing - 1;
 
@@ -461,12 +534,10 @@ private:
         lastInMidi = inMidi;
 
         // allowed notes: the scale's, or the custom set (relative to the key, like a scale)
-        const uint16_t mask = params.customScale ? (uint16_t) (params.customMask & 0x0fff) : scaleMask (params.scale);
+        const uint16_t mask = allowedMask();
         keys.addFrame (r.voiced, inMidi, r.clarity, dt);
-        const int autoKey = keys.update (params.customScale ? -1 : params.scale, mask, dt);
-        detectedKey.store (autoKey);
-        keyCandidate.store (keys.getCandidate());
-        keyConfidence.store (keys.getConfidence());
+        const int autoKey = keys.update (params.customScale ? -1 : params.scale, mask, dt, params.followKeyChanges);
+        publishKey();
 
         CorrectorSettings cs;
         cs.amount = params.amount;

@@ -41,8 +41,14 @@ public:
         g.drawImageTransformed (body, juce::AffineTransform::scale (1.0f / bodyScale));
         drawArcs (g);
         drawPointer (g);
-        if (isMouseOverOrDragging() || showReadout)
+        if (isMouseOverOrDragging() || showReadout || showsFocusRing())
             drawReadout (g);
+        if (showsFocusRing())
+        {
+            const auto c = centre();
+            g.setColour (col::accent.withAlpha (0.55f));
+            g.drawEllipse (c.x - 166.0f, c.y - 166.0f, 332.0f, 332.0f, 1.2f);
+        }
     }
 
     /** For screenshots / demos: show the readout without hovering. */

@@ -1,24 +1,40 @@
 #pragma once
 //==============================================================================
-//  Otomatik ton (key) bulucu - guven (confidence) mekanizmali
+//  Otomatik ton (key) bulucu: vokalden TAHMIN, bir kez analiz + kilit
 //
-//  Sesli karelerdeki perde sinifi (C, C#, ... B) iki histogramda birikir: uzun bellek
-//  (25 s unutma sabiti) ve kisa bellek (6 s). Her yarim saniyede secili dizinin
-//  profiliyle 12 olasi tonik icin skor hesaplanir:
+//  Bu bulucu yalniz eklentiye gelen vokali duyar, beat'i duymaz: sonucu bir tahmindir.
+//  Kullanicinin is akisinda ton beat'e gore secilir; vokalin yanlis / kromatik / gecis
+//  notalari bu tonu degistirmemelidir. Bu yuzden:
+//
+//    1) DINLEME   kanit yok -> aday yok. Duzeltme en yakin yarim sese (guvenli geri donus).
+//    2) ADAY      en iyi ton ve guveni gosterilir ("A? 41%"), ama kilitli degildir; duzeltme
+//                 yine en yakin yarim sese. Kullanici istediginde "Simdi kilitle" der.
+//    3) KILITLI   yeterli ve AYIRT EDICI kanit toplaninca (uzun bellekte ~4 s net sarki, guven >= 0.5,
+//                 ayni aday arka arkaya 6 bakista, her bakista yeni sarki; gercek kayitlarda tipik
+//                 olarak 10-20 s) ton bir kez kilitlenir ve bundan sonra
+//                 KENDILIGINDEN DEGISMEZ. Yalniz kullanici degistirir: "Yeniden analiz"
+//                 (kanit silinir, bastan dinler), "Onerilen tona gec" ya da ayri ve varsayilan
+//                 kapali "Ton degisimlerini izle" (modulasyon) secenegi.
+//
+//  Kanit: sesli karelerdeki perde sinifi (C, C#, ... B) iki histogramda birikir: uzun bellek
+//  (25 s unutma sabiti) ve kisa bellek (6 s; yalniz modulasyon izlenirken kullanilir). Her
+//  yarim saniyede secili dizinin profiliyle 12 olasi tonik icin skor hesaplanir:
 //      skor = sarkinin dizi icinde kalan payi + 0.15 x profil korelasyonu
 //  (Major / minor icin Krumhansl-Kessler profilleri, diger diziler icin tonik ve besliye
 //  agirlik veren ikili sablon.)
 //
-//  Guven = (en iyi tonun ikinciye farki) x (kanit miktari) x (nota cesitliligi), 0..1.
-//    - Tek nota ya da iki nota ton belirlemez: cesitlilik 0 -> guven 0, ton kilitlenmez,
-//      duzeltme en yakin yarim sese gider (eskiden 2 s sonra kesin "C" diyordu).
-//    - Ilk kilit ancak guven >= 0.5 iken: ayni notalari paylasan tonlar ayrilmadan (or. A minor
-//      ezgide F henuz duyulmadan C / G) karar verilmez.
-//    - Ton degisimi (modulasyon) kisa bellekte aranir: son notalarin bir kismi mevcut tonun
-//      disindaysa ve baska bir ton onlari belirgin ve emin bicimde daha iyi kapsiyorsa, ~1 s
-//      kararli kalinca gecilir; uzun bellek yeni tona gore yeniden kurulur (25 s'lik eski bilgi
-//      geri cekmez).
-//    - Sessizlikte / yeni ses yokken karar degismez.
+//  Guven = (en iyi skorun rakibe farki) x (ayirt edicilik) x (kanit miktari) x (nota cesitliligi), 0..1
+//    - Tek nota ya da iki nota ton belirlemez: cesitlilik 0 -> guven 0.
+//    - Ayirt edicilik: aday, sarkinin rakiplerin aciklayamadigi bir payini aciklamali. C D E G A
+//      (pentatonik) C, F ve G majorun hepsine uyar: hangisi oldugunu yalniz F / F# / B / Bb
+//      soyler. O notalar duyulmadan guven dusuk kalir, kilit olmaz (onceki surum profil
+//      korelasyonuyla 3 s'de C'ye kilitleniyordu; tek seferlik kilitte bu kalici yanlis ton olurdu).
+//      Ayni nota kumesini veren tonikler (simetrik ozel diziler) rakip sayilmaz: duzeltme aynidir.
+//    - Gosterilen guven bu hesabin kendisidir (arayuz yuvarlar, baska bir sey eklemez).
+//
+//  Dizi turu degisince (Scale secimi ya da ozel dizi ac / kapa) kilitli ton korunur; mevcut kanit
+//  yeni dizide BASKA bir tonigi emin bicimde (guven >= 0.5) gosteriyorsa ona gecilir (or. A minor
+//  ezgide Minor -> Major: A -> C, ayni notalar). Ozel dizinin notalarini duzenlemek tonu oynatmaz.
 //==============================================================================
 #include "DspCommon.h"
 #include "Scales.h"
@@ -28,6 +44,9 @@ namespace vstm
 class KeyDetector
 {
 public:
+    enum State { kListening = 0, kCandidate = 1, kLocked = 2, kNotNeeded = 3 };
+
+    /** Forget every piece of evidence and the lock: listen again from now on (Re-analyze). */
     void reset() noexcept
     {
         std::fill (std::begin (histLong), std::end (histLong), 0.0);
@@ -35,10 +54,16 @@ public:
         current = -1;
         candidate = -1;
         confidence = 0.0f;
+        lockConfidence = 0.0f;
         sinceEval = 0.0;
         newEvidence = 0.0;
         switchTo = -1;
         switchVotes = 0;
+        stableKey = -1;
+        stableLooks = 0;
+        suggestion = -1;
+        suggestionConfidence = 0.0f;
+        state = kListening;
     }
 
     /** Call once per analysis hop. midi is only used when voiced. */
@@ -64,23 +89,43 @@ public:
         }
     }
 
-    /** Re-evaluates at most twice per second. Returns the detected tonic (0..11) or -1 while unsure. */
-    int update (int scale, double dt) noexcept { return update (scale, scaleMask (scale), dt); }
+    /** Re-evaluates at most twice per second. Returns the locked tonic (0..11) or -1 while unlocked. */
+    int update (int scale, double dt, bool followChanges = false) noexcept
+    {
+        return update (scale, scaleMask (scale), dt, followChanges);
+    }
 
     /** Same with an explicit note set (bit i = i semitones above the tonic), e.g. a custom scale;
-        scale -1 = no known scale type (a plain template is built from the mask). */
-    int update (int scale, uint16_t mask, double dt) noexcept
+        scale -1 = no known scale type (a plain template is built from the mask).
+        followChanges: the opt-in "follow key changes" mode (modulation tracking after the lock). */
+    int update (int scale, uint16_t mask, double dt, bool followChanges = false) noexcept
     {
         sinceEval += dt;
         mask = (uint16_t) (mask & 0x0fff);
-        const int identity = (scale + 1) * 4096 + mask;        // another scale or note set: start over
-        if (identity != lastScale)
+        const bool everyNote = mask == 0x0fff || mask == 0;
+        const int identity = (scale + 1) * 4096 + mask;
+        if (identity != lastIdentity)
         {
-            lastScale = identity;
-            current = -1;
+            // another note set: a lock in progress starts over; an existing lock only moves when
+            // the scale TYPE changed and the evidence clearly names another tonic for it
+            const bool typeChanged = scale != lastScaleType;
+            lastIdentity = identity;
+            lastScaleType = scale;
+            stableKey = -1;
+            stableLooks = 0;
             switchTo = -1;
             switchVotes = 0;
-            sinceEval = 1.0;
+            if (current >= 0 && typeChanged && ! everyNote)
+            {
+                Eval e;
+                evaluate (histLong, scale, mask, e);
+                if (e.best >= 0 && e.best != current && e.conf[e.best] >= kLockConfidence)
+                {
+                    current = e.best;
+                    lockConfidence = e.conf[e.best];
+                }
+            }
+            sinceEval = 1.0;                                    // look right away
         }
         if (sinceEval < 0.5)
             return current;
@@ -88,27 +133,47 @@ public:
         const double fresh = newEvidence;
         newEvidence = 0.0;
 
-        if (mask == 0x0fff || mask == 0)                         // every note allowed: the key does not matter
+        if (everyNote)                                           // every note allowed: the key does not matter
         {
-            candidate = 0;
-            confidence = 1.0f;
-            return current = 0;
+            state = kNotNeeded;
+            suggestion = -1;
+            return current;
         }
 
         Eval lng;
         evaluate (histLong, scale, mask, lng);
-        candidate = lng.best;
 
         if (current < 0)
         {
-            if (lng.best >= 0 && lng.conf[lng.best] >= kLockConfidence)
-                current = lng.best;
-            confidence = current >= 0 ? lng.conf[current] : (lng.best >= 0 ? lng.conf[lng.best] : 0.0f);
+            candidate = lng.best;
+            confidence = lng.best >= 0 ? lng.conf[lng.best] : 0.0f;
+            // a look only confirms when new singing arrived since the last one (no lock on silence)
+            if (fresh >= kMinFreshEvidence)
+            {
+                if (candidate >= 0 && confidence >= kLockConfidence)
+                {
+                    stableLooks = candidate == stableKey ? stableLooks + 1 : 1;
+                    stableKey = candidate;
+                }
+                else
+                {
+                    stableLooks = 0;
+                    stableKey = -1;
+                }
+            }
+            double total = 0.0;
+            for (double v : histLong) total += v;
+            if (stableKey >= 0 && stableLooks >= kLockLooks && total >= kLockMinEvidence && confidence >= kLockConfidence)
+            {
+                current = stableKey;
+                lockConfidence = confidence;
+            }
+            state = current >= 0 ? kLocked : (candidate >= 0 ? kCandidate : kListening);
             return current;
         }
 
-        // locked: only new singing may move the key (silence / breaths never do)
-        if (fresh >= kMinFreshEvidence)
+        // locked. Only the opt-in mode lets the singing move the key (silence / breaths never do)
+        if (followChanges && fresh >= kMinFreshEvidence)
         {
             Eval sht;
             evaluate (histShort, scale, mask, sht);
@@ -135,6 +200,7 @@ public:
             if (switchTo >= 0 && switchVotes >= kSwitchVotes)
             {
                 current = switchTo;
+                lockConfidence = modulation ? sht.conf[current] : lng.conf[current];
                 switchTo = -1;
                 switchVotes = 0;
                 if (modulation)                       // the long memory follows the new key
@@ -142,20 +208,74 @@ public:
                 evaluate (histLong, scale, mask, lng);
             }
         }
-        confidence = lng.conf[current];
+
+        // shown, never applied by itself: the evidence now clearly points to another key
+        candidate = lng.best;
+        suggestion = -1;
+        suggestionConfidence = 0.0f;
+        if (lng.best >= 0 && lng.best != current && lng.conf[lng.best] >= kSwitchConfidence
+            && lng.score[lng.best] > lng.score[current] + kSwitchMargin)
+        {
+            suggestion = lng.best;
+            suggestionConfidence = lng.conf[lng.best];
+        }
+        confidence = lockConfidence;
+        state = kLocked;
         return current;
     }
 
+    /** The user locks a key now ("Lock now", "Use the suggested key", a restored session). The
+        evidence is kept; nothing moves the key afterwards unless the user asks again. */
+    void lockTo (int key, float conf) noexcept
+    {
+        if (key < 0 || key > 11)
+            return;
+        current = key;
+        lockConfidence = std::isfinite (conf) ? clamp01 (conf) : 0.0f;
+        confidence = lockConfidence;
+        candidate = key;
+        switchTo = -1;
+        switchVotes = 0;
+        stableKey = -1;
+        stableLooks = 0;
+        suggestion = -1;
+        suggestionConfidence = 0.0f;
+        if (state != kNotNeeded)
+            state = kLocked;
+    }
+
+    /** Registers the note set the next update() will see, without judging it: a key the user just
+        locked (or a restored session) is not re-judged because the scale arrived with it. */
+    void noteScale (int scale, uint16_t mask) noexcept
+    {
+        lastIdentity = (scale + 1) * 4096 + (mask & 0x0fff);
+        lastScaleType = scale;
+    }
+
+    bool isLocked() const noexcept              { return current >= 0; }
+    /** The locked tonic, -1 while unlocked. */
     int getKey() const noexcept                 { return current; }
-    /** Best tonic so far, also before the key is locked (-1 = nothing heard yet). */
+    /** Best tonic of the evidence so far (-1 = nothing heard yet). */
     int getCandidate() const noexcept           { return candidate; }
-    /** 0..1: how sure the detector is about getKey() (or, before the lock, about getCandidate()). */
+    /** Unlocked: how sure the detector is about the candidate (0..1). Locked: the confidence the key
+        had when it was locked (a user lock keeps the value it was given). */
     float getConfidence() const noexcept        { return confidence; }
+    /** Locked only: another tonic the evidence now clearly prefers (shown, not applied), else -1. */
+    int getSuggestion() const noexcept          { return suggestion; }
+    float getSuggestionConfidence() const noexcept { return suggestionConfidence; }
+    /** kListening, kCandidate, kLocked, or kNotNeeded (every note allowed: the key does not matter). */
+    int getState() const noexcept               { return state; }
 
 private:
     static constexpr double kLongMemory = 25.0;          // seconds
     static constexpr double kShortMemory = 6.0;
+    // The one-shot lock waits for several phrases: an opening phrase often leans on another key (the
+    // dominant: "Caro mio ben" opens in A, the song is in D). Chosen on 145 real recordings (VSTM_TUNE_AUDIT.md
+    // 17.2): locks that disagree with the key the whole recording points to, by stable looks / evidence:
+    // 3 / none 10 of 57, 6 / none 6 of 37, 3 / 4.0 1 of 25, 6 / 4.0 0 of 20 (median lock 7 -> 17.5 s).
     static constexpr float kLockConfidence = 0.5f;
+    static constexpr int kLockLooks = 6;                 // the same confident candidate in 6 looks with new singing (~3 s)
+    static constexpr double kLockMinEvidence = 4.0;      // long-memory weight: about 4 s of clear, in-tune singing
     static constexpr float kSwitchConfidence = 0.6f;
     static constexpr double kSwitchMargin = 0.03;
     static constexpr double kModulationInside = 0.97;    // some recent notes lie outside the current key
@@ -169,6 +289,12 @@ private:
         float conf[12] {};
     };
 
+    static uint16_t rotated (uint16_t mask, int tonic) noexcept
+    {
+        const unsigned m = mask & 0x0fffu;
+        return (uint16_t) (((m << tonic) | (m >> (12 - tonic))) & 0x0fffu);
+    }
+
     /** Scores, inside fractions and confidences of the 12 tonics on one histogram. */
     static void evaluate (const double* h, int scale, uint16_t mask, Eval& e) noexcept
     {
@@ -181,9 +307,11 @@ private:
 
         double profile[12];
         makeProfile (scale, mask, profile);
+        uint16_t notes[12];                            // the absolute note set of each tonic
         int best = 0;
         for (int tonic = 0; tonic < 12; ++tonic)
         {
+            notes[tonic] = rotated (mask, tonic);
             double inside = 0.0;
             for (int i = 0; i < 12; ++i)
                 if ((mask >> i) & 1u)
@@ -206,11 +334,24 @@ private:
         const float spread = smoothstep (2.5f, 5.0f, (float) variety);
         for (int k = 0; k < 12; ++k)
         {
-            double rival = -1.0e9;
+            // rivals: tonics that would tune to another note set (the same set tunes the same)
+            double rivalScore = -1.0e9, rivalInside = -1.0;
             for (int j = 0; j < 12; ++j)
-                if (j != k) rival = std::max (rival, e.score[j]);
-            const float margin = clamp01 ((float) ((e.score[k] - rival - 0.01) / 0.06));
-            e.conf[k] = margin * evidence * spread;
+                if (j != k && notes[j] != notes[k])
+                {
+                    rivalScore = std::max (rivalScore, e.score[j]);
+                    rivalInside = std::max (rivalInside, e.inside[j]);
+                }
+            if (rivalInside < 0.0)                     // every tonic gives the same notes
+            {
+                e.conf[k] = evidence * spread;
+                continue;
+            }
+            const float margin = clamp01 ((float) ((e.score[k] - rivalScore - 0.01) / 0.06));
+            // the candidate must explain sung notes its rivals cannot (about 2.5 % of the singing
+            // for full weight): without a note that tells the keys apart the guess stays a guess
+            const float distinct = clamp01 ((float) ((e.inside[k] - rivalInside + 0.005) / 0.03));
+            e.conf[k] = margin * distinct * evidence * spread;
         }
     }
 
@@ -256,9 +397,13 @@ private:
 
     double histLong[12] {}, histShort[12] {};
     int current = -1, candidate = -1;
-    float confidence = 0.0f;
-    int lastScale = -1;
+    float confidence = 0.0f, lockConfidence = 0.0f;
+    int lastIdentity = -1, lastScaleType = -2;
     double sinceEval = 0.0, newEvidence = 0.0;
     int switchTo = -1, switchVotes = 0;
+    int stableKey = -1, stableLooks = 0;
+    int suggestion = -1;
+    float suggestionConfidence = 0.0f;
+    int state = kListening;
 };
 } // namespace vstm
