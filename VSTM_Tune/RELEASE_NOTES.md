@@ -1,5 +1,57 @@
 # VSTM Tune – sürüm notları
 
+## 1.2.0 (24.11.2026) – Kalite / güvenilirlik sürümü
+
+**Dinleme yapılmadı, DAW'da denenmedi.** Ses ifadeleri ölçüm (MEASURED) veya kod incelemesine (INSPECTED) dayanır.
+Ayrıntılar `docs/1.2.0/`:
+
+- kalite raporu,
+- değişiklik günlüğü (adım adım),
+- test talimatı,
+- geri dönüş (rollback),
+- regresyon ve benchmark CSV'leri.
+
+Yeni özellik, parametre ya da arayüz öğesi yoktur.
+
+### Değişen davranış
+
+- **Perde algılama doğru zamanlandı.** İnce ayar YIN çerçevesinin ortasında yapılır; 1.0 / 1.1'de tahmin ~17 ms kaymıştı.
+  Perdesi kesin bilinen yeniden sentez setinde (145 gerçek kaydın perde eğrisi): kaba hata %1,47 → %0,16, ince hata p95 65 → 3 ct.
+  Oktav hatası 1.1 düzeyinde kaldı.
+- **Süren ses voiced kalır.** Bass aralığında ±200 ct 6,5 Hz vibratoda voiced %66 → %95.
+- **Kısa periyot denetimi yalnız Soprano / Alto'da çalışır** (E6 gibi notalarda 2P / 4P hatası).
+- **REALTIME ↔ HQ çalarken:** ses kısılmaz, içerik tekrarlanmaz ya da atlanmaz (132 durumda 68 → 0). Gecikme 0,4–2 s içinde kayar.
+- **Hard tune:** yeni notaya 30 cent yaklaşan ses beklemeden varır. Tutulan notada KEY / SCALE değişiminde 25 ms kayma.
+- **Seviye dengelemesine tepe sınırı.** Transpoze +12'de seviye eşitlenmiş tepe p95 6,9 → 5,4 dB, 10 ms patlama 358 → 140.
+  Gizli limiter yoktur.
+- **Varsayılan ses biraz değişti:**
+  - ROBOTISM %50 vibratonun daha çoğunu korur (sentetik %74 → %97).
+  - Hard tune'da nota değişimi şarkıcıya göre ~6 ms daha geç.
+  - Kaydırmasız ayarda tepe p95 +0,5 dB.
+
+  Hepsi rapor bölüm 4–5'te.
+
+### Uyumluluk
+
+- Parametre kimlikleri, sırası (27), aralıkları, otomasyon, preset ve oturum biçimi (state 2) **değişmedi**.
+- 1.0 ve 1.1 projeleri açılır.
+- Gecikme aynı: REALTIME 20 ms, HQ 40 ms.
+
+### Testler
+
+- EngineTest 66 → 71, PluginTest 69 → 73. Hepsi geçiyor; derlenmiş VST3 JUCE host'unda yüklenip sınandı.
+- pluginval 10 (Linux VST3) geçti; 1.1.0 da aynı testten geçti.
+- ASan + UBSan temiz.
+- Yeni ölçüm araçları: `gt_corpus.py`, `gt_eval.py`, `gt_variants.py`, `peak_check.py`, `rt_switch_probe.cpp`,
+  `rt_switch_eval.py`, `transition_eval.py`, `autokey_eval.py`, `bench_probe.cpp`.
+
+### Test edilmeyenler
+
+- Gerçek DAW: **NOT TESTED.**
+- Windows / macOS derlemesi: 1.2.0 için yalnız CI'da yapılabilir; henüz yapılmadı.
+- İnsan dinlemesi: **yok.** Kör dinleme paketi hazır.
+- Auto Key'in gerçek kayıtlardaki doğruluğu ölçülmedi.
+
 ## 1.1.0 (19.11.2026) – Final quality pass
 
 **Dinleme yapılmadı.** Bu sürümdeki her ses ifadesi ölçüm (MEASURED) veya kod incelemesine (INSPECTED) dayanır.

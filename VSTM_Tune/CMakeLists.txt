@@ -6,7 +6,7 @@ if(APPLE)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
 endif()
 
-project(VSTMTune VERSION 1.1.0 LANGUAGES C CXX)
+project(VSTMTune VERSION 1.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -136,7 +136,9 @@ target_link_libraries(VSTMTune
 #    VSTMTune_EngineTest : ses motoru testi (JUCE gerektirmez)
 #    VSTMTune_PluginTest : parametreler, state, presetler, arayuz ekran goruntuleri
 #    VSTMTune_WavProbe   : gercek WAV render + analiz kaydi (tests/vocal_metrics.py ile)
-#    VSTMTune_AuditProbe : denetim olcumleri S1-S15 (JUCE gerektirmez)
+#    VSTMTune_AuditProbe : denetim olcumleri S1-S17 (JUCE gerektirmez)
+#    VSTMTune_RtSwitchProbe : REALTIME <-> HQ gecis butunlugu (tests/rt_switch_eval.py ile)
+#    VSTMTune_BenchProbe : CPU / gecikme / bellek ayirma olcumu (CSV)
 # ------------------------------------------------------------------------------
 option(VSTM_BUILD_TESTS "Test programlarini da olustur" OFF)
 if(VSTM_BUILD_TESTS)
@@ -152,6 +154,20 @@ if(VSTM_BUILD_TESTS)
     target_link_options(VSTMTune_EngineTest PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/STACK:16777216>")
 
     # denetim olcumleri S1-S15 (VSTM_TUNE_AUDIT.md): sentetik senaryolar -> JSONL + WAV, karar vermez
+    # REALTIME <-> HQ switch integrity (1.2): renders + cases.jsonl for tests/rt_switch_eval.py
+    add_executable(VSTMTune_RtSwitchProbe tests/rt_switch_probe.cpp)
+    target_include_directories(VSTMTune_RtSwitchProbe PRIVATE Source)
+    target_compile_features(VSTMTune_RtSwitchProbe PRIVATE cxx_std_17)
+    target_compile_options(VSTMTune_RtSwitchProbe PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
+
+    # CPU / latency / allocation benchmark (1.2): CSV, decides nothing
+    find_package(Threads REQUIRED)
+    add_executable(VSTMTune_BenchProbe tests/bench_probe.cpp)
+    target_include_directories(VSTMTune_BenchProbe PRIVATE Source)
+    target_compile_features(VSTMTune_BenchProbe PRIVATE cxx_std_17)
+    target_compile_options(VSTMTune_BenchProbe PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
+    target_link_libraries(VSTMTune_BenchProbe PRIVATE Threads::Threads)
+
     add_executable(VSTMTune_AuditProbe tests/audit_probe.cpp)
     target_include_directories(VSTMTune_AuditProbe PRIVATE Source)
     target_compile_features(VSTMTune_AuditProbe PRIVATE cxx_std_17)

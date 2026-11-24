@@ -41,6 +41,7 @@ public:
     {
         tauMax = std::min (1000, (int) std::ceil (decRate / minHz) + 2);
         tauMin = std::max (2, (int) std::floor (decRate / maxHz));
+        shortLagCheck = maxHz > kShortLagRangeHz;
     }
 
     void reset()
@@ -49,6 +50,8 @@ public:
         decCount = 0;
         wasVoiced = false;
         lastPeriod = 0.0;
+        voicedRms = 0.0f;
+        voicedRun = 0;
     }
 
     /** Feed one sample of the already low-passed, decimated signal. */
@@ -117,6 +120,44 @@ public:
         if (best < 0)
             return r;
 
+        // A shorter period the decimated grid hides. A signal with period P is just as periodic with
+        // 2P, 3P, 4P: YIN takes the first dip under its threshold, but at the top of the range the
+        // period is 8 - 12 decimated samples and falls between two lags (soprano "i" at E6, 1319 Hz:
+        // the 2nd harmonic dominates after the anti-alias filter and YIN read 2P or 4P, 12 / 24 st
+        // low, in every earlier version). Only a dip that is already visible at best / k (k = 4, 3, 2,
+        // shortest first) is checked, on the full-rate signal, with the octave rule's own test: the
+        // short period wins unless the long one is clearly more periodic (a real long period, e.g.
+        // pulses that alternate, keeps it). Only short candidate lags (<= kSubharmonicMaxLag, above
+        // ~0.9-1 kHz): applied to every lag, voices with a weak fundamental went an octave UP (real-
+        // derived corpus: sustained octave runs 14 -> 18; 1.2 report), where the grid is fine anyway.
+        // Only in a range that reaches above kShortLagRangeHz (Soprano / Alto): in the Tenor range
+        // (top 1050 Hz) it fixed nothing measurable and made two kinds of error (1.2 report, step 11):
+        // female voices went an octave up, and where YIN had already taken a wrong short lag in a
+        // consonant inside a held low note it moved that further up (m11 "dona": 525 Hz -> 1050 Hz for a
+        // 208 Hz voice), and the hard-tuned grains peaked up to +9.6 dB over the dry signal there.
+        if (shortLagCheck && best >= 2 * tauMin && tauMin <= kSubharmonicMaxLag)
+        {
+            const double frameCentre = (double) (kWindow + tauMax) * decim - (kWindow + best) * decim * 0.5;
+            for (int k = 4; k >= 2; --k)
+            {
+                const double sub = (double) best / k;
+                if (sub < tauMin || sub > kSubharmonicMaxLag)
+                    continue;
+                const int lm = localMin ((int) std::lround (sub));
+                if (lm < 0 || cmnd[(size_t) lm] > kSubharmonicDip || std::abs (lm - sub) > 1.5)
+                    continue;
+                const int w = std::clamp ((int) (1.5 * best * decim), 256, 2048);
+                const int64_t base = std::min (endIndex - (int64_t) std::llround (frameCentre) - (w + best * decim) / 2,
+                                               endIndex - w - (int64_t) (best * decim + decim + 1));
+                if (! clearlyMorePeriodic (periodicity (best, base, w, fullRing, fullMask),
+                                          periodicity (lm, base, w, fullRing, fullMask)))
+                {
+                    best = lm;
+                    break;
+                }
+            }
+        }
+
         // continuity: guard against octave jumps relative to the previous voiced period.
         // Octave choices are judged on the full-rate signal between the lag samples
         // (periodicity()): on the decimated grid a short period reads too shallow (A5 at ~12 kHz:
@@ -173,9 +214,29 @@ public:
 
         r.clarity = 1.0f - std::min (1.0f, minVal);
         const bool loudEnough = r.rms > kGate;
-        r.voiced = loudEnough && minVal < (wasVoiced ? kStayVoiced : kBecomeVoiced);
-        r.period = refine (tauF * decim, fullRing, fullMask, endIndex);
+        // A voice that keeps going: while the previous hop was voiced, this dip continues its pitch
+        // (within kContinuityStep semitones) and the level stays near the voice's own recent level,
+        // a shallower dip still counts as voiced. Fast wide vibrato in low voices smears the dip within
+        // one frame (bass +-200 ct at 6.5 Hz: clarity 0.58 - 0.69 in the steep phases, under the 0.66
+        // needed to stay voiced: a third of each cycle dropped out). A consonant or the end of a note
+        // loses level (below the analysis band's -6 dB) or pitch continuity and still ends the voicing.
+        // Only an established voice (kContinuityMinHops voiced hops in a row, ~22 ms): a chance period in
+        // aperiodic sound (an irregular click train became voiced for 5 hops) must not be held on to.
+        bool continuing = false;
+        if (wasVoiced && lastPeriod > 0.0 && voicedRun >= kContinuityMinHops)
+            continuing = std::abs (12.0 * std::log2 (tauF * decim / lastPeriod)) < kContinuityStep
+                      && r.rms > kContinuityLevel * voicedRms;
+        r.voiced = loudEnough && minVal < (wasVoiced ? (continuing ? kStayVoicedContinuing : kStayVoiced) : kBecomeVoiced);
+        if (r.voiced)
+            voicedRms = voicedRms > 0.0f && wasVoiced ? voicedRms + (r.rms - voicedRms) * 0.05f : r.rms;
+        voicedRun = r.voiced ? std::min (voicedRun + 1, 1 << 20) : 0;
+        // The estimate describes the middle of the YIN frame (centreDelay before "now"): the voicing
+        // decision and the time stamp the engine files it under (TuneEngine::Rec) both come from that
+        // frame, so the full-rate refinement must measure the same audio. 1.0 / 1.1 refined on the
+        // newest samples (~6 ms back, the frame centre is ~19-26 ms back): in vibrato and at note
+        // changes the period was ~17 ms newer than its time stamp (exact-truth corpus, 1.2 report).
         r.centreDelay = (double) (kWindow + tauMax) * decim - (kWindow + tauF) * decim * 0.5;
+        r.period = refine (tauF * decim, fullRing, fullMask, endIndex, endIndex - (int64_t) std::llround (r.centreDelay));
 
         wasVoiced = r.voiced;
         if (r.voiced)
@@ -191,6 +252,10 @@ private:
     static constexpr float kThreshold = 0.15f;
     static constexpr float kBecomeVoiced = 0.22f;
     static constexpr float kStayVoiced = 0.34f;
+    static constexpr float kStayVoicedContinuing = 0.50f;   // the voice keeps its pitch and level: see analyse()
+    static constexpr double kContinuityStep = 2.0;          // semitones
+    static constexpr float kContinuityLevel = 0.5f;         // rms relative to the recent voiced rms
+    static constexpr int kContinuityMinHops = 8;             // voiced hops in a row before the rule applies
     static constexpr float kGate = 0.0015f;       // about -56 dBFS
     static constexpr int kRefineLags = 64;        // lags per refine() window (192 kHz: 2 x 18 + 2)
     // Octave thresholds on periodicity() residuals, chosen on real voices (145 recordings: 14
@@ -201,6 +266,9 @@ private:
     static constexpr double kOctaveRatio = 0.5;          // keep the lower octave: residual < 1/2 ...
     static constexpr double kOctaveAbsMargin = 0.01;     // ... and not just both tiny
     static constexpr double kOctaveRelease = 0.25;       // leave the previous octave downwards: < 1/4
+    static constexpr float kSubharmonicDip = 0.5f;          // a dip at best / k worth checking (decimated CMND)
+    static constexpr double kSubharmonicMaxLag = 12.0;      // decimated samples: only where the grid is too coarse
+    static constexpr double kShortLagRangeHz = 1200.0;      // the check runs only when the range's top is above this
 
     static bool clearlyMorePeriodic (double longLag, double shortLag) noexcept
     {
@@ -256,20 +324,20 @@ private:
         return best;
     }
 
-    /** Narrow full-rate search around the coarse period; returns a sub-sample period. */
-    double refine (double coarse, const float* x, int mask, int64_t endIndex) const noexcept
+    /** Narrow full-rate search around the coarse period; returns a sub-sample period.
+        endIndex = one past the newest full-rate sample; centreIndex = the middle of the audio the
+        coarse (YIN) estimate describes: the compared stretch is centred there. */
+    double refine (double coarse, const float* x, int mask, int64_t endIndex, int64_t centreIndex) const noexcept
     {
         if (decim <= 1 || x == nullptr)
             return coarse;
 
-        // The coarse estimate describes an older stretch of the signal than this search (the YIN
-        // frame reaches tauMax decimated samples further back): while the pitch moves (vibrato,
-        // slides) the newest minimum can lie just outside +-(decim + 1). It used to fall back to
-        // the coarse value then: in the Bass range (longest frame) a +-50 ct vibrato read 12 ct
-        // rough instead of 3 ct (rms second difference), and a fast slide was held on a stale value
-        // (a hard-tuned 20 ms third stopped on the note in between). A minimum on the edge now moves
-        // the search window downhill, so it stays in the same dip (a wider search found other dips),
-        // at most 8 % of the period away from the coarse estimate.
+        // The stretch compared here is centred on the YIN frame, so the refined period describes the
+        // same audio as the coarse one, the voicing and the time stamp. While the pitch moves (vibrato,
+        // slides) the minimum can still lie just outside +-(decim + 1) of the coarse value (that is
+        // interpolated on the decimated grid): a minimum on the edge moves the search window downhill,
+        // so it stays in the same dip (a wider search found other dips), at most 8 % of the period away
+        // from the coarse estimate; beyond that the coarse value is kept.
         const int w = std::clamp ((int) (1.5 * coarse), 256, 2048);
         const int radius = decim + 1;
         const double maxDrift = std::max ((double) radius, 0.08 * coarse);
@@ -278,7 +346,9 @@ private:
         {
             const int lo = std::max (2, (int) std::floor (centre) - radius);
             const int hi = (int) std::ceil (centre) + radius;
-            const int64_t base = endIndex - w - hi;
+            // centred on the analysed audio; near the bottom of the range the stretch can be longer than
+            // twice the frame delay: then it ends at the newest sample (a little older than the centre)
+            const int64_t base = std::min (centreIndex - (int64_t) ((w + hi) / 2), endIndex - w - hi);
             if (base < 0)
                 return coarse;
 
@@ -325,6 +395,9 @@ private:
     int64_t decCount = 0;
     bool wasVoiced = false;
     double lastPeriod = 0.0;
+    bool shortLagCheck = false;    // setRange(): the short-lag check of analyse() is used in this range
+    float voicedRms = 0.0f;             // smoothed rms of the recent voiced frames (~50 hops)
+    int voicedRun = 0;                  // voiced hops in a row
 };
 //==============================================================================
 /** Cleans up the raw detector output before it drives the correction.

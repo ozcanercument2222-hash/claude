@@ -6,6 +6,8 @@
 //  Linux'ta ekran olmadan:  xvfb-run -a VSTMTune_PluginTest goruntuler
 //==============================================================================
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <atomic>
+#include <thread>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
@@ -438,6 +440,115 @@ int main (int argc, char* argv[])
                    text (vstm::ids::key).toRawUTF8(), text (vstm::ids::bypass).toRawUTF8(), text (vstm::ids::mix).toRawUTF8(),
                    text (vstm::ids::transpose).toRawUTF8(), text (vstm::ids::formant).toRawUTF8());
         }
+    }
+
+    //--------------------------------------------------------------------------
+    std::printf ("\n=== 3e) State: 1.1 sessions, determinism, duplicate ids, restore while audio runs (1.2) ===\n");
+    {
+        // a 1.1 session (state version 2) with every one of the 27 parameters away from its default
+        // comes back with exactly those values; 1.2 adds no parameter and keeps the format
+        juce::XmlElement x ("VSTMTune");
+        const std::pair<const char*, double> vals[] = {
+            { "key", 4 }, { "scale", 8 }, { "correction", 63.5 }, { "retune", 42.0 }, { "humanize", 12.5 }, { "robotism", 71.5 },
+            { "vibscale", 140.0 }, { "formant", -2.5 }, { "transpose", 5.0 }, { "mix", 81.5 }, { "bypass", 1.0 }, { "realtime", 0.0 },
+            { "range", 2.0 }, { "customscale", 1.0 }, { "adaptive", 1.0 } };
+        for (const auto& v : vals)
+        {
+            auto* e = x.createNewChildElement ("PARAM");
+            e->setAttribute ("id", v.first);
+            e->setAttribute ("value", v.second);
+        }
+        for (int i = 0; i < 12; ++i)
+        {
+            auto* e = x.createNewChildElement ("PARAM");
+            e->setAttribute ("id", vstm::ids::scaleNote (i));
+            e->setAttribute ("value", (i % 3 == 0) ? 1.0 : 0.0);           // 1, b3, #4, 6: not the default major set
+        }
+        x.setAttribute ("presetName", "Default Preset");
+        x.setAttribute ("uiScale", 0.8);
+        x.setAttribute ("version", 2);
+        x.setAttribute ("autoKeyLock", 9);
+        x.setAttribute ("autoKeyConf", 0.75);
+        x.setAttribute ("followKeyChanges", 1);
+        x.setAttribute ("presetsKeepKey", 0);
+        VSTMTuneProcessor p;
+        restoreXml (p, x);
+        bool all = true;
+        for (const auto& v : vals)
+            all = all && std::abs (plain (p, v.first) - (float) v.second) < 1.0e-3f;
+        for (int i = 0; i < 12; ++i)
+            all = all && (plain (p, vstm::ids::scaleNote (i)) > 0.5f) == (i % 3 == 0);
+        auto again = savedXml (p);
+        all = all && again->getIntAttribute ("autoKeyLock") == 9 && std::abs (again->getDoubleAttribute ("autoKeyConf") - 0.75) < 1e-6
+                  && again->getIntAttribute ("followKeyChanges") == 1 && again->getIntAttribute ("presetsKeepKey") == 0
+                  && p.getLatencySamples() == vstm::TuneEngine::latencyFor (44100.0, false);
+        CHECK (all && paramsAndAudioFinite (p), "a 1.1 session with all 27 parameters changed comes back exactly (values, lock, options, HQ latency)");
+
+        // the saved state is deterministic: the same settings give the same bytes, twice
+        juce::MemoryBlock s1, s2;
+        p.getStateInformation (s1);
+        p.getStateInformation (s2);
+        VSTMTuneProcessor q;
+        q.setStateInformation (s1.getData(), (int) s1.getSize());
+        juce::MemoryBlock s3;
+        q.getStateInformation (s3);
+        CHECK (s1 == s2 && s1 == s3, "saved state is deterministic (twice the same bytes; restore + save gives the same bytes: %d)", (int) (s1 == s3));
+
+        // duplicate parameter ids in a damaged session: no crash, one of the two values, audio finite
+        juce::XmlElement d ("VSTMTune");
+        for (double v : { 20.0, 80.0 })
+        {
+            auto* e = d.createNewChildElement ("PARAM");
+            e->setAttribute ("id", "robotism");
+            e->setAttribute ("value", v);
+        }
+        VSTMTuneProcessor r;
+        restoreXml (r, d);
+        const float rb = plain (r, vstm::ids::robotism);
+        CHECK ((std::abs (rb - 20.0f) < 1e-3f || std::abs (rb - 80.0f) < 1e-3f) && paramsAndAudioFinite (r),
+               "duplicate parameter id in a session: one of the values (%.1f), audio finite", rb);
+
+        // a host restoring a session while audio runs on another thread: no crash, no hang, finite audio
+        VSTMTuneProcessor live;
+        live.setPlayConfigDetails (2, 2, kFs, 256);
+        live.prepareToPlay (kFs, 256);
+        juce::MemoryBlock other;
+        p.getStateInformation (other);
+        std::atomic<bool> stop { false };
+        std::atomic<long> blocks { 0 };
+        std::atomic<bool> finite { true };
+        std::thread audio ([&]
+        {
+            juce::AudioBuffer<float> buf (2, 256);
+            juce::MidiBuffer midi;
+            double ph = 0.0;
+            while (! stop.load())
+            {
+                for (int i = 0; i < 256; ++i)
+                {
+                    ph += 220.0 / kFs;
+                    const float s = 0.2f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * ph);
+                    buf.setSample (0, i, s);
+                    buf.setSample (1, i, s);
+                }
+                live.processBlock (buf, midi);
+                for (int i = 0; i < 256; ++i)
+                    if (! std::isfinite (buf.getSample (0, i))) finite = false;
+                ++blocks;
+            }
+        });
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        for (int k = 0; k < 200; ++k)
+        {
+            if (k % 2) live.setStateInformation (other.getData(), (int) other.getSize());
+            else live.setStateInformation (s1.getData(), (int) s1.getSize());
+        }
+        const auto ms = juce::Time::getMillisecondCounterHiRes() - t0;
+        stop = true;
+        audio.join();
+        live.releaseResources();
+        CHECK (finite.load() && blocks.load() > 0 && ms < 20000.0,
+               "200 session restores while audio runs on another thread: finite audio, %ld blocks, %.0f ms, no crash", blocks.load(), ms);
     }
 
     //--------------------------------------------------------------------------

@@ -59,6 +59,7 @@ public:
         pendingAge = 0.0f;
         delta = 0.0f;
         glideProgress = 1.0f;
+        forcedGlideMs = 0.0f;
         settledFlag = true;
         adapt = {};
         adaptState = {};
@@ -128,6 +129,7 @@ public:
         else if (candidate != note && ! isAllowed (note, s.key, s.mask))
         {
             startTransition (candidate);           // scale or key changed under the held note
+            forcedGlideMs = kKeyChangeGlideMs;     // a held note never jumps because the key / scale changed
             out.noteChanged = true;
         }
         else if (candidate != note
@@ -140,10 +142,15 @@ public:
                 pendingNote = candidate;
                 pendingAge = dt;
             }
-            // clearly arrived at another note (a real leap): switch now; hovering between
-            // two notes must persist before the target moves
-            const bool arrived = std::abs (shaped - (float) note) >= 1.5f
-                              && std::abs (shaped - (float) candidate) <= 0.5f;
+            // clearly arrived at another note: switch now; hovering between two notes must persist
+            // before the target moves. Arrived = a real leap (>= 1.5 st from the held note, within 0.5 st
+            // of the new one) or close to the new note (within kArriveNear): a singer hovering between
+            // two neighbouring notes stays >= 40 ct from both, so the dwell still stops note chatter, while
+            // a sung step no longer waits for it (with the correctly timed detector of 1.2 the dwell
+            // made every semitone step switch 14 - 52 ms after the singer did; 1.2 report, P0-E)
+            const bool arrived = (std::abs (shaped - (float) note) >= 1.5f
+                                  && std::abs (shaped - (float) candidate) <= 0.5f)
+                              || std::abs (shaped - (float) candidate) <= kArriveNear;
             const float dwellMs = arrived ? 0.0f : 22.0f + 30.0f * human - 8.0f * robot;
             if (pendingAge * 1000.0f >= dwellMs)
             {
@@ -159,7 +166,7 @@ public:
 
         // "insansi gecis": S-curve glide between notes, only on the human side
         // (Adaptive: up to 60 % shorter in fast runs, so short notes can still land)
-        const float glideMs = 110.0f * human * (s.adaptive ? 1.0f - 0.6f * adaptState.fast : 1.0f);
+        const float glideMs = std::max (110.0f * human * (s.adaptive ? 1.0f - 0.6f * adaptState.fast : 1.0f), forcedGlideMs);
         if (glideMs > 0.5f && glideProgress < 1.0f)
         {
             glideProgress = std::min (1.0f, glideProgress + dt * 1000.0f / glideMs);
@@ -170,6 +177,8 @@ public:
             glideProgress = 1.0f;
             glide = (float) note;
         }
+        if (glideProgress >= 1.0f)
+            forcedGlideMs = 0.0f;
 
         // retune speed, shaped by robotism and (for sustained notes) humanize. Robotik side:
         // (1 - r)(1 - r/2) instead of (1 - r)^2, so 0 - 10 % is no longer one flat "dead" zone
@@ -230,9 +239,14 @@ public:
 
 private:
     static constexpr int kNoNote = -1000;
+    static constexpr float kArriveNear = 0.30f;      // semitones from the new note: arrived, no dwell
+    // A key / scale change (the user's, or the Auto Key lock) moves a held note to the new target over at
+    // least this long, also on the robotic side (1.0 / 1.1: an instant jump there; 1.2, P0-E)
+    static constexpr float kKeyChangeGlideMs = 25.0f;
 
     void startTransition (int newNote) noexcept
     {
+        forcedGlideMs = 0.0f;
         pendingNote = kNoNote;
         pendingAge = 0.0f;
         glideFrom = glide;
@@ -298,7 +312,7 @@ private:
     int pendingNote = kNoNote;
     float pendingAge = 0.0f;
     float centre = 0.0f, delta = 0.0f;
-    float glideFrom = 0.0f, glide = 0.0f, glideProgress = 1.0f;
+    float glideFrom = 0.0f, glide = 0.0f, glideProgress = 1.0f, forcedGlideMs = 0.0f;
     float noteAge = 0.0f, onsetAge = 0.0f;
     bool settledFlag = true;
     Adapt adapt;

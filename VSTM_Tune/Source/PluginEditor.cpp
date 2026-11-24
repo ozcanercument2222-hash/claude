@@ -2,7 +2,7 @@
 #include "Parameters.h"
 
 #ifndef VSTM_TUNE_VERSION
- #define VSTM_TUNE_VERSION "1.1.0"
+ #define VSTM_TUNE_VERSION "1.2.0"
 #endif
 
 using namespace vui;

@@ -26,8 +26,11 @@
 //      icerik zaten farklidir, ofset yalnizca zaman sicramasi olur.
 //
 //  Gecikme sabittir (REALTIME 20 ms, kapaliyken 40 ms) ve host'a bildirilir. Mod calarken
-//  degisirse motor sifirlanmaz: cikis 5 ms kisilir, sentez yeni gecikmenin zaman cizgisine
-//  tasinir, 5 ms'de geri acilir; giris gecmisi, perde analizi ve bulunan ton korunur.
+//  degisirse motor sifirlanmaz ve icerik ne tekrarlanir ne atlanir: gercek gecikme yeni degere
+//  yumusak bir rampayla (yukseltilmis kosinus) kayar. Islenmis ses PSOLA ile zamanda esnetilir
+//  (perde degismez); dry / bypass ayni rampayla, ara degerlemeyle okunur (rampa boyunca hafif hiz
+//  degisimi, en cok ~%1.6 / 27 ct; dry duyulmuyorsa rampa kisa). Giris gecmisi, perde analizi ve
+//  bulunan ton korunur.
 //  Motor blok boyutundan bagimsizdir: ayni giris her blok boyutunda ayni cikisi verir.
 //
 //  Otomatik ton (KeyDetector) vokalden bir TAHMINDIR ve bir kez kilitlenir; host'un yeniden
@@ -72,6 +75,8 @@ public:
         float   deviation = 0.0f;       // input minus its target note (semitones, before transpose)
         int16_t note = -1;              // target note incl. transpose, -1 = none
         uint8_t flags = 0;
+        float   analysisDelay = 0.0f;   // seconds: the analysed audio is centred this long before the hop (tests, logs)
+        float   clarity = 0.0f;         // detector clarity of this hop, 1 - CMND minimum (tests, logs)
     };
     enum : uint8_t { kVoiced = 1, kNoteChange = 2, kSettled = 4 };
 
@@ -105,6 +110,7 @@ public:
         levelGainCoef = 1.0f - std::exp (-1.0f / (0.03f * (float) sr));
         levelFastCoef = 1.0f - std::exp (-1.0f / (0.01f * (float) sr));
         levelDownCoef = 1.0f - std::exp (-1.0f / (0.001f * (float) sr));
+        peakBlockLen = std::max (1, (int) std::lround (0.005 * sr));
         levelMinCount = (int) std::lround (0.02 * sr);
 
         applyRange();
@@ -112,22 +118,36 @@ public:
     }
 
     /** REALTIME (20 ms) <-> HQ (40 ms) while audio runs. Called on the audio thread at a block
-        boundary. The output fades out (5 ms), the synthesis moves to the new output timeline and the
-        output fades back in (5 ms). The input history, pitch analysis, marks and the automatic key are
-        kept: no reset, no stretch of silence, no click. The new latency is in effect after the
-        fade-out; content shifts by the latency difference (that is what a latency change means). */
+        boundary. The reported latency changes at once (the host compensates it); the real delay of
+        the output glides to it, so no input is repeated or skipped (1.0 / 1.1 faded out, jumped the
+        content by 20 ms and faded in). The synthesis keeps its own fixed time axis (accLatency): the
+        offset D between that axis and the content time ramps along a raised cosine. Voiced grains pick
+        their source marks along the moving content time (a PSOLA time-stretch: the pitch does not
+        change), unvoiced grains follow it, and the dry signal is read at the same moving position
+        (interpolated). The ramp takes kRampWetSeconds when only the processed voice is heard (MIX
+        100 %, not bypassed) and kRampDrySeconds when the dry is heard: reading the dry at a moving
+        position changes its speed by at most (pi/2) x 20 ms / 2 s = 1.6 % (27 ct). A switch during a
+        ramp starts a new ramp from where the delay is. Analysis, marks, the input history and the key
+        are kept. No allocation, no reset. */
     void setRealtime (bool shouldBeRealtime) noexcept
     {
         if (shouldBeRealtime == realtime)
             return;
         realtime = shouldBeRealtime;
-        pendingLatency = latencyFor (sr, realtime);
-        if (switchState == 2)                               // fading in: fade out again from the gain reached
-            switchPos = switchFade - switchPos;
-        else if (switchState == 0)
-            switchPos = 0;
-        switchState = 1;
+        latency = latencyFor (sr, realtime);
+        const int64_t tNow = nIn - accLatency;                  // the next output sample on the synthesis axis
+        const double dNow = contentOffset ((double) tNow);
+        rampFrom = dNow;
+        rampTo = (double) (latency - accLatency);
+        rampStart = tNow;
+        const bool dryHeard = ! (params.active && params.mix >= 0.999f && mixSmooth >= 0.999f && wetSmooth >= 0.999f);
+        const double full = std::max (1.0, (double) std::abs (latencyFor (sr, true) - latencyFor (sr, false)));
+        rampLen = std::max (1.0, std::round (sr * (dryHeard ? kRampDrySeconds : kRampWetSeconds) * std::abs (rampTo - rampFrom) / full));
+        ramping = std::abs (rampTo - rampFrom) > 1.0e-9;
     }
+
+    /** True while the output's delay is still gliding to a new latency (tests, display). */
+    bool isLatencyRamping() const noexcept  { return ramping; }
 
     //------------------------------------------------------------ Auto key requests (any thread)
     /** Lock the automatic key to `key` (0..11) now: "Lock now", "Use the suggested key", a restored
@@ -197,12 +217,18 @@ public:
         planValid = false;
         mixSmooth = params.mix;
         wetSmooth = params.active ? 1.0f : 0.0f;
-        switchState = 0;
-        switchPos = 0;
-        switchFade = std::max (1, (int) std::lround (sr * 0.005));
-        pendingLatency = latency;
+        accLatency = latency;
+        rampFrom = rampTo = 0.0;
+        rampStart = 0;
+        rampLen = 1.0;
+        ramping = false;
+        lagNow = (double) latency;
         levelGain = 1.0f;
         levelPd = levelPv = levelFd = levelFv = 0.0f;
+        std::fill (std::begin (peakD), std::end (peakD), 0.0f);
+        std::fill (std::begin (peakV), std::end (peakV), 0.0f);
+        peakDNow = peakVNow = 0.0f;
+        peakPos = 0;
         levelCount = 0;
         levelHeld = levelActive ? levelPrior (params.formant - params.transpose) : 1.0f;
         currentNote.store (-1);
@@ -279,9 +305,17 @@ public:
             if (nIn % hop == 0)
                 analysisHop();
 
-            // ---- output (timeline position t = nIn - 1 - latency)
-            const float switchGain = switchState != 0 ? advanceSwitch() : 1.0f;   // REALTIME <-> HQ fade
-            const int64_t t = nIn - 1 - latency;
+            // ---- output (synthesis axis position t = nIn - 1 - accLatency; the content it shows is
+            //      t - D, D = 0 unless the latency changed while playing, see setRealtime())
+            const int64_t t = nIn - 1 - accLatency;
+            double dOff = rampTo;
+            if (ramping)
+            {
+                dOff = contentOffset ((double) t);
+                if ((double) t >= (double) rampStart + rampLen)
+                    ramping = false;                         // settled on rampTo
+            }
+            lagNow = (double) accLatency + dOff;
             mixSmooth += (params.mix - mixSmooth) * smoothCoef;
             wetSmooth += (wetTarget - wetSmooth) * smoothCoef;
             const float wetGain = mixSmooth * wetSmooth;
@@ -299,23 +333,25 @@ public:
             const float xf = xfade[ti];          // < 0: plain sum, else unvoiced -> voiced crossfade
             xfade[ti] = -1.0f;
             const float vg = levelGain;          // level of the shifted voice (exactly 1 without transpose / formant)
-            float dryPow = 0.0f, voicedPow = 0.0f;
+            float dryPow = 0.0f, voicedPow = 0.0f, dryPeak = 0.0f, voicedPeak = 0.0f;
             bool onlyVoiced = xf < 0.0f;
             for (int ch = 0; ch < nc; ++ch)
             {
                 float& v = acc[(size_t) ch][ti];
                 float& u = accU[(size_t) ch][ti];
-                const float dry = in[(size_t) ch][ti];
+                const float dry = std::abs (dOff) > 0.0 ? dryAt (ch, (double) t - dOff) : in[(size_t) ch][ti];
                 dryPow += dry * dry;
                 voicedPow += v * v;
+                dryPeak = std::max (dryPeak, std::abs (dry));
+                voicedPeak = std::max (voicedPeak, std::abs (v));
                 onlyVoiced = onlyVoiced && ! (std::abs (u) > 0.0f);            // no unvoiced grain here
                 const float vv = v * vg;
                 const float wet = xf < 0.0f ? vv + u : u + xf * (vv - u);
                 v = u = 0.0f;
-                channels[ch][i] = (dry + wetGain * (wet - dry)) * switchGain;      // x 1.0 is exact: no change normally
+                channels[ch][i] = dry + wetGain * (wet - dry);
             }
             if (levelActive || std::abs (vg - 1.0f) > 0.0f)
-                updateLevelGain (onlyVoiced && voicedPow > 0.0f, dryPow, voicedPow);
+                updateLevelGain (onlyVoiced && voicedPow > 0.0f, dryPow, voicedPow, dryPeak, voicedPeak);
         }
     }
 
@@ -389,7 +425,7 @@ private:
         measured the typical value for the shift is used. Shifting up, short grain bursts are kept
         within +4 dB of the dry signal (see below). With transpose and formant at 0 the gain glides
         back to exactly 1 and the output is bit-identical to the engine without it. */
-    void updateLevelGain (bool measure, float dryPow, float voicedPow) noexcept
+    void updateLevelGain (bool measure, float dryPow, float voicedPow, float dryPeak, float voicedPeak) noexcept
     {
         float target = 1.0f;
         if (levelActive)
@@ -415,6 +451,14 @@ private:
                 levelFv += (voicedPow - levelFv) * levelFastCoef;
                 if (levelFv > 1.0e-10f)
                     target = std::min (target, std::sqrt (levelFd / levelFv) * 1.585f);
+
+                // Peak safety, kept apart from the level match: the gain added for the level must not lift
+                // the shifted voice's short peaks above the dry signal's own (sliding ~20 ms peak windows,
+                // + kPeakMargin). It never cuts below 1: PSOLA's own peaks are not limited (no hidden limiter).
+                peakTrack (dryPeak, voicedPeak);
+                const float pv = peakWindow (peakV, peakVNow);
+                if (pv > 1.0e-6f)
+                    target = std::min (target, std::max (1.0f, kPeakMargin * peakWindow (peakD, peakDNow) / pv));
             }
         }
         levelGain += (target - levelGain) * (target < levelGain ? levelDownCoef : levelGainCoef);
@@ -427,6 +471,28 @@ private:
             levelPd = levelPv = levelFd = levelFv = 0.0f;
             levelCount = 0;
         }
+    }
+
+    /** Sliding peak windows of the dry signal and the shifted voice: the maximum of the running 5 ms block
+        and the last kPeakBlocks blocks (~20 - 25 ms, at least one period of a 50 Hz voice). */
+    void peakTrack (float d, float v) noexcept
+    {
+        peakDNow = std::max (peakDNow, d);
+        peakVNow = std::max (peakVNow, v);
+        if (++peakPos >= peakBlockLen)
+        {
+            for (int i = kPeakBlocks - 1; i > 0; --i) { peakD[i] = peakD[i - 1]; peakV[i] = peakV[i - 1]; }
+            peakD[0] = peakDNow;
+            peakV[0] = peakVNow;
+            peakDNow = peakVNow = 0.0f;
+            peakPos = 0;
+        }
+    }
+    static float peakWindow (const float* blocks, float now) noexcept
+    {
+        float m = now;
+        for (int i = 0; i < kPeakBlocks; ++i) m = std::max (m, blocks[i]);
+        return m;
     }
 
     /** Typical level correction for a shift of x = formant - transpose semitones: the median level
@@ -442,57 +508,30 @@ private:
     }
 
     //------------------------------------------------------------ REALTIME <-> HQ
-    /** Gain of the next output sample while a latency switch runs:
-        state 1 = fading out on the old timeline, 2 = fading in on the new one. */
-    float advanceSwitch() noexcept
+    /** D at a position s of the synthesis axis: the content shown there is s - D. */
+    double contentOffset (double pos) const noexcept
     {
-        if (switchState == 1)
-        {
-            if (++switchPos < switchFade)
-                return 1.0f - (float) switchPos / (float) switchFade;
-            moveToLatency (pendingLatency);                 // output is silent at this very sample
-            switchState = 2;
-            switchPos = 0;
-            return 0.0f;
-        }
-        if (++switchPos < switchFade)
-            return (float) switchPos / (float) switchFade;
-        switchState = 0;
-        switchPos = 0;
-        return 1.0f;
+        if (! ramping)
+            return rampTo;
+        const double x = (pos - (double) rampStart) / rampLen;
+        if (x <= 0.0) return rampFrom;
+        if (x >= 1.0) return rampTo;
+        return rampFrom + (rampTo - rampFrom) * (0.5 - 0.5 * std::cos (kPi * x));
     }
+    double contentAt (double pos) const noexcept { return pos - contentOffset (pos); }
 
-    /** Moves the synthesis to the output timeline of another latency. Analysis, marks, the input
-        history and the key are untouched; only what the old timeline had already scheduled ahead of
-        the output (grains, crossfade weights) is cleared, and grain placement restarts at the new
-        output position. */
-    void moveToLatency (int newLatency) noexcept
+    /** The dry input at a content position that is not a whole sample (only while a latency changes,
+        or after it changed by a whole number of samples: then it is the plain sample). */
+    float dryAt (int ch, double pos) const noexcept
     {
-        if (newLatency == latency)
-            return;
-        const int64_t tOld = nIn - 1 - latency;
-        const double reachOld = 8.0 * maxHalf();            // a grain never reaches further ahead (hOut <= 4 x hIn)
-        latency = newLatency;
-        const int64_t tNew = nIn - 1 - latency;
-        const int64_t from = std::min (tOld, tNew);
-        const int64_t to = std::max (tOld, tNew) + (int64_t) std::max (reachOld, 8.0 * maxHalf()) + 8;
-        for (int64_t k = from; k <= to; ++k)
-        {
-            const auto ki = (size_t) (k & kMask);
-            acc[0][ki] = acc[1][ki] = 0.0f;
-            accU[0][ki] = accU[1][ki] = 0.0f;
-            xfade[ki] = -1.0f;
-        }
-        sNext = (double) std::max<int64_t> (tNew, 0);
-        lastS = -1.0e9;
-        lastHOut = 0.0;
-        lastSrcOffset = 0.0;
-        lastGrainVoiced = false;
-        tailActive = false;
-        xfadeArmed = false;
-        tailNext = tailLast = tailOffset = 0.0;
-        xfadeEnd = -1;
-        planValid = false;
+        const double fl = std::floor (pos);
+        const auto i0 = (int64_t) fl;
+        const float fr = (float) (pos - fl);
+        const auto& b = in[(size_t) ch];
+        if (! (fr > 0.0f))
+            return b[(size_t) (i0 & kMask)];
+        return hermite (b[(size_t) ((i0 - 1) & kMask)], b[(size_t) (i0 & kMask)],
+                        b[(size_t) ((i0 + 1) & kMask)], b[(size_t) ((i0 + 2) & kMask)], fr);
     }
 
     /** NaN / Inf from a plugin before this one would stay in the analysis filters for good: they
@@ -569,6 +608,8 @@ private:
         dp.note = (int16_t) (r.voiced && o.note >= 0 ? o.note + (int) std::lround (params.transpose) : -1);
         dp.deviation = o.note >= 0 ? inMidi - (float) o.note : 0.0f;
         dp.flags = (uint8_t) ((r.voiced ? kVoiced : 0) | (o.noteChanged ? kNoteChange : 0) | (o.settled ? kSettled : 0));
+        dp.analysisDelay = (float) (r.centreDelay / sr);
+        dp.clarity = r.clarity;
         display.push (dp);
 
         currentVoiced.store (r.voiced);
@@ -740,14 +781,17 @@ private:
     }
 
     //---------------------------------------------------------------- synthesis
-    double maxHalf() const noexcept { return std::max (unvoicedHop, 0.55 * latency); }
+    // never longer than the delay that is really there (while a latency glides: the smaller one)
+    double maxHalf() const noexcept { return std::max (unvoicedHop, 0.55 * std::min ((double) latency, lagNow)); }
 
     bool makePlan (Plan& out) noexcept
     {
         const double phi = std::pow (2.0, params.formant / 12.0);
         const double hCap = maxHalf();
 
-        // nearest mark to sNext among the marks whose grain data is already available
+        // nearest mark to sNext (its content position) among the marks whose grain data is already available
+        const double dNext = contentOffset (sNext);
+        const double cNext = sNext - dNext;
         int chosen = -1;
         double bestDist = 1.0e30;
         for (int i = 0; i < markCount; ++i)
@@ -756,16 +800,16 @@ private:
             const double hIn = m.voiced ? std::min ((double) m.period, hCap) : unvoicedHop;
             if (m.pos + hIn + 3.0 > (double) nIn)
                 break;                                   // marks are sorted by position
-            const double d = std::abs (m.pos - sNext);
+            const double d = std::abs (m.pos - cNext);
             if (d < bestDist) { bestDist = d; chosen = i; }
-            else if (m.pos > sNext) break;
+            else if (m.pos > cNext) break;
         }
 
         // unvoiced -> voiced: the first voiced grain must lie after the last unvoiced grain, so
         // it can sit exactly on its source mark (in phase with the crossfaded unvoiced stream)
         if (chosen >= 0 && markAt (chosen).voiced && ! lastGrainVoiced)
         {
-            while (chosen < markCount && markAt (chosen).pos <= lastS + 0.5)
+            while (chosen < markCount && markAt (chosen).pos + dNext <= lastS + 0.5)
                 ++chosen;
             if (chosen >= markCount || ! markAt (chosen).voiced
                 || markAt (chosen).pos + std::min ((double) markAt (chosen).period, hCap) + 3.0 > (double) nIn)
@@ -797,7 +841,7 @@ private:
             spacing = std::clamp (spacing, 0.40 * period, 2.5 * period);
 
             out.voiced = true;
-            out.s = lastGrainVoiced ? sNext : std::max (m.pos, lastS + 1.0);
+            out.s = lastGrainVoiced ? sNext : std::max (m.pos + dNext, lastS + 1.0);
             out.src = m.pos;
             out.hIn = hIn;
             out.hOut = hIn / phi;
@@ -817,7 +861,7 @@ private:
         out.period = 0.0;
         out.shiftSt = 0.0;
         out.s = sNext;
-        out.src = std::min (sNext + (std::abs (offset) < 0.5 ? 0.0 : offset), (double) nIn - hIn - 3.0);
+        out.src = std::min (cNext + (std::abs (offset) < 0.5 ? 0.0 : offset), (double) nIn - hIn - 3.0);
         out.hIn = hIn;
         out.hOut = hIn / phi;
         out.spacing = out.hOut;
@@ -862,7 +906,7 @@ private:
     void resumeTailGrid (Plan& p, int64_t t) noexcept
     {
         p.s = tailNext;
-        p.src = std::min (tailNext + (std::abs (tailOffset) < 0.5 ? 0.0 : tailOffset), (double) nIn - unvoicedHop - 3.0);
+        p.src = std::min (contentAt (tailNext) + (std::abs (tailOffset) < 0.5 ? 0.0 : tailOffset), (double) nIn - unvoicedHop - 3.0);
         cancelCrossfade (t);
     }
 
@@ -883,7 +927,7 @@ private:
         const double hU = p.hOut;
         const double next = tailActive ? tailNext : tailLast + hU;
         p.s = next;
-        p.src = std::min (next + (std::abs (tailOffset) < 0.5 ? 0.0 : tailOffset), (double) nIn - unvoicedHop - 3.0);
+        p.src = std::min (contentAt (next) + (std::abs (tailOffset) < 0.5 ? 0.0 : tailOffset), (double) nIn - unvoicedHop - 3.0);
         tailActive = false;
         xfadeArmed = false;
 
@@ -911,7 +955,7 @@ private:
             Plan g;
             g.voiced = false;
             g.s = tailNext;
-            g.src = std::min (tailNext + (std::abs (tailOffset) < 0.5 ? 0.0 : tailOffset),
+            g.src = std::min (contentAt (tailNext) + (std::abs (tailOffset) < 0.5 ? 0.0 : tailOffset),
                               (double) nIn - unvoicedHop - 3.0);
             tailOffset *= 0.5;
             g.hIn = unvoicedHop;
@@ -968,7 +1012,7 @@ private:
             lastS = plan.s;
             // phase continuity only helps while the voiced grains are close to the source pitch
             // (correction); after a large shift the inherited offset is just a time jump
-            lastSrcOffset = plan.src - plan.s;
+            lastSrcOffset = plan.src - contentAt (plan.s);
             if (plan.voiced)
             {
                 // a whole number of periods does not change the phase of periodic content:
@@ -1014,7 +1058,7 @@ private:
 
     void pruneMarks (int64_t t) noexcept
     {
-        const double keepFrom = (double) t - 4.0 * maxHalf() - 4096.0;
+        const double keepFrom = contentAt ((double) t) - 4.0 * maxHalf() - 4096.0;
         while (markCount > 2 && markAt (0).pos < keepFrom)
         {
             markHead = (markHead + 1) % kMarkRing;
@@ -1066,8 +1110,17 @@ private:
     float levelGain = 1.0f, levelHeld = 1.0f, levelPd = 0.0f, levelPv = 0.0f, levelFd = 0.0f, levelFv = 0.0f;
     float levelPowCoef = 0.0f, levelGainCoef = 0.0f, levelFastCoef = 0.0f, levelDownCoef = 0.0f;
     int levelCount = 0, levelMinCount = 960;
+    static constexpr int kPeakBlocks = 4;
+    static constexpr float kPeakMargin = 1.26f;                  // shifted peaks may exceed the dry's by this much (x)
+    float peakD[kPeakBlocks] {}, peakV[kPeakBlocks] {}, peakDNow = 0.0f, peakVNow = 0.0f;
+    int peakPos = 0, peakBlockLen = 240;
 
-    // REALTIME <-> HQ switch: 0 = none, 1 = fading out (old latency), 2 = fading in (new latency)
-    int switchState = 0, switchPos = 0, switchFade = 240, pendingLatency = 882;
+    // REALTIME <-> HQ: synthesis axis offset and the content offset ramp (setRealtime)
+    static constexpr double kRampWetSeconds = 0.4;    // only the processed voice is heard
+    static constexpr double kRampDrySeconds = 2.0;    // the dry is heard (MIX < 100 %% or bypass)
+    int accLatency = 882;
+    double rampFrom = 0.0, rampTo = 0.0, rampLen = 1.0, lagNow = 882.0;
+    int64_t rampStart = 0;
+    bool ramping = false;
 };
 } // namespace vstm

@@ -1089,6 +1089,247 @@ int main()
                                           + std::to_string (k.detectedKey.load()) + " after)");
     }
 
+    // 13) note mapping, exhaustively (1.2): every scale and key, the sung pitch from C1 to C8 in 1-cent
+    //     steps, and every non-empty custom note set (4095) for every key in 5-cent steps over two octaves:
+    //     the target is an allowed note and no allowed note is closer (ties: the lower one).
+    {
+        long checked = 0, bad = 0;
+        std::string firstBad;
+        auto verify = [&] (float m, int key, uint16_t mask)
+        {
+            const int n = nearestAllowedNote (m, key, mask);
+            ++checked;
+            const uint16_t eff = mask == 0 ? (uint16_t) 0x0fff : mask;
+            bool ok = isAllowed (n, key, eff);
+            for (int k = (int) std::floor (m) - 12; ok && k <= (int) std::ceil (m) + 12; ++k)
+                if (isAllowed (k, key, eff))
+                {
+                    const float dk = std::abs (m - (float) k), dn = std::abs (m - (float) n);
+                    if (dk < dn - 1.0e-4f || (std::abs (dk - dn) <= 1.0e-4f && k < n)) ok = false;
+                }
+            if (! ok && bad++ == 0)
+                firstBad = "m " + std::to_string (m) + " key " + std::to_string (key) + " mask " + std::to_string (mask) + " -> " + std::to_string (n);
+        };
+        for (int sc = 0; sc < (int) kNumScales; ++sc)
+            for (int key = 0; key < 12; ++key)
+                for (int c = 2400; c <= 10800; ++c)
+                    verify ((float) c * 0.01f, key, scaleMask (sc));
+        for (int mask = 1; mask < 4096; ++mask)
+            for (int key = 0; key < 12; ++key)
+                for (int c = 0; c <= 480; ++c)
+                    verify (48.0f + (float) c * 0.05f, key, (uint16_t) mask);
+        for (int c = 0; c <= 2400; ++c)
+            verify (48.0f + (float) c * 0.01f, 0, 0);                    // empty set = every note
+        check (bad == 0, "note mapping: " + std::to_string (checked) + " pitches x scales x keys x custom sets, wrong "
+                             + std::to_string (bad) + (bad ? " (first: " + firstBad + ")" : std::string()));
+    }
+
+    // 14) no click when correction, robotism, retune, humanize, vibrato scale, formant, transpose or MIX are
+    //     moved fast (a new random value every 10 ms, the knob "thrown" by automation) or correction is
+    //     switched on / off every 250 ms on a held note: the largest sample step stays within 2x the
+    //     largest step without automation (the voice itself), finite output (1.2, P0-E)
+    {
+        const double f = midiToHz (57.30);
+        auto x = makeVoice (sr, 3.0, [&] (double t) { return f * std::pow (2.0, 0.25 / 12.0 * std::sin (2.0 * kPi * 5.5 * t)); });
+        auto render = [&] (int which, bool toggle, float fixedFormant = 0.0f, float fixedTranspose = 0.0f)
+        {
+            TuneEngine e;
+            e.prepare (sr, true);
+            auto p = baseParams();
+            p.formant = fixedFormant;
+            p.transpose = fixedTranspose;
+            e.setParams (p);
+            std::mt19937 rng (5 + which);
+            std::uniform_real_distribution<float> u (0.0f, 1.0f);
+            auto y = x;
+            const int block = (int) (0.010 * sr);
+            for (size_t pos = 0, k = 0; pos < y.size(); pos += (size_t) block, ++k)
+            {
+                if (pos > (size_t) (0.5 * sr))
+                {
+                    const float r = u (rng);
+                    switch (which)
+                    {
+                        case 0: p.amount = toggle ? ((k / 25) % 2 ? 0.0f : 1.0f) : r; break;
+                        case 1: p.robotism = r; break;
+                        case 2: p.retuneMs = 200.0f * r * r; break;
+                        case 3: p.humanize = r; break;
+                        case 4: p.vibratoScale = 2.0f * r; break;
+                        case 5: p.formant = -12.0f + 24.0f * r; break;
+                        case 6: p.transpose = std::round (-12.0f + 24.0f * r); break;
+                        case 7: p.mix = r; break;
+                        default: break;
+                    }
+                    e.setParams (p);
+                }
+                const int m = (int) std::min ((size_t) block, y.size() - pos);
+                float* chans[2] = { y.data() + pos, nullptr };
+                e.process (chans, 1, m);
+            }
+            double step = 0.0;
+            bool fin = true;
+            for (size_t i = (size_t) (0.55 * sr); i < y.size(); ++i)
+            {
+                fin = fin && std::isfinite (y[i]);
+                step = std::max (step, (double) std::abs (y[i] - y[i - 1]));
+            }
+            return std::make_pair (step, fin);
+        };
+        const double steady = render (-1, false).first;
+        // formant and transpose change the voice itself (grain length / pitch): their reference is the
+        // largest step of the same voice held at the extreme settings, without automation
+        double steadyFormant = steady, steadyTranspose = steady;
+        for (float v : { -12.0f, 12.0f })
+        {
+            steadyFormant = std::max (steadyFormant, render (-1, false, v, 0.0f).first);
+            steadyTranspose = std::max (steadyTranspose, render (-1, false, 0.0f, v).first);
+        }
+        const char* names[] = { "correction", "robotism", "retune", "humanize", "vibrato", "formant", "transpose", "mix" };
+        std::string worst;
+        double worstRatio = 0.0;
+        bool allFinite = true;
+        for (int w = 0; w < 8; ++w)
+        {
+            const auto r = render (w, false);
+            allFinite = allFinite && r.second;
+            const double ref = w == 5 ? steadyFormant : (w == 6 ? steadyTranspose : steady);
+            if (r.first / ref > worstRatio) { worstRatio = r.first / ref; worst = names[w]; }
+        }
+        const auto tg = render (0, true);
+        check (allFinite && tg.second && worstRatio < 2.0 && tg.first / steady < 2.0,
+               "fast automation: largest sample step " + std::to_string (worstRatio) + " x steady (worst: " + worst
+                   + "), correction on/off every 250 ms " + std::to_string (tg.first / steady) + " x; references: steady "
+                   + std::to_string (steady) + ", formant +-12 " + std::to_string (steadyFormant) + ", transpose +-12 " + std::to_string (steadyTranspose));
+    }
+
+    // 15) a key change under a held, hard-tuned note: the output glides to the new target (at least
+    //     ~25 ms) instead of jumping, without a click (1.0 / 1.1 jumped at once on the robotic side)
+    {
+        auto x = makeVoice (sr, 2.0, [] (double) { return midiToHz (57.30); });
+        TuneEngine e;
+        e.prepare (sr, false);                                  // HQ: the output follows the plan exactly
+        auto p = baseParams();
+        p.robotism = 0.0f;
+        p.scale = kMajor;
+        p.key = 0;                                              // C major: A allowed
+        e.setParams (p);
+        auto y = x;
+        for (size_t pos = 0; pos < y.size(); pos += 256)
+        {
+            if (pos >= (size_t) (1.0 * sr) && p.key == 0) { p.key = 1; e.setParams (p); }   // C# major: A -> A#
+            const int m = (int) std::min ((size_t) 256, y.size() - pos);
+            float* chans[2] = { y.data() + pos, nullptr };
+            e.process (chans, 1, m);
+        }
+        const int lat = e.getLatencySamples();
+        double t10 = -1, t90 = -1;
+        for (double t = 0.95; t < 1.3; t += 0.001)
+        {
+            const double mm = hzToMidi (measureHz (y, sr, (int) (t * sr) + lat, (int) (sr * 0.006), midiToHz (57.5)));
+            if (t10 < 0 && mm > 57.1) t10 = t;
+            if (t90 < 0 && mm > 57.9) t90 = t;
+        }
+        double step = 0.0, steady = 0.0;
+        for (size_t i = (size_t) (0.5 * sr); i < y.size(); ++i)
+        {
+            const double d = std::abs ((double) y[i] - y[i - 1]);
+            if (i > (size_t) (0.98 * sr) + (size_t) lat && i < (size_t) (1.2 * sr) + (size_t) lat) step = std::max (step, d);
+            else steady = std::max (steady, d);
+        }
+        const double rise = (t10 >= 0 && t90 >= 0) ? (t90 - t10) * 1000.0 : -1.0;
+        check (rise >= 10.0 && rise < 80.0 && step < 1.5 * steady,
+               "key change under a held note: A -> A# in " + std::to_string (rise) + " ms (10-90 %), step "
+                   + std::to_string (step / steady) + " x steady");
+    }
+
+    // 12b) REALTIME <-> HQ keeps the content continuous (1.2). An irregular click train (6 - 9 ms apart,
+    //      aperiodic: unvoiced) gives the delay of the output at every click. Dry (MIX 0) and the
+    //      processed path (correction 0): every click comes out once and in order, the delay glides
+    //      monotonically and ends exactly on the reported latency. Before: the delay jumped by the full
+    //      latency difference (960 samples at 48 kHz): 20 ms of input repeated (RT -> HQ) or skipped.
+    {
+        const int n = (int) (7.0 * sr);
+        std::vector<float> x ((size_t) n, 0.0f);
+        std::mt19937 rng (21);
+        std::uniform_int_distribution<int> gap ((int) (0.006 * sr), (int) (0.009 * sr));
+        std::vector<long> clicks;
+        for (int i = (int) (0.05 * sr), c = 0; i < n; i += gap (rng), ++c)
+        {
+            x[(size_t) i] = (c % 2) ? -0.5f : 0.5f;
+            clicks.push_back (i);
+        }
+        const int latRT = TuneEngine::latencyFor (sr, true), latHQ = TuneEngine::latencyFor (sr, false);
+        for (int path = 0; path < 2; ++path)
+        {
+            TuneEngine e;
+            e.prepare (sr, true);
+            auto p = baseParams();
+            if (path == 0) p.mix = 0.0f; else p.amount = 0.0f;
+            e.setParams (p);
+            auto y = x;
+            for (size_t pos = 0; pos < y.size(); pos += 256)
+            {
+                if (pos == (size_t) (1.0 * sr) / 256 * 256) e.setRealtime (false);
+                if (pos == (size_t) (4.0 * sr) / 256 * 256) e.setRealtime (true);
+                const int m = (int) std::min ((size_t) 256, y.size() - pos);
+                float* chans[2] = { y.data() + pos, nullptr };
+                e.process (chans, 1, m);
+            }
+            // output clicks in order (strongest sample of each cluster), then matched to the input clicks in
+            // order: an output click with no input click left to match = repeated content, an input click
+            // with no output click in the possible delay range = skipped content
+            std::vector<long> out;
+            for (long k = 0; k < n; ++k)
+                if (std::abs (y[(size_t) k]) > 0.15f)
+                {
+                    long b = k;
+                    for (long q = k; q < std::min ((long) n, k + (long) (0.0015 * sr)); ++q)
+                        if (std::abs (y[(size_t) q]) > std::abs (y[(size_t) b])) b = q;
+                    out.push_back (b);
+                    k = b + (long) (0.004 * sr);
+                }
+            // each click is looked for near where the last delay predicts (+-60 samples); clicks out of
+            // place in between = repeated content; none there = skipped (then re-acquired anywhere in range).
+            // The processed path may show a click's two grain copies up to 1 ms apart while it glides.
+            const double tolBack = path == 0 ? 2.0 : 0.001 * sr;
+            int missing = 0, extra = 0, backwards = 0;
+            double prev = (double) latRT, maxStepD = 0.0, endDelay = 0.0;
+            size_t j = 0;
+            bool started = false;
+            for (long c : clicks)
+            {
+                if (c + latHQ + 8 >= n) break;
+                const double expect = (double) c + prev;
+                size_t k = j, hit = out.size();
+                while (k < out.size() && (double) out[k] < expect - 60.0) ++k;
+                if (k < out.size() && (double) out[k] <= expect + 60.0) hit = k;
+                if (hit == out.size())
+                {
+                    ++missing;
+                    k = j;                                   // re-acquire anywhere in the possible range
+                    while (k < out.size() && out[k] - c < latRT - 4) ++k;
+                    if (k >= out.size() || out[k] - c > latHQ + 4) continue;
+                    hit = k;
+                }
+                if (started) extra += (int) (hit - j);
+                started = true;
+                const double d = (double) (out[hit] - c);
+                const double t = (double) c / sr;
+                if ((t > 1.0 && t < 4.0 && d < prev - tolBack) || (t > 4.0 && d > prev + tolBack)) ++backwards;
+                maxStepD = std::max (maxStepD, std::abs (d - prev));
+                prev = d;
+                endDelay = d;
+                j = hit + 1;
+            }
+            check (missing == 0 && extra == 0 && backwards == 0 && maxStepD < 60.0 && std::abs (endDelay - latRT) <= 1.0,
+                   std::string ("REALTIME switch keeps the content continuous (") + (path == 0 ? "dry" : "processed")
+                       + "): skipped clicks " + std::to_string (missing) + ", repeated " + std::to_string (extra)
+                       + ", backwards " + std::to_string (backwards)
+                       + ", largest delay step between clicks " + std::to_string (maxStepD) + " samples (a jump: "
+                       + std::to_string (latHQ - latRT) + "), end delay " + std::to_string (endDelay) + " / " + std::to_string (latRT));
+        }
+    }
+
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASSED" : "FAILED", failures, failures == 1 ? "" : "s");
     return failures == 0 ? 0 : 1;
 }

@@ -1,7 +1,7 @@
 # VSTM Tune – gerçek zamanlı vokal autotune
 
 Tek düğmeyle **robotik ↔ insansı** arasında gezinen, gerçek zamanlı perde düzeltme plugin'i.
-Formatlar: **VST3**, **AU** (yalnız macOS), **Standalone**. Mono ve stereo. Sürüm **1.1.0** (değişiklikler: `RELEASE_NOTES.md`).
+Formatlar: **VST3**, **AU** (yalnız macOS), **Standalone**. Mono ve stereo. Sürüm **1.2.0** (değişiklikler: `RELEASE_NOTES.md`, kalite raporu: `docs/1.2.0/`).
 
 ![VSTM Tune](docs/vstm_tune.png)
 
@@ -18,12 +18,12 @@ Düğmenin sol yayı (mor) robotik, sağ yayı (beyaz) insansı bölgedir; işar
 
 ![Robotik ve İnsansı](docs/robotism_states.png)
 
-Testle ölçülen davranış (48 kHz, sentetik vokal, A3 → C4 sıçraması, ±50 cent vibrato):
+Testle ölçülen davranış (1.2; 48 kHz, sentetik vokal, A3 → C4 sıçraması, ±50 cent vibrato):
 
 | | Robotik (0) | İnsansı (100) |
 |---|---|---|
-| Nota geçiş süresi (%10 → %90) | 16 ms (basamak) | ~210 ms (kayarak) |
-| Vibrato (tepe–tepe) | 1 cent (dümdüz) | 98 cent (korunur) |
+| Nota geçiş süresi (%10 → %90) | 12 ms (basamak) | ~216 ms (kayarak) |
+| Vibrato (tepe–tepe) | 1 cent (dümdüz) | 100 cent (korunur) |
 
 **Eğri kalibrasyonu (dört ses tipi: bas, tenor, alto, soprano – sentetik, MEASURED):** düğme artık her
 adımda benzer oranda değişir. Robotik uçtaki %0–10 "ölü bölge" kalktı (vibratonun %1'i → %4,5'i kalır),
@@ -32,6 +32,11 @@ adımda benzer oranda değişir. Robotik uçtaki %0–10 "ölü bölge" kalktı 
 düğme değerinde ±5 puan içinde aynı vibrato miktarını bırakır. Gerçek vokallerde (91 kayıt) çıkışın en yakın
 yarım sese uzaklığı %0'da ~2 ct, %50'de ~18 ct, %65 ve üstünde ~22–24 ct (doğal şarkı sapması); kadın, erkek ve rap
 vokali gruplarında aynı sırayı izler. Algısal kalibrasyon (insan dinlemesi) henüz yapılmadı.
+
+**1.2'de değişen (MEASURED, dinlenmedi):** algılayıcı doğru zamanlandığı için Dengeli ve İnsansı yarıda vibratonun daha çoğu
+kalır. Tenor, sentetik: %10'da %4,5 → %9, %35'te %49 → %72, %50'de %74 → %97. Geçişler biraz uzadı: %50 22 → 28 ms,
+%65 48 → 58, %80 98 → 112, %100 214 → 232 ms. Gerçek vokallerde notaya yakınlık aynı sırayı izliyor
+(%0 1,5 ct · %20 7 · %50 18 · %80 23 ct).
 
 ## Kontroller
 
@@ -47,9 +52,9 @@ vokali gruplarında aynı sırayı izler. Algısal kalibrasyon (insan dinlemesi)
 | **FORMANT** | Sesin rengini (gırtlak boyu) perdeyi değiştirmeden kaydırır (±12, yarım ses). |
 | **PITCH RANGE** | Düzeltilmiş sesi ±12 yarım ses transpoze eder. Transpoze ve formant kullanılırken seviye kuru sese eşitlenir (aşağıya bak). |
 | **MIX** | Orijinal ↔ düzeltilmiş ses karışımı. |
-| **ADAPTIVE** (deneysel) | Kapalıyken motor eskisiyle aynı çıkışı verir. Açıkken performansa sabit sınırlar içinde uyum sağlar: algılayıcı emin değilken düzeltme en çok %50'ye iner, söylenen vibrato ve bilinçli kaymalar korunur (ROBOTISM %15'ten %50'ye doğru devreye girer; robotik uçta etkisi yok), hızlı koşularda notalar daha çabuk oturur. Hiçbir parametreyi değiştirmez. Varsayılan değildir: dinleme testi sonuçlanmadı. |
+| **ADAPTIVE** (deneysel) | Kapalıyken motor eskisiyle aynı çıkışı verir. Açıkken performansa sabit sınırlar içinde uyum sağlamaya çalışır: algılayıcı emin değilken düzeltme en çok %50'ye iner; vibrato ve bilinçli kaymalarda düzeltme gevşer (ROBOTISM %15'ten %50'ye doğru); hızlı koşularda notalar daha çabuk oturur. Hiçbir parametreyi değiştirmez. **Ölçüm (1.2, 91 gerçek kayıt):** İnsansı uçta (%100) vibratonun yalnız ~%50'si kalıyor (kapalıyken ~%92). Robotik uçta da küçük bir etkisi var (notaya yakınlık 1,5 → 2,6 ct). Varsayılan değildir; dinleme testi yapılmadı. |
 | **AUTOTUNE ON** | Aç / kapat. DAW'ın bypass düğmesiyle senkron; kapalıyken ses gecikmesi korunur (takır yok). |
-| **REALTIME** | Açık: düşük gecikme (**20 ms**, kayıt / canlı için). Kapalı: yüksek kalite (**40 ms**, çok kalın sesler için). DAW gecikmeyi otomatik telafi eder. Çalarken değiştirilebilir: ses 5 ms kısılıp yeni gecikmeyle 5 ms'de geri açılır (sessizlik / tık yok, bulunan ton korunur). |
+| **REALTIME** | Açık: düşük gecikme (**20 ms**, kayıt / canlı için). Kapalı: yüksek kalite (**40 ms**, çok kalın sesler için). DAW gecikmeyi otomatik telafi eder. Çalarken değiştirilebilir (1.2): bildirilen gecikme hemen değişir. Ses kesilmeden yeni gecikmeye kayar: 0,4 s içinde, kuru ses de duyuluyorsa 2 s içinde. Hiçbir hece tekrarlanmaz ya da atlanmaz; bulunan ton korunur. Kayma sırasında kuru sesin hızı en çok ~%1,6 değişir. |
 | 〰 düğmesi | Perde ekranında ham giriş perdesini de gösterir. |
 
 **Perde ekranı:** dikey çizgi yazma kafasıdır, soldan sağa tarar (6 saniye). Mor eğri düzeltilmiş çıkış,
@@ -149,16 +154,23 @@ giriş (gecikmeli, "dry") ──────────────────
   Gerçek vokallerde (145 kayıt) oktav hatası %0,81 → %0,21, ≥ 30 ms süren hatalı bölümler 44 → 16. Tam hız ince ayarı
   artık kaba tahminin dışına çıkan perdeyi de izler: Bass aralığında vibrato tahmini 4 kat pürüzsüz, hızlı bir geçişte
   hard-tune artık aradaki notada takılmaz (sentetik ±100 ct vibratoda izleme hatası 16–23 ct → 1–2 ct).
+- **Perde zamanlaması (1.2):** ince ayar YIN çerçevesinin ortasında yapılır. Tahmin ve zaman damgası aynı sesi anlatır; 1.0 / 1.1'de
+  ~17 ms kaymıştı. Perdesi kesin bilinen yeniden sentez setinde (145 gerçek kaydın perde eğrisi): kaba hata %1,47 → %0,16,
+  ince hata p95 65 → 3 ct. Süren bir ses, perde ve seviye sürdükçe voiced kalır: Bass aralığında ±200 ct 6,5 Hz vibratoda
+  voiced %66 → %95. Kısa periyot denetimi yalnız Soprano / Alto'da çalışır; E6 gibi notalarda 2P / 4P hatasını azaltır.
 - **Transpoze ve formant seviyesi dengeli:** TD-PSOLA kaydırmayla seviyeyi değiştirir (oktav yukarı: −2…−9 dB, oktav aşağı /
   formant yukarı: +1,9 dB). Transpoze ya da formant kullanılırken kaydırılmış ses kuru sesin gücüne eşitlenir; yalnız saf
   ünlülerde ölçülür, ünsüz / nefes / sessizlik yükseltilmez, yukarı kaydırmada kısa tanecik patlamaları kuru sesin +4 dB
   üstüne çıkamaz. 50 gerçek kayıtta 18 ayarın hepsinde her dosya ±0,9 dB içinde (önce −7,9 / +2,4 dB'ye kadar); 145 kayıtta
   ±12 transpoze / formant'ta 145 dosyanın 144'ü ±1 dB içinde (aşan: konuşma ve vocal fry, en çok 1,3 dB).
-  Transpoze ve formant 0 iken çıkış bit bit eskisiyle aynıdır. Yan etkiler için bkz. Bilinen sınırlar.
+  Transpoze ve formant 0 iken çıkış bit bit eskisiyle aynıdır. 1.2: eklenen kazanç, kaydırılmış sesin ~20 ms'lik tepe
+  penceresini kuru sesin +2 dB'sinin üstüne çıkaramaz. Bu gizli bir limiter değildir: kazanç 1'in altına inmez. Yan etkiler için
+  bkz. Bilinen sınırlar.
 - **Nota seçimi titremez:** yeni nota ancak histerezisi (15 cent, İnsansı'da 35 cent) geçip kısa bir süre kararlı kalınca
   seçilir (Robotik 14 ms, Dengeli 22 ms, İnsansı 52 ms); sesin yeni notaya açıkça vardığı sıçramalarda (≥ 1.5 yarım ses) hemen.
   İki notanın tam ortasında söylenen seste hedefin her 3–10 ms'de bir gidip gelmesi ("trill") böylece önlenir:
-  gerçek vokallerde 40 ms'den kısa nota bölümleri 3–10 kat azaldı.
+  gerçek vokallerde 40 ms'den kısa nota bölümleri 3–10 kat azaldı. 1.2: yeni notanın 30 cent'ine gelen ses beklemeden varmış
+  sayılır. Tutulan notada KEY / SCALE değişirse robotik tarafta da en az 25 ms kayılır (tık yok).
 - **Hece başlarında "güm" yok:** ünsüzden ünlüye geçişte (unvoiced → voiced) zamana hizalı unvoiced akış 4 ms daha
   sürer ve perdeye senkron voiced akışla çapraz geçiş yapar. Eskiden iki tanecik türü arka arkaya dikiliyordu;
   ünlünün ilk periyodu %50–70 seviyeye düşüyor, yarım kalan glottal darbe alçak frekanslı bir tık yapıyordu.
@@ -239,6 +251,14 @@ cmake --build build --config Release
   `goruntuler/` klasörüne ekran görüntüleri (her dil için `07_lang_xx.png`); `--vst3` ile derlenmiş VST3'ü bir DAW gibi yükleyip sınar.
 - **Dinleme paketi:** `tests/make_listening_pack.py` kör, seviye (-20 LUFS) ve gecikme eşitlenmiş çoklu karşılaştırma paketleri,
   cevap anahtarı ayrı, Türkçe dinleme formu ve `feedback_form.csv` (1–5 puanlı 10 ölçüt + zaman damgalı not) üretir.
+- **1.2 ölçüm araçları** (komutlar: `docs/1.2.0/VSTM_Tune_1.2.0_Test_Instructions.md`):
+  - `gt_corpus.py` / `gt_eval.py`: perdesi kesin bilinen setler ve puanlama,
+  - `gt_variants.py`: örnekleme hızı, kazanç, gürültü, stereo,
+  - `peak_check.py`: seviye ve tepe ayrı,
+  - `VSTMTune_RtSwitchProbe` + `rt_switch_eval.py`: REALTIME ↔ HQ bütünlüğü,
+  - `transition_eval.py`: nota karar zamanlaması,
+  - `autokey_eval.py`: etiketli ton seti,
+  - `VSTMTune_BenchProbe`: CPU, gecikme, bellek ayırma.
 
 ## Bilinen sınırlar
 
@@ -248,8 +268,9 @@ cmake --build build --config Release
   doğrulanamadığı için eklenmedi).
 - Bu ortamda gerçek bir DAW içinde denenmedi (REAPER / FL Studio yok); derlenmiş VST3 JUCE'un VST3 host'uyla yüklenip
   test edildi. DAW testi için kit: `daw_test/README.md` (REAPER betiği de REAPER'da çalıştırılmadı).
-- **Adaptive deneyseldir** ve hiçbir insan dinlemesiyle doğrulanmadı; özel dizi düzenleyicisinin açılır penceresi
-  yalnız ekran görüntüsüyle (bileşen tek başına) denetlendi, DAW içinde açılışı denenmedi.
+- **Adaptive deneyseldir** ve hiçbir insan dinlemesiyle doğrulanmadı. İnsansı uçta vibratonun yaklaşık yarısını siliyor (ölçüldü,
+  1.2 raporu 5.3). Özel dizi düzenleyicisinin açılır penceresi yalnız ekran görüntüsüyle (bileşen tek başına) denetlendi; DAW
+  içinde açılışı denenmedi.
 - Algılayıcı aralığın üstündeki notaları bir oktav aşağıda bulur: Tenor / Mid ≈ C6'ya (1,05 kHz), Soprano / Alto ≈ F6'ya
   (1,4 kHz) kadar. Daha yüksek notalar için Soprano / Alto seç.
 - Bass aralığında çok hızlı (≤ 20 ms) küçük üçlü kaymalarda algılayıcı ~30 ms "voiced değil" der; çıkış o anda şarkıcının
@@ -270,8 +291,22 @@ cmake --build build --config Release
   Seviye eşitlenmiş ölçümde transpoze +12'de tepe kuyruğu (p95) +2,6 dB, formant −12'de +1,3 dB arttı; 20–150 Hz
   olayları %10–21 arttı, 10 ms patlamaların toplamı azaldı. Ölçüldü, dinlenmedi; paketler ve ayrıntı:
   `VSTM_TUNE_AUDIT.md` 16.2.
-- **Bass aralığında çok geniş ve hızlı vibrato** (±150–200 ct, 6 Hz ve üstü): algılayıcı bazı anlarda bir yarım sesten fazla
-  yanılabiliyor (sentetik ölçüm; ±100 ct'ye kadar sorun yok).
+  1.2'de tepe sınırı eklendi. Seviye eşitlenmiş tepe p95 transpoze +12'de 6,9 → 5,4 dB, formant −12'de 4,6 → 3,7 dB.
+  0 dBFS'i aşan dosya transpoze +12'de 5 → 3. Kaydırmasız ve aşağı kaydırmalı ayarlarda tepe p95 0,1–0,6 dB arttı.
+- **Bass aralığında çok geniş ve hızlı vibrato** (±150–200 ct, 6 Hz ve üstü): 1.1'de bir yarım sesten fazla yanılıyordu. 1.2'de
+  sentetik ölçümde düzeldi (> 1 st hata %19 → %0, voiced %66 → %95). Gerçek bir bas şarkıcısı kaydıyla denenmedi.
+- **Hard tune geçiş zamanı (1.2):** hedef nota, şarkıcının nota değişiminden medyan 9 ms sonra değişir (1.1: 3 ms). Robotik uçta
+  gerçek kayıtlarda geçiş %10–90 süresi 41 → 61 ms. Ölçüldü, dinlenmedi.
+- **REALTIME'ı çalarken değiştirmek:** bildirilen gecikme hemen, ses 0,4–2 s içinde kayar. DAW'ın gecikme telafisini ne zaman
+  güncellediği DAW'a bağlıdır ve hiçbir DAW'da denenmedi.
+- **Bass aralığı erkek seslerde** %0,24 oktav-alçak hata verir (1.1'de de). Yalnız ~75 Hz'in altına inen sesler için seç;
+  diğer erkek sesler için Tenor / Mid daha iyidir.
+- **Kromatik robotik modda** iki notanın arasında söylenen geniş vibrato çıkışı iki yarım ses arasında titretebilir (trill).
+  Şarkının ton ve dizisini seçmek bunu azaltır.
+- Tutulan alçak bir notanın içindeki ünsüzlerde algılayıcı arada bir yanlış kısa periyot seçer (1.0'dan beri); hard tune'da
+  orada ~10 ms'lik kısa bir tepe oluşabilir.
+- **Çok yüksek örnekleme hızında çok küçük tampon** (176,4 / 192 kHz, 32 örnek): analiz içeren bloklar (her ~17 blokta bir)
+  blok bütçesinin ~%100'ünü kullanır (1.1'de de; ortalama yük düşük). Bu ayarda takılma olursa tamponu 64+ örnek yap.
 
 ## Lisanslar
 

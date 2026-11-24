@@ -1299,3 +1299,20 @@ Paket üretici: `tests/make_listening_pack.py` (kör, -20 LUFS, gecikme hizalı,
 | AuditProbe | S1–S16 | S1–**S17** (S11 uzun Auto Key senaryoları, 9 nokta ROBOTISM) |
 | Derleme | 0 uyarı | 0 uyarı (proje kaynakları; GCC 13.3, JUCE 8.0.6) |
 | Gerçek DAW / pluginval / dinleme | NOT TESTED | **NOT TESTED** |
+
+## 18. Kalite sürümü 1.2.0 (19–24.11.2026)
+
+Bu bölüm yalnız bir yönlendirmedir. 1.2.0'ın ölçümleri, kararları ve açık riskleri ayrı belgelerde: `docs/1.2.0/`.
+
+- `VSTM_Tune_1.2.0_Quality_Report.md`: önce / sonra, kategori puanları, açık riskler.
+- `VSTM_Tune_1.2.0_Changelog.md`: adım 2–11 ve reddedilen alternatifler.
+- `VSTM_Tune_1.2.0_Test_Instructions.md`: otomatik testler, ölçüm komutları, DAW kontrolleri R15–R24, kör dinleme.
+- `VSTM_Tune_1.2.0_Rollback.md`: yedekler ve geri dönüş.
+- `VSTM_Tune_1.2.0_Regression_Results.csv`, `VSTM_Tune_1.2.0_Benchmark.csv`.
+
+Bu belgenin önceki bölümlerindeki bazı ifadeler 1.2 ölçümleriyle düzeltildi:
+
+1. **16. bölümdeki "kaba hata pYIN'e göre %0,69 → %1,21, büyük olasılıkla referansın gecikmesinden" açıklaması yanlıştı.**
+   Kesin doğrulu setlerle ölçüldü: artışın nedeni algılayıcının ince ayarının ~17 ms kaymasıydı (1.2 raporu 3.1). Adım 2 ile düzeldi.
+2. **pluginval 1.1.0 için de çalıştırıldı:** strictness 10, Linux VST3, geçti (17. bölümde NOT TESTED yazıyordu).
+3. **Adaptive'in "söylenen vibrato korunur" tarifi** İnsansı uçta geçerli değil. Gerçek kayıtlarda vibratonun ~%50'si kalıyor (1.2 raporu 5.3).
