@@ -1,0 +1,124 @@
+# VEX Stutter - otomatik derleme
+#
+# VEXStutter/ altindaki her degisiklikte (veya Actions sayfasindan elle "Run workflow" ile)
+# Windows ve Linux'ta plugin derlenir, testler calistirilir ve derlenmis dosyalar
+# indirilebilir paket olarak yuklenir:
+#
+#   GitHub -> Actions -> "VEX Stutter derle" -> en ustteki calisma -> sayfanin altindaki "Artifacts"
+#
+#     VEX-Stutter-Windows : VEX Stutter.vst3 + VEX Stutter.exe (Standalone); Windows 10 / 11, 64 bit
+#     VEX-Stutter-Linux   : VEX Stutter.vst3 + VEX_Stutter_Standalone
+name: VEX Stutter derle
+
+on:
+  push:
+    paths:
+      - 'VEXStutter/**'
+      - '.github/workflows/vex-stutter.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: vex-stutter-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows, os: windows-latest }
+          - { name: Linux,   os: ubuntu-22.04 }
+
+    defaults:
+      run:
+        working-directory: VEXStutter
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux bagimliliklari
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxext-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev xvfb
+
+      - name: Yapilandir
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DVEX_BUILD_TESTS=ON
+
+      - name: Derle
+        run: cmake --build build --config Release --parallel 4
+
+      # Once paketle ve yukle: testlerden biri takilsa bile derlenmis dosyalar indirilebilir olsun
+      - name: Paketle
+        shell: bash
+        run: |
+          R=build/VEXStutter_artefacts/Release
+          P=paket/VEX-Stutter-$RUNNER_OS
+          mkdir -p "$P"
+          cp -R "$R/VST3/VEX Stutter.vst3" "$P/"
+          cp README.md "$P/"
+          cp Resources/fonts/OFL-Inter.txt "$P/"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "$R/Standalone/VEX Stutter.exe" "$P/"
+            printf '%s\r\n' \
+              "VEX Stutter 0.1.0 - Windows 10 / 11 (64 bit)" "" \
+              "KURULUM" \
+              "  1) 'VEX Stutter.vst3' klasorunu oldugu gibi su klasorun icine kopyala:" \
+              "       C:\\Program Files\\Common Files\\VST3" \
+              "  2) DAW'i yeniden baslat ve plugin taramasi yap." \
+              "" \
+              "VEX Stutter.exe: DAW olmadan calisan surum (Standalone)." \
+              "Visual C++ Redistributable gerekmez (C++ calisma zamani gomulu)." \
+              "" \
+              "Windows 'bilinmeyen yayinci' uyarisi verirse: Ek bilgi -> Yine de calistir." \
+              "(Dosyalar imzalanmamistir.)" > "$P/KURULUM.txt"
+          else
+            cp "$R/Standalone/VEX Stutter" "$P/VEX_Stutter_Standalone"
+            printf '%s\n' \
+              "VEX Stutter 0.1.0 - Linux (x86_64)" "" \
+              "KURULUM" \
+              "  'VEX Stutter.vst3' klasorunu ~/.vst3/ icine kopyala, DAW'da plugin taramasi yap." \
+              "  VEX_Stutter_Standalone: chmod +x VEX_Stutter_Standalone && ./VEX_Stutter_Standalone" > "$P/KURULUM.txt"
+          fi
+
+      - name: Yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: VEX-Stutter-${{ runner.os }}
+          path: VEXStutter/paket/
+          if-no-files-found: error
+
+      - name: Ses motoru testi
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then build/Release/VEXStutter_EngineTests.exe; else build/VEXStutter_EngineTests; fi
+
+      - name: Plugin testi (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          xvfb-run -a build/VEXStutter_Tests_artefacts/Release/VEXStutter_Tests goruntuler \
+            --vst3 "build/VEXStutter_artefacts/Release/VST3/VEX Stutter.vst3"
+
+      - name: Plugin testi (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          build/VEXStutter_Tests_artefacts/Release/VEXStutter_Tests goruntuler \
+            --vst3 "build/VEXStutter_artefacts/Release/VST3/VEX Stutter.vst3"
+
+      - name: Ekran goruntuleri
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vex-stutter-arayuz-${{ runner.os }}
+          path: VEXStutter/goruntuler/
+          if-no-files-found: ignore
