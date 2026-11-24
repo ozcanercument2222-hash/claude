@@ -338,6 +338,7 @@ int main (int argc, char** argv)
             auto x = vowelMelody (sr, 3.0);
             x.resize ((size_t) (13.0 * sr), 0.0f);                // 10 s of digital silence after the voice
             std::vector<double> loud, quiet;
+            x.resize (x.size() - x.size() % 256, 0.0f);         // whole blocks only (1.2.0 ran past the end: heap overflow, ASan)
             for (size_t pos = 0; pos < x.size(); pos += 256)
             {
                 float* ch[2] = { x.data() + pos, nullptr };

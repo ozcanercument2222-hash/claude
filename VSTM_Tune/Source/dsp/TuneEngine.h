@@ -66,6 +66,8 @@ public:
         uint16_t customMask = 0x0AB5;   // bit i = the note i semitones above the key (default: major)
         bool  adaptive = false;         // Adaptive correction (PitchCorrector); off = unchanged engine
         bool  followKeyChanges = false; // Auto key: opt-in modulation tracking after the lock (off = the lock stays)
+        bool  peakGuard = true;         // output safety limiter (internal, not a plug-in parameter; tests switch it off)
+        bool  backdateSwitch = true;    // hard tune: backdate confirmed note switches (internal; tests switch it off)
     };
 
     struct DisplayPoint
@@ -207,6 +209,7 @@ public:
         recWrite = 0;
         sNext = 0.0;
         lastS = -1.0e9;
+        lastGrainSrc = -1.0e9;
         lastGrainVoiced = false;
         lastSrcOffset = 0.0;
         lastHOut = 0.0;
@@ -224,6 +227,8 @@ public:
         ramping = false;
         lagNow = (double) latency;
         levelGain = 1.0f;
+        guardGain = 1.0f;
+        guardHoldLeft = 0;
         levelPd = levelPv = levelFd = levelFv = 0.0f;
         std::fill (std::begin (peakD), std::end (peakD), 0.0f);
         std::fill (std::begin (peakV), std::end (peakV), 0.0f);
@@ -278,6 +283,8 @@ public:
         numCh = nc;
         applyKeyRequest();
         const float smoothCoef = 1.0f - std::exp (-1.0f / (0.02f * (float) sr));
+        const float guardRelease = 1.0f - std::exp (-1.0f / (kGuardReleaseSeconds * (float) sr));
+        const int guardHold = (int) std::lround (kGuardHoldSeconds * sr);
         const float wetTarget = params.active ? 1.0f : 0.0f;
         if (! std::isfinite (mixSmooth)) mixSmooth = params.mix;      // never stay stuck on a bad value
         if (! std::isfinite (wetSmooth)) wetSmooth = wetTarget;
@@ -335,6 +342,7 @@ public:
             const float vg = levelGain;          // level of the shifted voice (exactly 1 without transpose / formant)
             float dryPow = 0.0f, voicedPow = 0.0f, dryPeak = 0.0f, voicedPeak = 0.0f;
             bool onlyVoiced = xf < 0.0f;
+            float dryCh[2] = { 0.0f, 0.0f }, wetCh[2] = { 0.0f, 0.0f };
             for (int ch = 0; ch < nc; ++ch)
             {
                 float& v = acc[(size_t) ch][ti];
@@ -346,9 +354,47 @@ public:
                 voicedPeak = std::max (voicedPeak, std::abs (v));
                 onlyVoiced = onlyVoiced && ! (std::abs (u) > 0.0f);            // no unvoiced grain here
                 const float vv = v * vg;
-                const float wet = xf < 0.0f ? vv + u : u + xf * (vv - u);
+                dryCh[ch] = dry;
+                wetCh[ch] = xf < 0.0f ? vv + u : u + xf * (vv - u);
                 v = u = 0.0f;
-                channels[ch][i] = dry + wetGain * (wet - dry);
+            }
+
+            // Output safety limiter on the processed voice (1.3, P0 peak safety). PSOLA can raise peaks
+            // above the dry ones (grains overlapping in phase, transpose / formant) and 1.2 had no
+            // protection: a hot vocal could leave the plug-in above 0 dBFS. Zero latency (the reported
+            // latency does not change): instant attack, 10 ms hold, 80 ms release, stereo-linked,
+            // ceiling -1 dBFS (sample peak). It acts on the processed signal before MIX, so bypass and
+            // the dry part of a mix stay exactly the input; below the ceiling the gain is exactly 1 and
+            // the output is bit-identical to an unguarded one.
+            float g = 1.0f;
+            if (params.peakGuard)
+            {
+                const float pk = std::max (std::abs (wetCh[0]), nc > 1 ? std::abs (wetCh[1]) : 0.0f);
+                if (pk > kGuardCeiling && std::isfinite (pk))
+                {
+                    const float need = kGuardCeiling / pk;
+                    if (need < guardGain)
+                        guardGain = need;
+                    guardHoldLeft = guardHold;
+                }
+                else if (guardGain < 1.0f)
+                {
+                    if (guardHoldLeft > 0)
+                        --guardHoldLeft;
+                    else
+                    {
+                        guardGain += (1.0f - guardGain) * guardRelease;
+                        if (guardGain > 0.99999f)
+                            guardGain = 1.0f;
+                    }
+                }
+                g = guardGain;
+                guardMin = std::min (guardMin, guardGain);
+            }
+            for (int ch = 0; ch < nc; ++ch)
+            {
+                const float wet = g < 1.0f ? wetCh[ch] * g : wetCh[ch];
+                channels[ch][i] = dryCh[ch] + wetGain * (wet - dryCh[ch]);
             }
             if (levelActive || std::abs (vg - 1.0f) > 0.0f)
                 updateLevelGain (onlyVoiced && voicedPow > 0.0f, dryPow, voicedPow, dryPeak, voicedPeak);
@@ -602,6 +648,14 @@ private:
         recWrite = (recWrite + 1) % kRecRing;
         recCount = std::min (recCount + 1, kRecRing);
 
+        // 1.3 (P0, note timing): a hard-tune switch takes effect where the voice crossed the midpoint,
+        // not where the decision became certain, for the hops whose grains are not placed yet. HQ has
+        // ~5 - 15 ms of such hops (latency 40 ms minus the analysis delay and one grain); in REALTIME the
+        // grains have always been placed already, so nothing changes there. The decision itself (and so
+        // how often the target switches) is not touched.
+        if (params.backdateSwitch && o.noteChanged && o.instant && o.backdateHops > 0 && o.fromNote >= 0 && r.voiced)
+            backdateSwitch (o.backdateHops, o.amountNow * (float) (o.note - o.fromNote));
+
         DisplayPoint dp;
         dp.inMidi = inMidi;
         dp.outMidi = o.outMidi;
@@ -746,6 +800,21 @@ private:
         if (spacing < 0.7 * T || spacing > 1.4 * T)
             return predicted;
         return pos;
+    }
+
+    /** Gives the `hops` records before the newest one the new target too (see analysisHop), as far as
+        no grain has been placed from them: rec.outMidi moves by `shift` semitones, the new note minus the
+        old one times the correction amount (exact while the correction is instantaneous). */
+    void backdateSwitch (int hops, float shift) noexcept
+    {
+        for (int b = 1; b <= hops && b < recCount; ++b)
+        {
+            Rec& r = recs[(size_t) ((recWrite - 1 - b + kRecRing) % kRecRing)];
+            if (r.time <= lastGrainSrc)
+                break;                               // a placed grain already used this record
+            if (r.voiced)
+                r.outMidi += shift;
+        }
     }
 
     //---------------------------------------------------------------- history
@@ -1010,6 +1079,7 @@ private:
             addGrain (plan, t);
             lastHOut = plan.hOut;
             lastS = plan.s;
+            lastGrainSrc = std::max (lastGrainSrc, plan.src);
             // phase continuity only helps while the voiced grains are close to the source pitch
             // (correction); after a large shift the inherited offset is just a time jump
             lastSrcOffset = plan.src - contentAt (plan.s);
@@ -1098,6 +1168,7 @@ private:
     Plan plan;
     bool planValid = false;
     double sNext = 0.0, lastS = -1.0e9, lastHOut = 0.0, lastSrcOffset = 0.0;
+    double lastGrainSrc = -1.0e9;       // content position of the newest placed grain (records before it are used up)
     bool lastGrainVoiced = false;
     bool tailActive = false, xfadeArmed = false;
     double tailNext = 0.0, tailLast = 0.0, tailOffset = 0.0;
@@ -1108,6 +1179,14 @@ private:
     // level of the shifted voice (updateLevelGain)
     bool levelActive = false, levelUp = false;
     float levelGain = 1.0f, levelHeld = 1.0f, levelPd = 0.0f, levelPv = 0.0f, levelFd = 0.0f, levelFv = 0.0f;
+    float guardGain = 1.0f;             // output safety limiter (see process)
+    int guardHoldLeft = 0;
+public:
+    float guardMin = 1.0f;              // lowest guard gain since this was last set to 1 (tests, logs)
+private:
+    static constexpr float kGuardCeiling = 0.89125094f;          // -1 dBFS
+    static constexpr float kGuardReleaseSeconds = 0.080f;
+    static constexpr double kGuardHoldSeconds = 0.010;
     float levelPowCoef = 0.0f, levelGainCoef = 0.0f, levelFastCoef = 0.0f, levelDownCoef = 0.0f;
     int levelCount = 0, levelMinCount = 960;
     static constexpr int kPeakBlocks = 4;

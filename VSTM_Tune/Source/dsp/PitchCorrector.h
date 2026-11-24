@@ -49,6 +49,15 @@ public:
         int   note = -1;            // target note (without transpose), -1 = none
         bool  noteChanged = false;
         bool  settled = false;
+        // A switch to a new note (noteChanged) was decided only after the hysteresis and the dwell; the
+        // voice had already been past the midpoint toward that note for backdateHops earlier hops. When
+        // the correction is instantaneous (instant: hard tune, no glide), the engine may give those hops
+        // the new note too, where the output has not been played yet (1.3, P0: the switch then sits
+        // where the singer crossed the midpoint, not where the decision was certain).
+        int   backdateHops = 0;
+        int   fromNote = -1;        // the note the target left (valid when noteChanged)
+        float amountNow = 1.0f;     // correction amount applied this hop (0..1)
+        bool  instant = false;      // the output follows the target note within about one hop
     };
 
     void reset() noexcept
@@ -57,6 +66,8 @@ public:
         note = kNoNote;
         pendingNote = kNoNote;
         pendingAge = 0.0f;
+        midHops = 0;
+        midCandidate = kNoNote;
         delta = 0.0f;
         glideProgress = 1.0f;
         forcedGlideMs = 0.0f;
@@ -104,6 +115,8 @@ public:
             note = kNoNote;
             pendingNote = kNoNote;
             pendingAge = 0.0f;
+            midHops = 0;
+            midCandidate = kNoNote;
             if (s.adaptive)
                 adapt.restart (inMidi);
         }
@@ -116,6 +129,18 @@ public:
         // target note with hysteresis (cents) and a minimum dwell time before switching
         const float hyst = (15.0f + 20.0f * human) * 0.01f;
         const int candidate = nearestAllowedNote (shaped, s.key, s.mask);
+
+        // consecutive hops the voice has been past the midpoint toward `candidate` (for backdateHops)
+        if (note != kNoNote && candidate != note && std::abs (shaped - (float) candidate) < std::abs (shaped - (float) note))
+        {
+            midHops = candidate == midCandidate ? midHops + 1 : 1;
+            midCandidate = candidate;
+        }
+        else
+        {
+            midHops = 0;
+            midCandidate = kNoNote;
+        }
         if (note == kNoNote)
         {
             note = candidate;
@@ -154,6 +179,8 @@ public:
             const float dwellMs = arrived ? 0.0f : 22.0f + 30.0f * human - 8.0f * robot;
             if (pendingAge * 1000.0f >= dwellMs)
             {
+                out.fromNote = note;
+                out.backdateHops = std::max (0, midHops - 1);
                 startTransition (candidate);
                 out.noteChanged = true;
             }
@@ -217,6 +244,8 @@ public:
 
         out.outMidi = shaped + amount * delta + s.transpose;
         out.note = note;
+        out.amountNow = amount;
+        out.instant = tauMs < kInstantTauMs && glideMs < 0.5f;
 
         // fraction of fast input movement that survives in the output: used by the shifter
         // to apply the correction against the *exact* local period of each grain
@@ -240,6 +269,7 @@ public:
 private:
     static constexpr int kNoNote = -1000;
     static constexpr float kArriveNear = 0.30f;      // semitones from the new note: arrived, no dwell
+    static constexpr float kInstantTauMs = 3.0f;     // retune time constant below which the output follows the target in ~1 hop
     // A key / scale change (the user's, or the Auto Key lock) moves a held note to the new target over at
     // least this long, also on the robotic side (1.0 / 1.1: an instant jump there; 1.2, P0-E)
     static constexpr float kKeyChangeGlideMs = 25.0f;
@@ -309,7 +339,7 @@ private:
 
     bool wasVoiced = false;
     int note = kNoNote;
-    int pendingNote = kNoNote;
+    int pendingNote = kNoNote, midCandidate = kNoNote, midHops = 0;
     float pendingAge = 0.0f;
     float centre = 0.0f, delta = 0.0f;
     float glideFrom = 0.0f, glide = 0.0f, glideProgress = 1.0f, forcedGlideMs = 0.0f;

@@ -155,6 +155,8 @@ int main (int argc, char** argv)
         else if (k == "custom")    { p.customScale = true; p.customMask = (uint16_t) ((int) v & 0x0fff); }
         else if (k == "adaptive")  p.adaptive = v != 0.0;
         else if (k == "follow")    p.followKeyChanges = v != 0.0;
+        else if (k == "guard")     p.peakGuard = v != 0.0;
+        else if (k == "backdate")  p.backdateSwitch = v != 0.0;
         else if (k == "lock")      lockKey = (int) v;
         else if (k == "realtime")  realtime = v != 0.0;
         else if (k == "block")     block = std::max (1, (int) v);
@@ -209,7 +211,7 @@ int main (int argc, char** argv)
     out.channels = nc;
     out.data.resize ((size_t) nc);
     if (! writeWav (argv[2], out)) { std::fprintf (stderr, "cannot write %s\n", argv[2]); return 4; }
-    std::printf ("rendered %zu frames (+%d flush) @ %.0f Hz, latency %d samples (%.1f ms), hop %.2f ms\n",
-                 inFrames, latency, w.rate, latency, latS * 1000.0, hopS * 1000.0);
+    std::printf ("rendered %zu frames (+%d flush) @ %.0f Hz, latency %d samples (%.1f ms), hop %.2f ms, guard_min %.6f\n",
+                 inFrames, latency, w.rate, latency, latS * 1000.0, hopS * 1000.0, (double) e.guardMin);
     return 0;
 }

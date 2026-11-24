@@ -1330,6 +1330,95 @@ int main()
         }
     }
 
+    //--------------------------------------------------------------------------
+    std::printf ("\n=== 1.3: output peak guard, backdated hard-tune switch (48 kHz) ===\n");
+    {
+        const double sr = 48000.0;
+        auto render = [sr] (const std::vector<float>& in, bool realtime, const std::function<void (TuneEngine::Params&)>& set,
+                            float* guardMin = nullptr)
+        {
+            TuneEngine e;
+            e.prepare (sr, realtime);
+            TuneEngine::Params p;
+            p.key = 0; p.scale = 0;
+            set (p);
+            e.setParams (p);
+            std::vector<float> buf = in;
+            for (size_t pos = 0; pos < buf.size(); pos += 256)
+            {
+                float* ch[1] = { buf.data() + pos };
+                e.process (ch, 1, (int) std::min<size_t> (256, buf.size() - pos));
+            }
+            if (guardMin) *guardMin = e.guardMin;
+            return buf;
+        };
+        auto maxAbs = [] (const std::vector<float>& x) { float m = 0.0f; for (float v : x) m = std::max (m, std::abs (v)); return m; };
+
+        // a voice at a normal level: the guard never acts (bit-identical to no guard)
+        const auto normal = makeVoice (sr, 2.0, [] (double) { return 196.0; }, 0.25f);
+        float gm = 0.0f;
+        const auto a = render (normal, true, [] (TuneEngine::Params&) {}, &gm);
+        const auto b = render (normal, true, [] (TuneEngine::Params& p) { p.peakGuard = false; });
+        check (a == b && gm == 1.0f, "peak guard: a voice peaking at -12 dBFS (default settings) is untouched, bit for bit");
+
+        // a hot voice, +12 st and formant +12: without the guard it leaves above the ceiling, with it never
+        const auto hot = makeVoice (sr, 2.0, [] (double t) { return 150.0 * std::pow (2.0, 0.3 * std::sin (2.0 * kPi * 5.5 * t) / 12.0); }, 0.95f);
+        const auto hotOff = render (hot, true, [] (TuneEngine::Params& p) { p.transpose = 12.0f; p.formant = 12.0f; p.peakGuard = false; });
+        const auto hotOn = render (hot, true, [] (TuneEngine::Params& p) { p.transpose = 12.0f; p.formant = 12.0f; }, &gm);
+        bool finite = true;
+        for (float v : hotOn) finite = finite && std::isfinite (v);
+        check (maxAbs (hotOff) > 0.8913f && maxAbs (hotOn) <= 0.8913f + 1.0e-6f && finite,
+               "peak guard: hot voice, transpose +12 / formant +12: peak " + std::to_string (20.0 * std::log10 (maxAbs (hotOff)))
+                   + " dBFS without the guard, " + std::to_string (20.0 * std::log10 (maxAbs (hotOn))) + " dBFS with it (ceiling -1)");
+
+        // bypass is the pure dry (delayed), even when hot: once the 20 ms bypass ramp (which starts from
+        // the engine's default "active") has died away (0.5 s), the output is the input bit for bit
+        const auto byp = render (hot, true, [] (TuneEngine::Params& p) { p.active = false; p.transpose = 12.0f; });
+        const auto bypNoGuard = render (hot, true, [] (TuneEngine::Params& p) { p.active = false; p.transpose = 12.0f; p.peakGuard = false; });
+        const int lat = TuneEngine::latencyFor (sr, true);
+        double dDry = 0.0, dGuard = 0.0;
+        for (size_t i = (size_t) lat + 24000; i < byp.size(); ++i)
+        {
+            dDry = std::max (dDry, (double) std::abs (byp[i] - hot[i - (size_t) lat]));
+            dGuard = std::max (dGuard, (double) std::abs (byp[i] - bypNoGuard[i]));
+        }
+        check (dDry < 1.0e-6 && dGuard < 1.0e-6,
+               "peak guard: bypass with a hot input stays the delayed dry signal (max difference " + std::to_string (dDry)
+                   + "; guard on vs off " + std::to_string (dGuard) + ")");
+
+        // a sung semitone step (30 ms glide at 1.0 s), hard tune: where does the output change note?
+        const double f1 = 220.0, f2 = 220.0 * std::pow (2.0, 1.0 / 12.0);
+        const auto step = makeVoice (sr, 2.0, [f1, f2] (double t)
+        {
+            const double x = std::clamp ((t - 1.0) / 0.030, 0.0, 1.0);
+            return f1 * std::pow (f2 / f1, 0.5 - 0.5 * std::cos (kPi * x));
+        }, 0.25f);
+        auto switchTime = [sr, f1, f2] (const std::vector<float>& x, int offset)
+        {
+            const double mid = std::sqrt (f1 * f2);
+            const int len = (int) (2.0 * sr / f1);
+            for (int c = (int) (0.95 * sr); c < (int) (1.10 * sr); c += 24)
+            {
+                const int start = c + offset - len / 2;
+                if (start < 0 || start + len + (int) (sr / f1 * 1.3) >= (int) x.size()) continue;
+                if (measureHz (x, sr, start, len, mid) > mid)
+                    return (c - 1.0 * sr - 0.015 * sr) / sr * 1000.0;      // ms after the input's midpoint (glide centre)
+            }
+            return 1.0e9;
+        };
+        auto hard = [] (TuneEngine::Params& p) { p.robotism = 0.0f; p.retuneMs = 0.0f; p.humanize = 0.0f; };
+        const auto rtOn = render (step, true, hard);
+        const auto rtOff = render (step, true, [&] (TuneEngine::Params& p) { hard (p); p.backdateSwitch = false; });
+        const auto hqOn = render (step, false, hard);
+        const auto hqOff = render (step, false, [&] (TuneEngine::Params& p) { hard (p); p.backdateSwitch = false; });
+        const int latHQ = TuneEngine::latencyFor (sr, false);
+        const double tIn = switchTime (step, 0), tOn = switchTime (hqOn, latHQ), tOff = switchTime (hqOff, latHQ);
+        check (rtOn == rtOff, "backdated switch: REALTIME output unchanged (bit for bit; no unplayed hops there)");
+        check (tOn < tOff - 2.0 && tOn - tIn < 8.0,
+               "backdated switch, HQ: output changes note " + std::to_string (tOn - tIn) + " ms after the input does (without backdating "
+                   + std::to_string (tOff - tIn) + " ms)");
+    }
+
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASSED" : "FAILED", failures, failures == 1 ? "" : "s");
     return failures == 0 ? 0 : 1;
 }
