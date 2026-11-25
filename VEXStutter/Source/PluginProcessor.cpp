@@ -1,3 +1,4 @@
+#include <juce_audio_formats/juce_audio_formats.h>
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "Parameters/ParameterIDs.h"
@@ -113,6 +114,87 @@ vex::dsp::EngineParams VEXStutterAudioProcessor::readParams() const noexcept
     p.reverbDamping = percent (raw.reverbDamping);
     p.reverbMix = percent (raw.reverbMix);
     return p;
+}
+
+bool VEXStutterAudioProcessor::renderSelection (juce::AudioBuffer<float>& out, juce::String& error) const
+{
+    const auto& capture = engine.getCapture();
+    const auto len = capture.uiFrozenLength();
+    if (! capture.uiFrozen() || len <= 0)
+    {
+        error = "Freeze the waveform first, then select the part to export.";
+        return false;
+    }
+    const float s0 = juce::jlimit (0.0f, 1.0f, getSelectionStart()), s1 = juce::jlimit (0.0f, 1.0f, getSelectionEnd());
+    const auto from = (int64_t) std::floor (std::min (s0, s1) * (double) len);
+    const auto to = std::max (from + 1, (int64_t) std::ceil (std::max (s0, s1) * (double) len));
+    const int n = (int) std::min<int64_t> (to - from, len);
+    juce::AudioBuffer<float> src (2, n);
+    if (! capture.copyFrozen (from, from + n, src.getWritePointer (0), src.getWritePointer (1)))
+    {
+        error = "The capture changed while exporting; try again.";
+        return false;
+    }
+
+    // a separate engine with the current settings, playing the selection as live input (freeze off)
+    auto offline = std::make_unique<vex::dsp::StutterEngine>();
+    constexpr int kBlock = 512;
+    offline->prepare (currentSampleRate, kBlock);
+    auto params = readParams();
+    params.freeze = false;
+    params.bypass = false;
+    vex::dsp::Transport t;
+    t.hasTempo = true;
+    t.bpm = juce::jlimit (20.0, 999.0, (double) engine.status.bpm.load (std::memory_order_relaxed));
+    t.hasPosition = true;
+    t.playing = true;
+    const int tail = (int) std::ceil (std::min (10.0, getTailLengthSeconds()) * currentSampleRate);
+    out.setSize (2, n + tail, false, true, false);
+    out.clear();
+    for (int ch = 0; ch < 2; ++ch)
+        out.copyFrom (ch, 0, src, ch, 0, n);
+    float* chans[2] = { nullptr, nullptr };
+    for (int pos = 0; pos < out.getNumSamples(); pos += kBlock)
+    {
+        const int m = std::min (kBlock, out.getNumSamples() - pos);
+        chans[0] = out.getWritePointer (0, pos);
+        chans[1] = out.getWritePointer (1, pos);
+        t.ppq = (double) pos / currentSampleRate * t.bpm / 60.0;
+        offline->process (chans, 2, m, params, t);
+    }
+    // trailing silence (below -90 dBFS) is not part of the clip
+    int last = out.getNumSamples();
+    while (last > n && std::max (std::abs (out.getSample (0, last - 1)), std::abs (out.getSample (1, last - 1))) < 3.2e-5f)
+        --last;
+    out.setSize (2, last, true, true, false);
+    return true;
+}
+
+juce::File VEXStutterAudioProcessor::renderSelectionClip (juce::String& error) const
+{
+    juce::AudioBuffer<float> clip;
+    if (! renderSelection (clip, error))
+        return {};
+    auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("VEX Stutter Clips");
+    if (! dir.createDirectory())
+    {
+        error = "Cannot create " + dir.getFullPathName();
+        return {};
+    }
+    auto file = dir.getNonexistentChildFile ("VEX_" + juce::Time::getCurrentTime().formatted ("%Y%m%d_%H%M%S"), ".wav", false);
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::FileOutputStream> stream (file.createOutputStream());
+    std::unique_ptr<juce::AudioFormatWriter> writer;
+    if (stream != nullptr)
+        writer.reset (wav.createWriterFor (stream.get(), currentSampleRate, 2, 24, {}, 0));
+    if (writer != nullptr)
+        stream.release();                                   // the writer owns the stream now
+    if (writer == nullptr || ! writer->writeFromAudioSampleBuffer (clip, 0, clip.getNumSamples()))
+    {
+        error = "Cannot write " + file.getFullPathName();
+        return {};
+    }
+    return file;
 }
 
 vex::dsp::Transport VEXStutterAudioProcessor::readTransport() const

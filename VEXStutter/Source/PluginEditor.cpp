@@ -478,6 +478,131 @@ namespace
 }
 
 //==============================================================================
+namespace
+{
+/** DRAG CLIP: with the waveform frozen, drag this into the DAW (onto a track): the selected part, played through
+    the effect with the current settings, tails included, as a 24-bit WAV. A click offers "Save clip as WAV..."
+    for hosts that do not take dropped files. Not frozen: dimmed, the tooltip says what to do. */
+class DragClipButton final : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    explicit DragClipButton (VEXStutterAudioProcessor& p) : processor (p)
+    {
+        setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+        setTooltip ("Drag clip: freeze the waveform, select a part, then drag this onto a track in your DAW. "
+                    "Click: save the clip as a WAV file.");
+    }
+    void setAvailable (bool a)
+    {
+        if (a != available)
+        {
+            available = a;
+            setMouseCursor (a ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+            repaint();
+        }
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        const auto b = getLocalBounds().toFloat().reduced (1.0f);
+        const float r = std::min (10.0f, b.getHeight() * 0.5f);
+        const float alpha = available ? 1.0f : 0.4f;
+        const bool hot = available && (isMouseOver() || dragging);
+        g.setColour ((hot ? col::ice.withAlpha (0.22f) : col::well.withAlpha (0.6f)).withMultipliedAlpha (alpha));
+        g.fillRoundedRectangle (b, r);
+        g.setColour ((available ? col::ice : col::edgeLit).withMultipliedAlpha (alpha));
+        g.drawRoundedRectangle (b.reduced (0.5f), r, available ? 1.4f : 1.0f);
+        const auto textColour = (available ? col::ice.brighter (0.4f) : col::text).withMultipliedAlpha (alpha);
+        const juce::String label ("DRAG CLIP");
+        const float s = std::min (13.0f, b.getHeight() * 0.5f);
+        const float textW = juce::GlyphArrangement::getStringWidth (font (12.5f, Weight::semibold), label) * 1.08f + 4.0f;
+        const float x = b.getCentreX() - (s + 6.0f + textW) * 0.5f;
+        icons::draw (g, icons::Id::save, { x, b.getCentreY() - s * 0.5f, s, s }, textColour, 1.1f);
+        drawTracked (g, label, { x + s + 6.0f, b.getY(), textW, b.getHeight() }, 12.5f, textColour, juce::Justification::centredLeft, 0.08f);
+    }
+    void mouseEnter (const juce::MouseEvent&) override { repaint(); }
+    void mouseExit (const juce::MouseEvent&) override  { repaint(); }
+    void mouseDown (const juce::MouseEvent&) override  { dragging = false; }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! available || dragging || e.getDistanceFromDragStart() < 5)
+            return;
+        dragging = true;
+        repaint();
+        juce::String error;
+        const auto file = processor.renderSelectionClip (error);
+        if (file == juce::File())
+        {
+            showMessage (error);
+            return;
+        }
+        juce::Component::SafePointer<DragClipButton> safe (this);
+        juce::DragAndDropContainer::performExternalDragDropOfFiles ({ file.getFullPathName() }, false, this,
+                                                                    [safe] { if (safe != nullptr) { safe->dragging = false; safe->repaint(); } });
+    }
+    void mouseUp (const juce::MouseEvent&) override
+    {
+        if (dragging)
+            return;
+        if (! available)
+        {
+            showMessage ("Freeze the waveform first (FREEZE), select the part you want, then drag DRAG CLIP onto a track.");
+            return;
+        }
+        juce::PopupMenu m;
+        m.addItem (1, "Save clip as WAV...");
+        m.addItem (2, "Show the clips folder");
+        juce::Component::SafePointer<DragClipButton> safe (this);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe] (int r)
+        {
+            if (safe == nullptr || r == 0)
+                return;
+            if (r == 2)
+            {
+                juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("VEX Stutter Clips").createDirectory();
+                juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("VEX Stutter Clips").startAsProcess();
+                return;
+            }
+            juce::String error;
+            const auto clip = safe->processor.renderSelectionClip (error);
+            if (clip == juce::File())
+            {
+                safe->showMessage (error);
+                return;
+            }
+            safe->chooser = std::make_unique<juce::FileChooser> ("Save clip", juce::File::getSpecialLocation (juce::File::userMusicDirectory)
+                                                                                  .getChildFile (clip.getFileName()), "*.wav");
+            safe->chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                                            | juce::FileBrowserComponent::warnAboutOverwriting,
+                                        [safe, clip] (const juce::FileChooser& fc)
+                                        {
+                                            if (safe == nullptr)
+                                                return;
+                                            auto target = fc.getResult();
+                                            if (target == juce::File())
+                                                return;
+                                            if (! target.hasFileExtension ("wav"))
+                                                target = target.withFileExtension ("wav");
+                                            if (! clip.copyFileTo (target))
+                                                safe->showMessage ("Cannot write " + target.getFullPathName());
+                                        });
+        });
+    }
+
+private:
+    void showMessage (const juce::String& text)
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "VEX Stutter", text, "OK", this);
+        dragging = false;
+        repaint();
+    }
+
+    VEXStutterAudioProcessor& processor;
+    std::unique_ptr<juce::FileChooser> chooser;
+    bool available = false, dragging = false;
+};
+} // namespace
+
 class VEXStutterAudioProcessorEditor::Content final : public juce::Component
 {
 public:
@@ -487,6 +612,7 @@ public:
           saveButton ("Save preset", icons::Id::save), browseButton ("Open preset", icons::Id::folder), settingsButton ("Settings", icons::Id::gear),
           waveform (p),
           freeze (param (ids::freeze), "FROZEN", "FREEZE", col::ice, icons::Id::snowflake, true),
+          dragClip (p),
           steps (p.getEngineStatus()),
           modes (param (ids::mode)),
           amount (param (ids::amount), Knob::Size::hero, "AMOUNT"),
@@ -515,7 +641,7 @@ public:
         addAndMakeVisible (background);
         for (juce::Component* c : std::initializer_list<juce::Component*> {
                  &presetBar, &saveButton, &browseButton, &settingsButton, &waveform, &inMeter, &outMeter, &freeze, &steps,
-                 &captureInfo, &syncInfo, &modes, &amount, &length, &lengthText, &style, &mix, &mixText, &glitchType, &intensity,
+                 &captureInfo, &dragClip, &syncInfo, &modes, &amount, &length, &lengthText, &style, &mix, &mixText, &glitchType, &intensity,
                  &intensityText, &rate, &rateMs, &sync, &smoothness, &smoothnessText, &shape, &offset, &offsetText, &fxSwitch,
                  &fxEdit, &reverbMix, &delayMix, &reverbText, &delayText, &footerInfo, &bypass, &power })
             addAndMakeVisible (c);
@@ -578,7 +704,8 @@ public:
         at (outMeter, w.getRight() - 20, w.getY() + 28, 9, 110);
         at (waveform, w.getX() + 40, w.getY() + 6, w.getWidth() - 80, 134);
         at (freeze, w.getX() + 40, w.getBottom() - 30, 112, 24);
-        at (captureInfo, w.getX() + 160, w.getBottom() - 30, 190, 24);
+        at (captureInfo, w.getX() + 160, w.getBottom() - 30, 98, 24);
+        at (dragClip, w.getX() + 252, w.getBottom() - 30, 100, 24);
         at (steps, w.getX() + 362, w.getBottom() - 23, 360, 10);
         at (syncInfo, w.getRight() - 340, w.getBottom() - 30, 300, 24);
 
@@ -634,6 +761,7 @@ public:
         // capture state
         const bool freezeOn = param (ids::freeze).getValue() > 0.5f;
         const bool frozenNow = processor.getCapture().uiFrozen();
+        dragClip.setAvailable (frozenNow);
         const bool gateMode = juce::roundToInt (param (ids::mode).convertFrom0to1 (param (ids::mode).getValue())) == (int) vex::choices::Mode::gate;
         const bool pending = freezeOn && ! frozenNow;
         if (pending != freeze.pending) { freeze.pending = pending; freeze.repaint(); }
@@ -886,6 +1014,7 @@ private:
     WaveformView waveform;
     LevelMeter inMeter, outMeter;
     PillToggle freeze;
+    DragClipButton dragClip;
     StepStrip steps;
     ModeSelector modes;
     Knob amount;

@@ -149,19 +149,49 @@ public:
         switchColumnUi.store (writeAbs / framesPerColumn, std::memory_order_relaxed);
         liveBankUi.store (live, std::memory_order_relaxed);
         const auto& f = banks[frozenBank];
+        frozenStartUi.store (f.startAbs, std::memory_order_relaxed);
+        frozenLengthUi.store (f.endAbs - f.startAbs, std::memory_order_relaxed);
         frozenColumnStart.store ((f.startAbs + framesPerColumn - 1) / framesPerColumn, std::memory_order_relaxed);
         frozenColumnEnd.store (f.endAbs / framesPerColumn, std::memory_order_relaxed);
         frozenUiBank.store (frozenBank, std::memory_order_relaxed);
         frozenFlag.store (true, std::memory_order_release);
+        freezeSeq.fetch_add (1, std::memory_order_release);
     }
 
     void unfreeze() noexcept
     {
         if (frozenBank < 0)
             return;
+        freezeSeq.fetch_add (1, std::memory_order_release);
         frozenFlag.store (false, std::memory_order_release);
         frozenBank = -1;
     }
+
+    /** Message thread (clip export): copies frames [from, to) of the frozen capture (0 = oldest) into left /
+        right. The audio thread never writes a frozen bank, so this only reads; a freeze or unfreeze while it
+        copies is detected by the sequence number (seqlock) and the copy is reported as invalid. Lock-free,
+        no allocation. False: not frozen, the range is outside the capture, or it changed meanwhile. */
+    bool copyFrozen (int64_t from, int64_t to, float* left, float* right) const noexcept
+    {
+        const auto seq = freezeSeq.load (std::memory_order_acquire);
+        if (! frozenFlag.load (std::memory_order_acquire))
+            return false;
+        const auto& b = banks[frozenUiBank.load (std::memory_order_relaxed)];
+        const auto start = frozenStartUi.load (std::memory_order_relaxed);
+        const auto len = frozenLengthUi.load (std::memory_order_relaxed);
+        if (from < 0 || to > len || to <= from || b.samples[0].empty())
+            return false;
+        for (int64_t i = from; i < to; ++i)
+        {
+            const auto k = (size_t) ((start + i) % cap);
+            left[i - from] = b.samples[0][k];
+            right[i - from] = b.samples[1][k];
+        }
+        std::atomic_thread_fence (std::memory_order_acquire);
+        return freezeSeq.load (std::memory_order_relaxed) == seq && frozenFlag.load (std::memory_order_acquire);
+    }
+    /** Frames held by the frozen capture as the UI sees it (0 when not frozen). */
+    int64_t uiFrozenLength() const noexcept { return frozenFlag.load (std::memory_order_acquire) ? frozenLengthUi.load (std::memory_order_relaxed) : 0; }
 
     /** Frames held by the frozen bank (0 when not frozen). */
     int64_t frozenLength() const noexcept { return frozenBank >= 0 ? banks[frozenBank].endAbs - banks[frozenBank].startAbs : 0; }
@@ -227,5 +257,7 @@ private:
     std::atomic<bool> frozenFlag { false };
     std::atomic<int> frozenUiBank { 0 }, liveBankUi { 0 };
     std::atomic<int64_t> switchColumnUi { 0 }, framesPerColumnUi { 1 };
+    std::atomic<int64_t> frozenStartUi { 0 }, frozenLengthUi { 0 };   // clip export (copyFrozen)
+    std::atomic<uint32_t> freezeSeq { 0 };                            // +1 on every freeze / unfreeze
 };
 }

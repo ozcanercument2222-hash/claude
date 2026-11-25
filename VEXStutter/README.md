@@ -19,6 +19,18 @@ Vocal stutter / repeat / gate / reverse / glitch effect. JUCE 8, C++17, VST3 + S
   host tempo and bar, and runs on an internal clock when the transport is stopped.
   Amount 0 %, Mix 0 % and Bypass give the input bit for bit.
 
+## Clip export: freeze, select, drag into the DAW
+
+1. Play the song. The waveform shows the last 8 s of the input.
+2. Press **FREEZE** at the moment you want. The waveform stops and holds those 8 s.
+3. Select the part (drag the blue selection's edges, drag inside it to move it, double-click for all).
+4. Drag **DRAG CLIP** onto a track in your DAW. The selected part, played through the effect with the current
+   settings (tails included), is dropped as a 24-bit WAV.
+
+- **Click DRAG CLIP:** *Save clip as WAV...*, for hosts that do not take dropped files.
+- **Where the clips go:** the temp folder (`VEX Stutter Clips`).
+- **Rendering:** happens off the audio thread. A freeze change during the copy is detected (lock-free) and the clip is refused instead of corrupted.
+
 ## Build
 
 You need CMake 3.22+, a C++17 compiler and git. JUCE 8.0.6 is downloaded automatically, or you can

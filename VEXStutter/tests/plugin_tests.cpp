@@ -7,6 +7,7 @@
 //  Exit code 0 = every check passed. The DSP itself is tested by VEXStutter_EngineTests.
 //==============================================================================
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "Parameters/Choices.h"
@@ -597,6 +598,64 @@ int main (int argc, char* argv[])
                "bad values in a preset: NaN -> default, out of range -> clamped, Bypass ignored");
         CHECK (pm.importFile (tempPresets.getChildFile ("garbage.vexpreset")).failed(), "importing a broken file is refused");
         tempPresets.deleteRecursively();
+    }
+
+    //--------------------------------------------------------------------------
+    std::printf ("\n=== 5b) Clip export (freeze, select, drag into the DAW) ===\n");
+    {
+        VEXStutterAudioProcessor p;
+        TestPlayHead head;
+        p.setPlayHead (&head);
+        p.setPlayConfigDetails (2, 2, 48000.0, 480);
+        p.prepareToPlay (48000.0, 480);
+        const auto in = voice (4.0, 48000.0);
+        run (p, head, in, 48000.0, 480);
+        juce::AudioBuffer<float> clip;
+        juce::String error;
+        const bool refusedLive = ! p.renderSelection (clip, error) && error.isNotEmpty();
+        setReal (p, ids::freeze, 1.0f);
+        run (p, head, std::vector<float> (in.begin(), in.begin() + 48000), 48000.0, 480);
+        p.setSelection (0.25f, 0.5f);
+        const auto frozenLen = p.getCapture().uiFrozenLength();
+        error.clear();
+        const bool rendered = p.renderSelection (clip, error);
+        double peak = 0.0;
+        bool finite = true;
+        for (int ch = 0; ch < clip.getNumChannels(); ++ch)
+            for (int i = 0; i < clip.getNumSamples(); ++i)
+            {
+                const float v = clip.getSample (ch, i);
+                finite = finite && std::isfinite (v);
+                peak = std::max (peak, (double) std::abs (v));
+            }
+        const int selFrames = (int) (0.25 * (double) frozenLen);
+        const auto file = p.renderSelectionClip (error);
+        bool wavOk = false;
+        int64_t wavLen = 0;
+        if (file.existsAsFile())
+        {
+            juce::AudioFormatManager fm;
+            fm.registerBasicFormats();
+            if (std::unique_ptr<juce::AudioFormatReader> r (fm.createReaderFor (file)); r != nullptr)
+            {
+                wavLen = r->lengthInSamples;
+                wavOk = std::abs (r->sampleRate - 48000.0) < 0.5 && r->numChannels == 2 && r->bitsPerSample == 24
+                     && r->lengthInSamples == clip.getNumSamples();
+            }
+            file.deleteFile();
+        }
+        CHECK (refusedLive && rendered && finite && peak > 0.01 && clip.getNumSamples() >= selFrames && wavOk,
+               "clip export: refused while live (%s), frozen %.2f s, selection 25 %% -> %d frames rendered (>= %d), peak %.2f, finite %s, WAV 48 kHz / 2 ch / 24 bit / %lld frames %s",
+               refusedLive ? "yes" : "NO", (double) frozenLen / 48000.0, clip.getNumSamples(), selFrames, peak, finite ? "yes" : "NO",
+               (long long) wavLen, wavOk ? "ok" : "WRONG");
+        // a copy across an unfreeze is reported invalid (seqlock), never torn audio
+        std::vector<float> l (1000), r (1000);
+        const bool copyFrozenOk = p.getCapture().copyFrozen (0, 1000, l.data(), r.data());
+        setReal (p, ids::freeze, 0.0f);
+        run (p, head, std::vector<float> (in.begin(), in.begin() + 4800), 48000.0, 480);
+        const bool copyAfterUnfreeze = p.getCapture().copyFrozen (0, 1000, l.data(), r.data());
+        CHECK (copyFrozenOk && ! copyAfterUnfreeze && ! p.renderSelection (clip, error),
+               "frozen copy valid while frozen, refused after unfreeze");
     }
 
     //--------------------------------------------------------------------------

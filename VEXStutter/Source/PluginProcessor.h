@@ -92,6 +92,13 @@ public:
 
     vex::presets::PresetManager& getPresetManager() noexcept { return presetManager; }
 
+    /** Clip export (message thread): the selected part of the frozen capture is played through the effect with
+        the current settings (as if it ran through the plug-in, tails included) and written as a 24-bit WAV in
+        the temp folder, ready to be dragged into the DAW. Returns the file, or an empty File and a reason. */
+    juce::File renderSelectionClip (juce::String& error) const;
+    /** The same audio as a buffer (tests, and the WAV above). */
+    bool renderSelection (juce::AudioBuffer<float>& out, juce::String& error) const;
+
     /** Editor size as a factor of its design size (0.7 - 1.6); saved with the session. */
     static constexpr float kMinUiScale = 0.7f, kMaxUiScale = 1.6f;
     float getUiScale() const noexcept { return uiScale.load (std::memory_order_relaxed); }
