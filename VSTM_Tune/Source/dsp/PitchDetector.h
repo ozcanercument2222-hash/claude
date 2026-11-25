@@ -29,6 +29,14 @@ public:
         fullRate = sampleRate;
         decim = std::max (1, decimationFactor);
         decRate = fullRate / decim;
+        // 1.5: the full-rate comparison windows (refine, periodicity checks) are limited to 256 - 2048
+        // samples, i.e. 5.3 - 43 ms at 48 kHz. Above 48 kHz the same limits were shorter in time (96 kHz:
+        // half), which made the fine pitch of high voices noisier (MEASURED, synthetic soprano: median
+        // 3.7 ct at 48 kHz, 6.6 ct at 96 kHz, 7.2 ct at 192 kHz). They now keep their 48 kHz duration;
+        // at 48 kHz and below nothing changes.
+        const double winScale = std::max (1.0, fullRate / 48000.0);
+        winMin = (int) std::lround (256.0 * winScale);
+        winMax = (int) std::lround (2048.0 * winScale);
         dec.assign ((size_t) kDecRing, 0.0f);
         frame.assign ((size_t) (kWindow + 1024), 0.0f);
         diff.assign (1024, 0.0f);
@@ -170,7 +178,7 @@ public:
                 const int lm = localMin ((int) std::lround (sub));
                 if (lm < 0 || cmnd[(size_t) lm] > kSubharmonicDip || std::abs (lm - sub) > 1.5)
                     continue;
-                const int w = std::clamp ((int) (1.5 * best * decim), 256, 2048);
+                const int w = std::clamp ((int) (1.5 * best * decim), winMin, winMax);
                 const int64_t base = std::min (endIndex - (int64_t) std::llround (frameCentre) - (w + best * decim) / 2,
                                                endIndex - w - (int64_t) (best * decim + decim + 1));
                 if (! clearlyMorePeriodic (periodicity (best, base, w, fullRing, fullMask),
@@ -204,7 +212,7 @@ public:
                 const int alt = localMin ((int) std::lround (best / (double) div));
                 if (alt > 0 && cmnd[(size_t) alt] < kStayVoiced)
                 {
-                    const int w = std::clamp ((int) (1.5 * best * decim), 256, 2048);
+                    const int w = std::clamp ((int) (1.5 * best * decim), winMin, winMax);
                     const int64_t base = endIndex - w - (best * decim + decim + 1);
                     if (! (periodicity (best, base, w, fullRing, fullMask) + kOctaveAbsMargin
                            < kOctaveRelease * periodicity (alt, base, w, fullRing, fullMask)))
@@ -222,7 +230,7 @@ public:
                 const int alt = localMin ((int) std::lround (best * 2.0));
                 if (alt > 0)
                 {
-                    const int w = std::clamp ((int) (1.5 * alt * decim), 256, 2048);
+                    const int w = std::clamp ((int) (1.5 * alt * decim), winMin, winMax);
                     const int64_t base = endIndex - w - (alt * decim + decim + 1);
                     if (clearlyMorePeriodic (periodicity (alt, base, w, fullRing, fullMask),
                                              periodicity (best, base, w, fullRing, fullMask)))
@@ -382,7 +390,7 @@ private:
         // interpolated on the decimated grid): a minimum on the edge moves the search window downhill,
         // so it stays in the same dip (a wider search found other dips), at most 8 % of the period away
         // from the coarse estimate; beyond that the coarse value is kept.
-        const int w = std::clamp ((int) (1.5 * coarse), 256, 2048);
+        const int w = std::clamp ((int) (1.5 * coarse), winMin, winMax);
         const int radius = decim + 1;
         const double maxDrift = std::max ((double) radius, 0.08 * coarse);
         double centre = coarse;
@@ -433,6 +441,7 @@ private:
     }
 
     double fullRate = 44100.0, decRate = 11025.0;
+    int winMin = 256, winMax = 2048;     // full-rate comparison window limits (keep their 48 kHz duration)
     int decim = 4;
     int tauMin = 8, tauMax = 150;
     std::vector<float> dec, frame, diff, cmnd;

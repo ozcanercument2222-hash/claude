@@ -38,6 +38,8 @@
 //  kilitsiz bir posta kutusuyla gelir ve ses is parcaciginda blok basinda uygulanir.
 //==============================================================================
 #include "DspCommon.h"
+#include <array>
+#include <limits>
 #include "Scales.h"
 #include "PitchDetector.h"
 #include "KeyDetector.h"
@@ -70,6 +72,31 @@ public:
         bool  backdateSwitch = true;    // hard tune: backdate confirmed note switches (internal; tests switch it off)
         bool  freshAnalysis = true;     // REALTIME: newest-aligned detector windows (internal; tests switch it off)
         bool  swingKeep = true;         // human side: keep the retune speed across a switch in a vibrato swing (internal)
+        bool  vibratoBand = true;       // 1.5: Vibrato Scale scales the vibrato band only, the note decision never (internal)
+        float tuningRefHz = 440.0f;     // 1.5: A4 reference; the note grid (scale, Auto Key, display) moves with it
+        bool  protectConsonants = false; // 1.5: the formant shift leaves unvoiced sound (s, sh, breaths) untouched
+        bool  formantFollowsTranspose = false; // 1.5: the formant moves with the transpose ("chipmunk" / "giant")
+        float transitionMs = -1.0f;     // 1.5: Note Transition in ms; < 0 = automatic (ROBOTISM)
+        uint16_t bypassMask = 0;        // 1.5: custom scale: degrees that pass through uncorrected (relative to key)
+        float toleranceCt = 0.0f;       // 1.5: tolerance (cents) around the target, 0 = off
+        float confidenceMin = 0.0f;     // 1.5: detector clarity below which the correction fades out, 0 = off
+        float synthVibRateHz = 0.0f;    // 1.5: synthetic vibrato rate
+        float synthVibDepthCt = 0.0f;   // 1.5: synthetic vibrato depth (cents), 0 = off
+        int   octave = 0;               // 1.5: octave shift added to the transpose (-2 .. +2)
+        uint16_t midiMask = 0;          // 1.5: pitch classes of the held MIDI notes (MIDI target mode); 0 = none held
+        float midiMinNoteS = -1.0f;     // 1.5 notes as MIDI: shorter notes are not sent (slide passing notes, blips);
+                                        // < 0 = as long as the look-ahead allows: REALTIME 8 ms, HQ 15 ms (MEASURED)
+        float midiMinGapS = 0.020f;     // 1.5 notes as MIDI: a shorter break in the voice keeps the note
+        int midiNote = -1;              // 1.5 MIDI perform (roadmap 49): the voice goes to this note, octave as played
+        float degreeCents[12] {};       // 1.5 (roadmap 45): cents each degree (from the key's tonic) sits off the equal grid
+        int scaleSteps = 0;             // 1.5 (roadmap 41): diatonic transpose in steps of the scale (-7 .. +7)
+        float attackMs = -1.0f;         // 1.5 (roadmap 27): correction fade-in at a phrase start (< 0 = automatic)
+        float releaseMs = 0.0f;         // 1.5 (roadmap 27): correction fade-out on a decayed note (0 = off)
+        bool naturalCentre = true;      // 1.6 (P0): vibrato-free note decision on the natural side (internal switch)
+        bool naturalMotion = true;      // 1.6 (P0): only the centre is corrected during a vibrato (internal switch)
+        bool naturalTransition = true;  // 1.6 (P0): the automatic glide follows the singer (internal switch)
+        bool octaveGuard = true;        // 1.6 (P0): a sudden octave jump of the detection is held 40 ms (internal switch)
+        int naturalCentreRef = 0;       // 1.6 experiments (WavProbe): 0 = centre2, 1 = 2-pole 1.5 Hz
     };
 
     struct DisplayPoint
@@ -242,6 +269,10 @@ public:
         levelHeld = levelActive ? levelPrior (params.formant - params.transpose) : 1.0f;
         currentNote.store (-1);
         currentVoiced.store (false);
+        noteEvHead = noteEvCount = 0;
+        midiCand = midiSent = -1;
+        midiCandStart = midiLeave = 0.0;
+        midiAway = false;
     }
 
     /** A value that is not a number (damaged preset / session, broken host) keeps the last good one;
@@ -258,8 +289,29 @@ public:
         p.vibratoScale = keep (p.vibratoScale, params.vibratoScale,   0.0f,    4.0f);
         p.formant      = keep (p.formant,      params.formant,      -24.0f,   24.0f);
         p.transpose    = keep (p.transpose,    params.transpose,    -24.0f,   24.0f);
+        p.tuningRefHz  = keep (p.tuningRefHz,  params.tuningRefHz,  400.0f,  480.0f);
+        p.transitionMs = keep (p.transitionMs, params.transitionMs,  -1.0f, 1000.0f);
+        p.toleranceCt  = keep (p.toleranceCt,  params.toleranceCt,    0.0f,  100.0f);
+        p.confidenceMin = keep (p.confidenceMin, params.confidenceMin, 0.0f,   1.0f);
+        p.synthVibRateHz = keep (p.synthVibRateHz, params.synthVibRateHz, 0.0f, 12.0f);
+        p.synthVibDepthCt = keep (p.synthVibDepthCt, params.synthVibDepthCt, 0.0f, 200.0f);
+        p.octave = std::clamp (p.octave, -2, 2);
+        if (p.octave != 0)                       // 1.5 (roadmap 35): octave shift on top of the transpose, up to +-24 st
+            p.transpose = std::clamp (p.transpose + 12.0f * (float) p.octave, -24.0f, 24.0f);
+        if (p.formantFollowsTranspose)          // 1.5 (roadmap 34): formant + transpose as one creative shift
+            p.formant = std::clamp (p.formant + p.transpose, -24.0f, 24.0f);
         p.mix          = keep (p.mix,          params.mix,            0.0f,    1.0f);
         p.customMask = (uint16_t) (p.customMask & 0x0fff);
+        p.bypassMask = (uint16_t) (p.bypassMask & 0x0fff);
+        p.midiMask = (uint16_t) (p.midiMask & 0x0fff);
+        p.midiMinNoteS = keep (p.midiMinNoteS, params.midiMinNoteS, -1.0f, 0.2f);
+        p.midiMinGapS = keep (p.midiMinGapS, params.midiMinGapS, 0.0f, 0.2f);
+        p.midiNote = std::clamp (p.midiNote, -1, 127);
+        p.scaleSteps = std::clamp (p.scaleSteps, -7, 7);
+        p.attackMs = keep (p.attackMs, params.attackMs, -1.0f, 1000.0f);
+        p.releaseMs = keep (p.releaseMs, params.releaseMs, 0.0f, 2000.0f);
+        for (int d = 0; d < 12; ++d)
+            p.degreeCents[d] = keep (p.degreeCents[d], params.degreeCents[d], -100.0f, 100.0f);
         detector.setNewestAligned (realtime && p.freshAnalysis);
         if (p.key < -1 || p.key > 11) p.key = -1;
         p.scale = std::clamp (p.scale, 0, (int) kNumScales - 1);
@@ -398,7 +450,24 @@ public:
             }
             for (int ch = 0; ch < nc; ++ch)
             {
-                const float wet = g < 1.0f ? wetCh[ch] * g : wetCh[ch];
+                float wet = g < 1.0f ? wetCh[ch] * g : wetCh[ch];
+               #if VSTM_TEST_HOOKS
+                if (testNonFinite > 0)
+                {
+                    wet = std::numeric_limits<float>::quiet_NaN();
+                    if (ch == nc - 1)
+                        --testNonFinite;
+                }
+               #endif
+                // 1.5 fail-safe (roadmap item 80): a processed sample that is not a finite number never
+                // reaches the host; the dry sample goes out in its place. The input is sanitised and no
+                // fuzz / sanitizer run has produced one, so this is a last line of defence: for finite
+                // samples nothing changes.
+                if (! std::isfinite (wet))
+                {
+                    wet = dryCh[ch];
+                    failSafeSamples.fetch_add (1, std::memory_order_relaxed);
+                }
                 channels[ch][i] = dryCh[ch] + wetGain * (wet - dryCh[ch]);
             }
             if (levelActive || std::abs (vg - 1.0f) > 0.0f)
@@ -416,11 +485,47 @@ public:
     std::atomic<int>   keySuggestion { -1 };        // locked: a key the evidence now clearly prefers (shown only)
     std::atomic<float> keySuggestionConfidence { 0.0f };
     std::atomic<int>   currentNote { -1 };
+    std::atomic<uint32_t> failSafeSamples { 0 };    // 1.5: processed samples replaced by the dry signal (not finite)
+
+   #if VSTM_TEST_HOOKS
+    /** Test builds only (EngineTest): the next n output samples of the processed voice are made NaN. */
+    void testInjectNonFinite (int n) noexcept { testNonFinite = n; }
+    int testNonFinite = 0;
+   #endif
     std::atomic<bool>  currentVoiced { false };
     std::atomic<float> currentInMidi { 0.0f };
     std::atomic<float> currentOutMidi { 0.0f };
     std::atomic<float> currentClarity { 0.0f };    // 1.4 developer panel: detector certainty 0..1
     std::atomic<float> currentDelayMs { 0.0f };    // 1.4 developer panel: analysis delay of the last hop
+
+    //------------------------------------------------------------ 1.5 (roadmap 49 / 53): the notes as MIDI
+    /** Input samples taken so far (the axis the note changes are placed on). Audio thread. */
+    int64_t getInputSampleCount() const noexcept  { return nIn; }
+
+    /** The note the voice is tuned to (transpose included; -1 = not voiced), for MIDI: a change counts
+        once the new note has lasted Params::midiMinNoteS (a gap: midiMinGapS), so the passing notes
+        of a slide, one-hop blips and short breaks in the voicing make no MIDI notes. A change is placed
+        where the OUTPUT plays it (analysis centre + the output delay): a note-on after silence and a
+        note-off where the voice left the old note, a note-to-note change in the middle of what was skipped
+        between them (a slide's passing notes, a break in the voicing). When that sample has been played
+        already the change goes out at the sample the decision was made (late by up to the minimum length;
+        REALTIME has less look-ahead than HQ). Decided per analysis hop, so the positions do not depend on
+        the block size. Calls fn (offset, note) for every change before the end of the audio processed so
+        far; offset counts from blockStart (the input sample count before the block) and is never
+        negative. Audio thread only, no allocation. */
+    template <typename Fn>
+    void takeNoteEvents (int64_t blockStart, Fn&& fn) noexcept
+    {
+        while (noteEvCount > 0)
+        {
+            const NoteEvent& ev = noteEvs[(size_t) noteEvHead];
+            if (ev.when >= nIn)
+                break;                                    // plays in a later block
+            fn ((int) std::max<int64_t> (0, ev.when - blockStart), ev.note);
+            noteEvHead = (noteEvHead + 1) % kNoteEvRing;
+            --noteEvCount;
+        }
+    }
 
     /** Adaptive's view of the performance (tests, display). Audio thread only. */
     const PitchCorrector::AdaptiveState& getAdaptiveState() const noexcept { return corrector.getAdaptiveState(); }
@@ -430,6 +535,56 @@ private:
     static constexpr int kKeyReanalyze = -2;
     std::atomic<int> keyRequest { kNoKeyRequest };
     std::atomic<float> keyRequestConf { 0.0f };
+
+    // 1.5 (roadmap 49 / 53): note changes waiting for the output to reach them (see takeNoteEvents)
+    struct NoteEvent { int64_t when; int note; };
+    static constexpr int kNoteEvRing = 256;
+    std::array<NoteEvent, kNoteEvRing> noteEvs {};
+    int noteEvHead = 0, noteEvCount = 0;
+    int midiCand = -1, midiSent = -1;      // the note of the last hops / the last one queued
+    double midiCandStart = 0.0;            // content time (input samples) the candidate started
+    double midiLeave = 0.0;                // content time the hops first differed from the queued note
+    bool midiAway = false;
+
+    /** contentTime: the hop's analysis centre; noteFrom: where the output starts this hop's note (earlier
+        than contentTime when a hard-tune switch was backdated, HQ). */
+    void trackMidiNote (double contentTime, double noteFrom, int note) noexcept
+    {
+        if (note != midiCand)
+        {
+            midiCand = note;
+            midiCandStart = noteFrom;
+        }
+        if (note == midiSent)
+        {
+            midiAway = false;                             // back on the note that sounds: nothing changes
+            return;
+        }
+        if (! midiAway)
+        {
+            midiAway = true;
+            midiLeave = noteFrom;
+        }
+        const double minNote = params.midiMinNoteS >= 0.0f ? (double) params.midiMinNoteS : (realtime ? 0.008 : 0.015);
+        if (contentTime - midiCandStart < (midiCand >= 0 ? minNote : (double) params.midiMinGapS) * sr)
+            return;
+        const double at = midiSent >= 0 && midiCand >= 0 ? 0.5 * (midiLeave + midiCandStart) : midiLeave;
+        midiSent = midiCand;
+        midiAway = false;
+        auto when = std::max ((int64_t) std::llround (at + lagNow), nIn);
+        if (noteEvCount > 0)
+        {
+            NoteEvent& back = noteEvs[(size_t) ((noteEvHead + noteEvCount - 1) % kNoteEvRing)];
+            when = std::max (when, back.when);            // time order holds when the delay shrinks (HQ -> REALTIME)
+            if (noteEvCount == kNoteEvRing)
+            {
+                back.note = midiSent;                     // full (not in practice): the newest state wins
+                return;
+            }
+        }
+        noteEvs[(size_t) ((noteEvHead + noteEvCount) % kNoteEvRing)] = { when, midiSent };
+        ++noteEvCount;
+    }
 
     /** The note set the corrector uses: the scale's, or the custom one (relative to the key). */
     uint16_t allowedMask() const noexcept
@@ -625,9 +780,17 @@ private:
             inMidi = (float) hzToMidi (sr / r.period);
         lastInMidi = inMidi;
 
+        // 1.5 (roadmap 45): A4 reference. The corrector, Auto Key and the display work on the pitch relative
+        // to the moved note grid; the grains keep the real pitch. At 440 Hz this path is skipped entirely.
+        const bool refShift = std::abs (params.tuningRefHz - 440.0f) > 1.0e-3f;
+        const float refSt = refShift ? (float) (12.0 * std::log2 ((double) params.tuningRefHz / 440.0)) : 0.0f;
+        const float gridMidi = refShift ? inMidi - refSt : inMidi;
+
         // allowed notes: the scale's, or the custom set (relative to the key, like a scale)
-        const uint16_t mask = allowedMask();
-        keys.addFrame (r.voiced, inMidi, r.clarity, dt);
+        // 1.5: bypassed degrees (custom scale only) are targets too, so the note decision can land on them
+        const uint16_t bypass = params.customScale ? params.bypassMask : (uint16_t) 0;
+        const uint16_t mask = (uint16_t) (allowedMask() | bypass);
+        keys.addFrame (r.voiced, gridMidi, r.clarity, dt);
         const int autoKey = keys.update (params.customScale ? -1 : params.scale, mask, dt, params.followKeyChanges);
         publishKey();
 
@@ -640,12 +803,69 @@ private:
         cs.transpose = params.transpose;
         cs.adaptive = params.adaptive;
         cs.swingKeep = params.swingKeep;
+        cs.vibratoBand = params.vibratoBand;
+        cs.transitionMs = params.transitionMs;
+        cs.toleranceCt = params.toleranceCt;
+        cs.confidenceMin = params.confidenceMin;
+        cs.synthVibRateHz = params.synthVibRateHz;
+        cs.synthVibDepthCt = params.synthVibDepthCt;
+        cs.scaleSteps = params.scaleSteps;
+        cs.attackMs = params.attackMs;
+        cs.naturalCentre = params.naturalCentre;
+        cs.naturalMotion = params.naturalMotion;
+        cs.naturalTransition = params.naturalTransition;
+        cs.octaveGuard = params.octaveGuard;
+        cs.naturalCentreRef = params.naturalCentreRef;
+        cs.releaseMs = params.releaseMs;
+        float levelDb = 0.0f;                    // 1.5 release: level of the last hop (only computed when it is used)
+        if (params.releaseMs > 0.0f)
+        {
+            double sum = 0.0;
+            for (int64_t k = nIn - hop; k < nIn; ++k)
+            {
+                const double v = monoLp[(size_t) (k & kMask)];
+                sum += v * v;
+            }
+            levelDb = (float) (10.0 * std::log10 (sum / hop + 1.0e-12));
+        }
         if (mask == 0x0fff || mask == 0)         { cs.key = 0; cs.mask = 0x0fff; }    // every note allowed
         else if (params.key >= 0)                { cs.key = params.key; cs.mask = mask; }
         else if (autoKey >= 0)                   { cs.key = autoKey;    cs.mask = mask; }
         else                                     { cs.key = 0; cs.mask = 0x0fff; }    // still listening: nearest semitone
+        // 1.5 (roadmap 45): tuning system / microtonal degrees, counted from the key's tonic (chosen, else detected,
+        // else C); every target note sits that far off the equal grid. All zero (equal temperament): not used.
+        for (int d = 0; d < 12 && ! cs.tuned; ++d)
+            cs.tuned = std::abs (params.degreeCents[d]) > 1.0e-4f;
+        if (cs.tuned)
+        {
+            const int tonic = params.key >= 0 ? params.key : (autoKey >= 0 ? autoKey : 0);
+            for (int pc = 0; pc < 12; ++pc)
+                cs.pcOffset[pc] = 0.01f * params.degreeCents[(pc - tonic + 12) % 12];
+        }
+        if (params.midiNote >= 0)
+        {
+            // 1.5 MIDI perform (roadmap 49): the last held MIDI note is the target, octave as played
+            cs.key = 0;
+            cs.mask = (uint16_t) (1u << (params.midiNote % 12));
+            cs.forcedNote = params.midiNote;
+        }
+        else if (params.midiMask != 0)
+        {
+            // 1.5 MIDI target notes (roadmap 42 / 46 / 52 / 33): the held MIDI notes are the targets, in any octave,
+            // like a scale played live; the scale, the custom notes and note bypass wait until they are released
+            cs.key = 0;
+            cs.mask = params.midiMask;
+        }
+        else if (bypass != 0)
+        {
+            // the bypass degrees count from the same key as the custom notes (chosen, else detected, else C)
+            if (cs.mask == 0x0fff)
+                cs.key = params.key >= 0 ? params.key : (autoKey >= 0 ? autoKey : 0);
+            cs.bypassMask = bypass;
+        }
 
-        const auto o = corrector.process (r.voiced, inMidi, (float) dt, cs, r.clarity);
+        const auto o = corrector.process (r.voiced, gridMidi, (float) dt, cs, r.clarity, levelDb);
+        const float outAbs = refShift ? o.outMidi + refSt : o.outMidi;      // the real output pitch
 
         // the history must stay in time order: after REALTIME -> HQ the analysis is centred further
         // back than the last REALTIME records, so those (now "in the future") are dropped
@@ -658,7 +878,7 @@ private:
         Rec& rec = recs[(size_t) recWrite];
         rec.time = recTime;
         rec.inMidi = inMidi;
-        rec.outMidi = o.outMidi;
+        rec.outMidi = outAbs;
         rec.pass = o.passThrough;
         rec.voiced = r.voiced;
         recWrite = (recWrite + 1) % kRecRing;
@@ -669,14 +889,15 @@ private:
         // ~5 - 15 ms of such hops (latency 40 ms minus the analysis delay and one grain); in REALTIME the
         // grains have always been placed already, so nothing changes there. The decision itself (and so
         // how often the target switches) is not touched.
+        double noteFrom = recTime;               // where the output starts the note of this hop (MIDI, 1.5)
         if (params.backdateSwitch && o.noteChanged && o.instant && o.backdateHops > 0 && o.fromNote >= 0 && r.voiced)
-            backdateSwitch (o.backdateHops, o.amountNow * (float) (o.note - o.fromNote));
+            noteFrom = std::min (noteFrom, backdateSwitch (o.backdateHops, o.amountNow * o.switchShift));
 
         DisplayPoint dp;
-        dp.inMidi = inMidi;
+        dp.inMidi = gridMidi;
         dp.outMidi = o.outMidi;
-        dp.note = (int16_t) (r.voiced && o.note >= 0 ? o.note + (int) std::lround (params.transpose) : -1);
-        dp.deviation = o.note >= 0 ? inMidi - (float) o.note : 0.0f;
+        dp.note = (int16_t) (r.voiced && o.note >= 0 ? (o.stepNote >= 0 ? o.stepNote : o.note) + (int) std::lround (params.transpose) : -1);
+        dp.deviation = o.note >= 0 ? gridMidi - (float) o.note : 0.0f;
         dp.flags = (uint8_t) ((r.voiced ? kVoiced : 0) | (o.noteChanged ? kNoteChange : 0) | (o.settled ? kSettled : 0));
         dp.analysisDelay = (float) (r.centreDelay / sr);
         dp.clarity = r.clarity;
@@ -684,10 +905,11 @@ private:
 
         currentVoiced.store (r.voiced);
         currentInMidi.store (inMidi);
-        currentOutMidi.store (o.outMidi);
+        currentOutMidi.store (outAbs);
         currentClarity.store (r.clarity, std::memory_order_relaxed);
         currentDelayMs.store ((float) (1000.0 * r.centreDelay / sr), std::memory_order_relaxed);
         currentNote.store (dp.note);
+        trackMidiNote (recTime, noteFrom, dp.note);
 
         curVoiced = r.voiced;
         curPeriod = r.voiced ? r.period : 0.0;
@@ -823,16 +1045,23 @@ private:
     /** Gives the `hops` records before the newest one the new target too (see analysisHop), as far as
         no grain has been placed from them: rec.outMidi moves by `shift` semitones, the new note minus the
         old one times the correction amount (exact while the correction is instantaneous). */
-    void backdateSwitch (int hops, float shift) noexcept
+    /** Returns the content time of the oldest record moved (the output plays the new note from there),
+        or +infinity when none was. */
+    double backdateSwitch (int hops, float shift) noexcept
     {
+        double from = std::numeric_limits<double>::infinity();
         for (int b = 1; b <= hops && b < recCount; ++b)
         {
             Rec& r = recs[(size_t) ((recWrite - 1 - b + kRecRing) % kRecRing)];
             if (r.time <= lastGrainSrc)
                 break;                               // a placed grain already used this record
             if (r.voiced)
+            {
                 r.outMidi += shift;
+                from = r.time;
+            }
         }
+        return from;
     }
 
     //---------------------------------------------------------------- history
@@ -950,7 +1179,7 @@ private:
         out.s = sNext;
         out.src = std::min (cNext + (std::abs (offset) < 0.5 ? 0.0 : offset), (double) nIn - hIn - 3.0);
         out.hIn = hIn;
-        out.hOut = hIn / phi;
+        out.hOut = params.protectConsonants ? hIn : hIn / phi;      // 1.5: consonants keep their spectrum if asked
         out.spacing = out.hOut;
         out.gain = 1.0f;
         return true;
@@ -1035,7 +1264,7 @@ private:
     /** extra time-aligned unvoiced grains for a running crossfade */
     void placeTailGrains (int64_t t) noexcept
     {
-        const double phi = std::pow (2.0, params.formant / 12.0);
+        const double phi = params.protectConsonants ? 1.0 : std::pow (2.0, params.formant / 12.0);
         const double hU = unvoicedHop / phi;
         while (tailActive && tailNext - hU <= (double) t)
         {

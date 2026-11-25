@@ -115,6 +115,7 @@ private:
     void setCustomScale (bool on);
     void askPresetName();
     void showHostMenu (juce::RangedAudioParameter& p);
+    void showCustomTuningDialog();          // 1.5 (roadmap 45): the 12 custom cents
     void importPreset();
     void importAuthorization();
     void removeAuthorization();
@@ -134,12 +135,14 @@ private:
     vui::RobotKnob robot;
     juce::SliderParameterAttachment robotAttachment;
     vui::InfoButton infoButton;
+    vui::AutoPill autoPill;                 // 1.6 Auto Character (left of the ROBOTISM title)
     vui::MiniKnob vibratoKnob, formantKnob, transposeKnob, mixKnob;
     vui::FooterToggle autotuneToggle, realtimeToggle, adaptiveToggle;
     vui::IconButton waveButton;
     juce::TooltipWindow tooltips { this, 650 };
 
     bool lastActive = true;
+    void updateAutoCharacter();             // 1.6: managed controls follow ROBOTISM while Auto Character is on
     int lastKeyShown = -1;
     bool lastCustom = false;
     // The custom scale call-out and its content are owned here and deleted with the editor.

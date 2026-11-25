@@ -610,10 +610,424 @@ int main (int argc, char* argv[])
         // the 1.0 parameters keep their place: the first 13 are the 1.0 list, new ones follow
         const char* order10[] = { "key", "scale", "correction", "retune", "humanize", "robotism", "vibscale", "formant",
                                   "transpose", "mix", "bypass", "realtime", "range" };
-        bool sameOrder = a.getParameters().size() == 13 + 14;
+        // 1.1 appended the custom scale, its 12 notes and Adaptive (14); 1.5 appends the A4 reference, consonant
+        // protection, Formant follows Transpose, Note Transition and the 12 note-bypass flags, in that order
+        bool sameOrder = a.getParameters().size() == 13 + 54;
         for (int i = 0; i < 13 && sameOrder; ++i)
             sameOrder = dynamic_cast<juce::RangedAudioParameter*> (a.getParameters()[i])->paramID == order10[i];
-        CHECK (sameOrder, "1.0 parameter IDs and order unchanged, 14 new ones appended (%d in all)", a.getParameters().size());
+        const char* order15[] = { "tuningref", "protectcons", "formantfollow", "transition" };
+        std::vector<juce::RangedAudioParameter*> added15;
+        for (int i = 0; i < 4 && sameOrder; ++i)
+        {
+            added15.push_back (dynamic_cast<juce::RangedAudioParameter*> (a.getParameters()[27 + i]));
+            sameOrder = added15.back() != nullptr && added15.back()->paramID == order15[i];
+        }
+        for (int i = 0; i < 12 && sameOrder; ++i)
+        {
+            added15.push_back (dynamic_cast<juce::RangedAudioParameter*> (a.getParameters()[31 + i]));
+            sameOrder = added15.back() != nullptr && added15.back()->paramID == vstm::ids::scaleBypass (i);
+        }
+        const char* order15b[] = { "tolerance", "confidence", "synthvib", "octave", "miditarget", "midiout", "midioctave", "tuningsys" };
+        for (int i = 0; i < 8 && sameOrder; ++i)
+        {
+            added15.push_back (dynamic_cast<juce::RangedAudioParameter*> (a.getParameters()[43 + i]));
+            sameOrder = added15.back() != nullptr && added15.back()->paramID == order15b[i];
+        }
+        for (int i = 0; i < 12 && sameOrder; ++i)
+        {
+            added15.push_back (dynamic_cast<juce::RangedAudioParameter*> (a.getParameters()[51 + i]));
+            sameOrder = added15.back() != nullptr && added15.back()->paramID == vstm::ids::tuneCents (i);
+        }
+        const char* order15c[] = { "scaletranspose", "attack", "release" };
+        for (int i = 0; i < 3 && sameOrder; ++i)
+        {
+            added15.push_back (dynamic_cast<juce::RangedAudioParameter*> (a.getParameters()[63 + i]));
+            sameOrder = added15.back() != nullptr && added15.back()->paramID == order15c[i];
+        }
+        // 1.6: Auto Character, last, off, automatable (host automation is part of its spec)
+        auto* autoChar16 = sameOrder ? dynamic_cast<juce::RangedAudioParameter*> (a.getParameters()[66]) : nullptr;
+        sameOrder = sameOrder && autoChar16 != nullptr && autoChar16->paramID == "autochar" && autoChar16->getValue() < 0.5f
+                 && autoChar16->isAutomatable();
+        sameOrder = sameOrder && a.getParameters().size() == 13 + 54;
+        CHECK (sameOrder, "1.0 parameter IDs and order unchanged, 54 new ones appended, the 1.5 ones last (%d in all)",
+               a.getParameters().size());
+        bool defaults15 = sameOrder && std::abs (added15[0]->convertFrom0to1 (added15[0]->getValue()) - 440.0f) < 0.01f
+                       && added15[1]->getValue() < 0.5f && added15[2]->getValue() < 0.5f && added15[3]->getValue() < 0.01f;
+        for (size_t i = 4; i < 16 && i < added15.size(); ++i)
+            defaults15 = defaults15 && added15[i]->getValue() < 0.5f;      // no note bypassed
+        defaults15 = defaults15 && added15.size() == 39 && added15[16]->getValue() < 0.01f && added15[17]->getValue() < 0.01f
+                  && added15[18]->getValue() < 0.01f && std::abs (added15[19]->getValue() - 0.5f) < 0.01f   // off, off, off, octave 0
+                  && added15[20]->getValue() < 0.5f && added15[21]->getValue() < 0.5f && added15[22]->getValue() < 0.5f  // MIDI target / out / octave off
+                  && added15[23]->getValue() < 0.01f;                                                            // tuning: equal
+        for (size_t i = 24; i < 36 && i < added15.size(); ++i)
+            defaults15 = defaults15 && std::abs (added15[i]->convertFrom0to1 (added15[i]->getValue())) < 1.0e-6f; // custom cents 0
+        defaults15 = defaults15 && added15.size() == 39 && added15[36]->getCurrentValueAsText() == "0"           // scale transpose 0
+                  && added15[37]->getValue() < 0.01f && added15[38]->getValue() < 0.01f;                         // attack Auto, release Off
+        for (auto* p15 : added15)
+            defaults15 = defaults15 && ! p15->isAutomatable();
+        CHECK (defaults15, "1.5 settings by default: A4 %s, consonant protection off, formant follows transpose off, note transition %s, no note bypassed, tolerance / confidence / synthetic vibrato off, octave %s, MIDI target, MIDI out and octave as played off, equal tuning (custom cents 0), scale transpose 0, attack Auto, release Off; none automatable",
+               sameOrder ? added15[0]->getCurrentValueAsText().toRawUTF8() : "-", sameOrder ? added15[3]->getCurrentValueAsText().toRawUTF8() : "-",
+               sameOrder && added15.size() == 39 ? added15[19]->getCurrentValueAsText().toRawUTF8() : "-");
+
+        // 1.5 (roadmap 88): a 64-bit host gets exactly what the 32-bit path gives
+        {
+            VSTMTuneProcessor pf, pd;
+            for (auto* q : { &pf, &pd })
+            {
+                q->setRateAndBufferSizeDetails (48000.0, 512);
+                q->prepareToPlay (48000.0, 512);
+            }
+            juce::AudioBuffer<float> bf (2, 512 * 8);
+            juce::AudioBuffer<double> bd (2, 512 * 8);
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < bf.getNumSamples(); ++i)
+                {
+                    const float v = 0.3f * std::sin (2.0f * juce::MathConstants<float>::pi * 220.0f * (float) i / 48000.0f + (float) ch);
+                    bf.setSample (ch, i, v);
+                    bd.setSample (ch, i, (double) v);
+                }
+            juce::MidiBuffer none;
+            bool same = true;
+            for (int blk = 0; blk < 8; ++blk)
+            {
+                juce::AudioBuffer<float> f (bf.getArrayOfWritePointers(), 2, blk * 512, 512);
+                juce::AudioBuffer<double> d (bd.getArrayOfWritePointers(), 2, blk * 512, 512);
+                pf.processBlock (f, none);
+                pd.processBlock (d, none);
+            }
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < bf.getNumSamples(); ++i)
+                    same = same && std::abs ((double) bf.getSample (ch, i) - bd.getSample (ch, i)) < 1.0e-12;   // exact for float values
+            CHECK (pd.supportsDoublePrecisionProcessing() && same, "64-bit processing: the double path gives exactly the 32-bit output (%d samples)",
+                   bf.getNumSamples() * 2);
+        }
+
+        // 1.5 (roadmap 42 / 46 / 52 / 33): MIDI target notes. A3 +35 ct with C4 held goes to C (any octave: C4);
+        // with the mode off the same MIDI is ignored (A3); 1.5 MIDI perform (roadmap 49): with "octave as
+        // played", C5 held takes it to C5
+        {
+            auto run = [] (bool mode, bool asPlayed = false)
+            {
+                VSTMTuneProcessor q;
+                q.setRateAndBufferSizeDetails (kFs, 512);
+                q.prepareToPlay (kFs, 512);
+                setParam (q, vstm::ids::scale, (float) vstm::kChromatic);
+                setParam (q, vstm::ids::retune, 0.0f);
+                setParam (q, vstm::ids::midiTarget, mode ? 1.0f : 0.0f);
+                setParam (q, vstm::ids::midiOctave, asPlayed ? 1.0f : 0.0f);
+                Voice v;
+                v.notes = { 57.35 };
+                v.noteLen = 100.0;
+                juce::AudioBuffer<float> buf (2, 512);
+                std::vector<float> out;
+                for (int pos = 0; pos < (int) (1.5 * kFs); pos += 512)
+                {
+                    juce::MidiBuffer m;
+                    if (pos == 0)
+                        m.addEvent (juce::MidiMessage::noteOn (1, asPlayed ? 72 : 60, (juce::uint8) 100), 64);
+                    for (int i = 0; i < 512; ++i)
+                    {
+                        const float s = v.next();
+                        buf.setSample (0, i, s);
+                        buf.setSample (1, i, s);
+                    }
+                    q.processBlock (buf, m);
+                    for (int i = 0; i < 512; ++i)
+                        out.push_back (buf.getSample (0, i));
+                }
+                return measureHz (out, (int) (kFs * 1.1), (int) (kFs * 0.2), asPlayed ? 523.25 : (mode ? 261.63 : 220.0));
+            };
+            const double withMidi = run (true), ignored = run (false), played = run (true, true);
+            CHECK (std::abs (1200.0 * std::log2 (withMidi / 261.626)) < 6.0 && std::abs (1200.0 * std::log2 (ignored / 220.0)) < 6.0
+                   && std::abs (1200.0 * std::log2 (played / 523.251)) < 6.0,
+                   "MIDI target notes: A3 +35 ct with C4 held goes to %.2f Hz (C4); with the mode off the MIDI is ignored (%.2f Hz); octave as played, C5 held: %.2f Hz",
+                   withMidi, ignored, played);
+        }
+
+        // 1.5 (roadmap 49 / 53): notes as MIDI. A3 for 1 s then silence: one note-on (57) where the output plays it
+        // and one note-off after the voice; the incoming MIDI (a C4 note-on) is not passed through. Off, or
+        // bypassed: no MIDI at all. Switched off while a note sounds: its note-off at the start of that block.
+        {
+            struct Ev { int64_t at; bool on; int note; };
+            auto run = [] (bool send, bool bypassed, int switchOffBlock)
+            {
+                VSTMTuneProcessor q;
+                q.setRateAndBufferSizeDetails (kFs, 512);
+                q.prepareToPlay (kFs, 512);
+                setParam (q, vstm::ids::scale, (float) vstm::kChromatic);
+                setParam (q, vstm::ids::retune, 0.0f);
+                setParam (q, vstm::ids::midiOut, send ? 1.0f : 0.0f);
+                setParam (q, vstm::ids::bypass, bypassed ? 1.0f : 0.0f);
+                Voice v;
+                v.notes = { 57.0 };
+                v.noteLen = 100.0;
+                juce::AudioBuffer<float> buf (2, 512);
+                std::vector<Ev> evs;
+                int blk = 0;
+                for (int pos = 0; pos < (int) (1.6 * kFs); pos += 512, ++blk)
+                {
+                    if (blk == switchOffBlock)
+                        setParam (q, vstm::ids::midiOut, 0.0f);
+                    juce::MidiBuffer m;
+                    if (pos == 0)
+                        m.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 10);
+                    for (int i = 0; i < 512; ++i)
+                    {
+                        const float s = pos + i < (int) kFs ? v.next() : 0.0f;
+                        buf.setSample (0, i, s);
+                        buf.setSample (1, i, s);
+                    }
+                    q.processBlock (buf, m);
+                    for (const auto meta : m)
+                    {
+                        const auto msg = meta.getMessage();
+                        evs.push_back ({ pos + meta.samplePosition, msg.isNoteOn(), msg.getNoteNumber() });
+                    }
+                }
+                return std::make_pair (evs, q.getLatencySamples());
+            };
+            const auto [evOn, lat] = run (true, false, -1);
+            const auto evOff = run (false, false, -1).first, evByp = run (true, true, -1).first;
+            const auto evSwitch = run (true, false, 40).first;           // block 40 = 0.43 s, the voice still sounding
+            const bool onRight = evOn.size() == 2 && evOn[0].on && evOn[0].note == 57 && ! evOn[1].on && evOn[1].note == 57
+                              && std::abs ((double) evOn[0].at - lat) < 0.08 * kFs          // the voice starts at 0
+                              && std::abs ((double) evOn[1].at - (kFs + lat)) < 0.04 * kFs; // ... and ends at 1 s
+            const bool switchRight = evSwitch.size() == 2 && evSwitch[0].on && ! evSwitch[1].on && evSwitch[1].at == 40 * 512;
+            CHECK (onRight && evOff.empty() && evByp.empty() && switchRight,
+                   "notes as MIDI: note-on 57 at %.1f ms, note-off at %.1f ms (latency %.1f ms, voice 0 - 1000 ms), input MIDI not passed through; off / bypassed: %d / %d events; switched off mid-note: note-off at the block start (%s)",
+                   evOn.size() == 2 ? 1000.0 * (double) evOn[0].at / kFs : -1.0, evOn.size() == 2 ? 1000.0 * (double) evOn[1].at / kFs : -1.0,
+                   1000.0 * lat / kFs, (int) evOff.size(), (int) evByp.size(), switchRight ? "yes" : "no");
+        }
+
+        // 1.5 (roadmap 47 / 48): MIDI Learn. RETUNE learns CC 21 from the next controller (any channel); CC 21
+        // then moves it, other CCs do not; one CC per parameter; the assignments come back with the session,
+        // an older session (none saved) clears them, damaged entries are skipped; forget / clear.
+        {
+            VSTMTuneProcessor q;
+            q.setRateAndBufferSizeDetails (kFs, 512);
+            q.prepareToPlay (kFs, 512);
+            auto* retuneP = q.apvts.getParameter (vstm::ids::retune);
+            auto* mixP = q.apvts.getParameter (vstm::ids::mix);
+            juce::AudioBuffer<float> buf (2, 512);
+            auto block = [&] (std::initializer_list<juce::MidiMessage> msgs)
+            {
+                buf.clear();
+                juce::MidiBuffer m;
+                int pos = 0;
+                for (const auto& msg : msgs)
+                    m.addEvent (msg, pos++);
+                q.processBlock (buf, m);
+            };
+            q.midiLearn.startLearning (*retuneP);
+            block ({ juce::MidiMessage::controllerEvent (3, 21, 64) });
+            const bool learnt = q.midiLearn.ccFor (*retuneP) == 21 && std::abs (retuneP->getValue() - retuneP->convertTo0to1 (retuneP->convertFrom0to1 (64.0f / 127.0f))) < 1e-6f   // snapped to the step
+                             && ! q.midiLearn.isLearningAny();
+            const float mixBefore = mixP->getValue();
+            block ({ juce::MidiMessage::controllerEvent (1, 21, 127), juce::MidiMessage::controllerEvent (1, 22, 0) });
+            const bool moves = std::abs (retuneP->getValue() - 1.0f) < 1e-6f && std::abs (mixP->getValue() - mixBefore) < 1e-6f;
+            q.midiLearn.startLearning (*retuneP);
+            block ({ juce::MidiMessage::controllerEvent (1, 30, 10) });
+            const bool single = q.midiLearn.ccFor (*retuneP) == 30 && q.midiLearn.numAssigned() == 1;
+            q.midiLearn.startLearning (*mixP);
+            block ({ juce::MidiMessage::controllerEvent (1, 7, 100) });
+            juce::MemoryBlock st;
+            q.getStateInformation (st);
+            VSTMTuneProcessor r;
+            r.setStateInformation (st.getData(), (int) st.getSize());
+            const bool restored = r.midiLearn.ccFor (*r.apvts.getParameter (vstm::ids::retune)) == 30
+                               && r.midiLearn.ccFor (*r.apvts.getParameter (vstm::ids::mix)) == 7 && r.midiLearn.numAssigned() == 2;
+            bool cleared = false;
+            if (auto xml = juce::AudioProcessor::getXmlFromBinary (st.getData(), (int) st.getSize()))
+            {
+                xml->removeAttribute ("midiCC");                    // what a 1.4 session looks like
+                juce::MemoryBlock old;
+                juce::AudioProcessor::copyXmlToBinary (*xml, old);
+                r.setStateInformation (old.getData(), (int) old.getSize());
+                cleared = r.midiLearn.numAssigned() == 0;
+            }
+            r.midiLearn.fromString ("x=retune,999=mix,5=nosuch,6=realtime,8=formant,9=formant,8=mix");
+            const bool damaged = r.midiLearn.numAssigned() == 1 && r.midiLearn.ccFor (*r.apvts.getParameter (vstm::ids::formant)) == 8;
+            q.midiLearn.forget (*retuneP);
+            const bool forgot = q.midiLearn.ccFor (*retuneP) < 0 && q.midiLearn.numAssigned() == 1;
+            q.midiLearn.clear();
+            CHECK (learnt && moves && single && restored && cleared && damaged && forgot && q.midiLearn.numAssigned() == 0,
+                   "MIDI Learn: learn %s, CC moves only its parameter %s, one CC per parameter %s, session round trip %s, older session clears %s, damaged entries skipped %s, forget / clear %s",
+                   learnt ? "yes" : "NO", moves ? "yes" : "NO", single ? "yes" : "NO", restored ? "yes" : "NO", cleared ? "yes" : "NO",
+                   damaged ? "yes" : "NO", forgot ? "yes" : "NO");
+        }
+
+        // 1.5 (roadmap 45): tuning systems. Key C, major, E3 sung 10 ct sharp: just -> 13.7 ct flat (5/4),
+        // Pythagorean -> 7.8 ct sharp (81/64), custom E -30 ct; equal -> on the grid
+        {
+            auto tunedE = [] (int system, float customE)
+            {
+                VSTMTuneProcessor q;
+                q.setRateAndBufferSizeDetails (kFs, 512);
+                q.prepareToPlay (kFs, 512);
+                setParam (q, vstm::ids::key, 0.0f);
+                setParam (q, vstm::ids::scale, (float) vstm::kMajor);
+                setParam (q, vstm::ids::retune, 0.0f);
+                setParam (q, vstm::ids::tuningSys, (float) system);
+                setParam (q, vstm::ids::tuneCents (4), customE);
+                Voice v;
+                v.notes = { 52.10 };
+                v.noteLen = 100.0;
+                juce::AudioBuffer<float> buf (2, 512);
+                std::vector<float> out;
+                for (int pos = 0; pos < (int) (1.2 * kFs); pos += 512)
+                {
+                    for (int i = 0; i < 512; ++i)
+                    {
+                        const float s = v.next();
+                        buf.setSample (0, i, s);
+                        buf.setSample (1, i, s);
+                    }
+                    juce::MidiBuffer none;
+                    q.processBlock (buf, none);
+                    for (int i = 0; i < 512; ++i)
+                        out.push_back (buf.getSample (0, i));
+                }
+                const double hz = measureHz (out, (int) (kFs * 0.9), (int) (kFs * 0.2), 164.81);
+                return 1200.0 * std::log2 (hz / 164.814);          // cents from equal-tempered E3
+            };
+            using namespace vstm::params;
+            const double eq = tunedE (kEqualTuning, 0.0f), just = tunedE (kJustTuning, 0.0f), py = tunedE (kPythagoreanTuning, 0.0f),
+                         custom = tunedE (kCustomTuning, -30.0f);
+            CHECK (std::abs (eq) < 2.0 && std::abs (just + 13.69) < 2.0 && std::abs (py - 7.82) < 2.0 && std::abs (custom + 30.0) < 2.0,
+                   "tuning systems: E in C major from E +10 ct: equal %+.1f ct, just %+.1f (5/4: -13.7), Pythagorean %+.1f (81/64: +7.8), custom -30: %+.1f",
+                   eq, just, py, custom);
+        }
+
+        // 1.6 Auto Character: ROBOTISM drives Retune Speed, Humanize and Vibrato Scale while it is on
+        {
+            using vstm::params::characterFor;
+            // the curves: the factory defaults at 50 %, monotonic and continuous over the whole range
+            const auto at50 = characterFor (50.0f);
+            bool curves = std::abs (at50.retuneMs - 15.0f) < 1.0e-5f && std::abs (at50.humanizePct - 35.0f) < 1.0e-5f
+                       && std::abs (at50.vibratoPct - 100.0f) < 1.0e-5f;
+            float maxStep = 0.0f;
+            auto prev = characterFor (0.0f);
+            for (float r = 0.5f; r <= 100.0f; r += 0.5f)
+            {
+                const auto v = characterFor (r);
+                curves = curves && v.retuneMs >= prev.retuneMs - 1.0e-5f && v.humanizePct >= prev.humanizePct - 1.0e-5f
+                      && v.vibratoPct >= prev.vibratoPct - 1.0e-5f;
+                maxStep = std::max ({ maxStep, v.retuneMs - prev.retuneMs, v.humanizePct - prev.humanizePct, v.vibratoPct - prev.vibratoPct });
+                prev = v;
+            }
+            curves = curves && maxStep < 1.0f && characterFor (0.0f).retuneMs < 1.0e-6f;
+
+            auto render = [] (VSTMTuneProcessor& q, double seconds, const std::function<void (int)>& beforeBlock = {})
+            {
+                Voice v;
+                v.notes = { 57.0, 60.0, 62.0, 59.0 };
+                v.noteLen = 0.4;
+                v.vibrato = 0.3;
+                juce::AudioBuffer<float> buf (2, 512);
+                std::vector<float> out;
+                int blk = 0;
+                for (int pos = 0; pos < (int) (seconds * kFs); pos += 512, ++blk)
+                {
+                    if (beforeBlock) beforeBlock (blk);
+                    for (int i = 0; i < 512; ++i)
+                    {
+                        const float s = v.next();
+                        buf.setSample (0, i, s);
+                        buf.setSample (1, i, s);
+                    }
+                    juce::MidiBuffer none;
+                    q.processBlock (buf, none);
+                    for (int i = 0; i < 512; ++i)
+                        out.push_back (buf.getSample (0, i));
+                }
+                return out;
+            };
+            auto fresh = [] (std::unique_ptr<VSTMTuneProcessor>& q, double rate = kFs)
+            {
+                q = std::make_unique<VSTMTuneProcessor>();
+                q->setRateAndBufferSizeDetails (rate, 512);
+                q->prepareToPlay (rate, 512);
+            };
+            std::unique_ptr<VSTMTuneProcessor> q1, q2;
+            // switching it on at the default setting changes nothing (bit for bit)
+            fresh (q1); fresh (q2);
+            setParam (*q2, vstm::ids::autoCharacter, 1.0f);
+            const bool sameAtDefault = render (*q1, 1.0) == render (*q2, 1.0);
+            // off: ROBOTISM leaves the other controls alone
+            fresh (q1);
+            const float rt0 = q1->apvts.getParameter (vstm::ids::retune)->getValue(), hu0 = q1->apvts.getParameter (vstm::ids::humanize)->getValue(),
+                        vi0 = q1->apvts.getParameter (vstm::ids::vibrato)->getValue();
+            setParam (*q1, vstm::ids::robotism, 20.0f);
+            const bool offIndependent = std::abs (q1->apvts.getParameter (vstm::ids::retune)->getValue() - rt0) < 1.0e-7f
+                                     && std::abs (q1->apvts.getParameter (vstm::ids::humanize)->getValue() - hu0) < 1.0e-7f
+                                     && std::abs (q1->apvts.getParameter (vstm::ids::vibrato)->getValue() - vi0) < 1.0e-7f;
+            // auto -> manual (as host automation does it, between two blocks): the sound goes on bit for bit, and the
+            // manual controls now hold the auto values
+            fresh (q1); fresh (q2);
+            for (auto* q : { q1.get(), q2.get() })
+            {
+                setParam (*q, vstm::ids::robotism, 20.0f);
+                setParam (*q, vstm::ids::retune, 80.0f);           // manual values far from the auto ones
+                setParam (*q, vstm::ids::humanize, 5.0f);
+                setParam (*q, vstm::ids::autoCharacter, 1.0f);
+            }
+            const auto stayAuto = render (*q1, 2.0);
+            const auto handOff = render (*q2, 2.0, [&q2] (int blk) { if (blk == 94) setParam (*q2, vstm::ids::autoCharacter, 0.0f); });
+            const auto c20 = characterFor (20.0f);
+            auto plainOf = [] (VSTMTuneProcessor& q, const juce::String& id) { auto* prm = q.apvts.getParameter (id); return prm->convertFrom0to1 (prm->getValue()); };
+            const bool handedOver = stayAuto == handOff && std::abs (plainOf (*q2, vstm::ids::retune) - c20.retuneMs) < 0.06f
+                                 && std::abs (plainOf (*q2, vstm::ids::humanize) - c20.humanizePct) < 0.06f
+                                 && std::abs (plainOf (*q2, vstm::ids::vibrato) - c20.vibratoPct) < 0.06f;
+            // manual -> auto: the manual values do not matter (different ones, same output)
+            fresh (q1); fresh (q2);
+            setParam (*q2, vstm::ids::retune, 120.0f);
+            setParam (*q2, vstm::ids::humanize, 90.0f);
+            setParam (*q2, vstm::ids::vibrato, 150.0f);
+            for (auto* q : { q1.get(), q2.get() })
+            {
+                setParam (*q, vstm::ids::robotism, 30.0f);
+                setParam (*q, vstm::ids::autoCharacter, 1.0f);
+            }
+            const bool deterministic = render (*q1, 1.0) == render (*q2, 1.0);
+            // a restored session / a loaded preset sets every value itself: no hand-over then
+            fresh (q1);
+            setParam (*q1, vstm::ids::retune, 80.0f);
+            setParam (*q1, vstm::ids::robotism, 20.0f);         // Auto Character off, manual retune 80 ms
+            juce::MemoryBlock manualState;
+            q1->getStateInformation (manualState);
+            setParam (*q1, vstm::ids::autoCharacter, 1.0f);
+            juce::MemoryBlock autoState;
+            q1->getStateInformation (autoState);
+            q1->setStateInformation (manualState.getData(), (int) manualState.getSize());
+            const bool restoreKeeps = std::abs (plainOf (*q1, vstm::ids::retune) - 80.0f) < 0.06f
+                                   && q1->apvts.getParameter (vstm::ids::autoCharacter)->getValue() < 0.5f;
+            fresh (q2);
+            q2->setStateInformation (autoState.getData(), (int) autoState.getSize());
+            const bool autoRestored = q2->apvts.getParameter (vstm::ids::autoCharacter)->getValue() > 0.5f
+                                   && std::abs (plainOf (*q2, vstm::ids::retune) - 80.0f) < 0.06f;   // its manual value waits
+            // a factory preset (no Auto Character in it: off) gives the same values with Auto Character on before
+            std::unique_ptr<VSTMTuneProcessor> q3;
+            fresh (q3);
+            q3->presets.loadPreset (1);
+            q2->presets.loadPreset (1);
+            bool presetKeeps = q2->apvts.getParameter (vstm::ids::autoCharacter)->getValue() < 0.5f;
+            for (const auto* id : { &vstm::ids::retune, &vstm::ids::humanize, &vstm::ids::vibrato, &vstm::ids::robotism })
+                presetKeeps = presetKeeps && std::abs (plainOf (*q2, *id) - plainOf (*q3, *id)) < 1.0e-5f;
+            // 96 / 192 kHz: on, robotic side, finite and in range
+            bool highRates = true;
+            for (const double rate : { 96000.0, 192000.0 })
+            {
+                fresh (q1, rate);
+                setParam (*q1, vstm::ids::robotism, 20.0f);
+                setParam (*q1, vstm::ids::autoCharacter, 1.0f);
+                for (float s : render (*q1, 0.5))
+                    highRates = highRates && std::isfinite (s) && std::abs (s) < 4.0f;
+            }
+            CHECK (curves && sameAtDefault && offIndependent && handedOver && deterministic && restoreKeeps && autoRestored && presetKeeps && highRates,
+                   "Auto Character: curves (defaults at 50 %%, monotonic, largest step %.2f per 0.5 %%) %s, on at default = off bit for bit %s, off: ROBOTISM leaves the others %s, auto -> manual bit for bit + values handed over %s, manual values ignored when on %s, session restore keeps manual values %s / restores Auto %s, preset load no hand-over %s, 96 / 192 kHz %s",
+                   maxStep, curves ? "yes" : "NO", sameAtDefault ? "yes" : "NO", offIndependent ? "yes" : "NO", handedOver ? "yes" : "NO",
+                   deterministic ? "yes" : "NO", restoreKeeps ? "yes" : "NO", autoRestored ? "yes" : "NO", presetKeeps ? "yes" : "NO", highRates ? "yes" : "NO");
+        }
 
         // session round trip
         setParam (a, vstm::ids::customScale, 1.0f);
@@ -1410,7 +1824,16 @@ int main (int argc, char* argv[])
             pump (80);
             savePng (*ed, shotDir.getChildFile ("05_insansi.png"), 1.0f);
             ed->getRobotKnob().showReadout = false;
+            // 1.6 Auto Character on, ROBOTISM 25 %: RETUNE / HUMANIZE / SCALE marked AUTO, showing the values it sets
+            setParam (p, vstm::ids::robotism, 25.0f);
+            setParam (p, vstm::ids::autoCharacter, 1.0f);
+            pump (80);
+            savePng (*ed, shotDir.getChildFile ("05b_auto_character.png"), 1.0f);
+            setParam (p, vstm::ids::autoCharacter, 0.0f);
             setParam (p, vstm::ids::robotism, 50.0f);
+            setParam (p, vstm::ids::retune, 15.0f);
+            setParam (p, vstm::ids::humanize, 35.0f);
+            setParam (p, vstm::ids::vibrato, 100.0f);
 
             setParam (p, vstm::ids::bypass, 1.0f);
             pump (150);
@@ -1424,6 +1847,7 @@ int main (int argc, char* argv[])
             ed->showCustomScaleEditor();
             setParam (p, vstm::ids::scaleNote (2), 0.0f);
             setParam (p, vstm::ids::scaleNote (8), 0.0f);
+            setParam (p, vstm::ids::scaleBypass (10), 1.0f);     // 1.5: one bypassed note (b7) in the editor shot
             pump (250);
             savePng (*ed, shotDir.getChildFile ("08_custom_scale.png"), 1.0f);
             {

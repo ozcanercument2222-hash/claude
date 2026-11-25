@@ -32,12 +32,17 @@ PresetManager::PresetManager (juce::AudioProcessorValueTreeState& state) : apvts
 
 bool PresetManager::isPresetParameter (const juce::String& id)
 {
-    return id != ids::bypass && id != ids::realtime && id != ids::range;
+    // setup choices that belong to the session, not to a sound (1.5: the A4 reference too)
+    return id != ids::bypass && id != ids::realtime && id != ids::range && id != ids::tuningRef && id != ids::midiTarget
+        && id != ids::midiOut
+        && id != ids::midiOctave;
 }
 
 bool PresetManager::isTonalParameter (const juce::String& id)
 {
-    return id == ids::key || id == ids::scale || id == ids::customScale || id.startsWith ("scalenote");
+    return id == ids::key || id == ids::scale || id == ids::customScale || id.startsWith ("scalenote")
+        || id.startsWith ("scalebypass")                     // 1.5: note bypass is part of the scale
+        || id == ids::tuningSys || id.startsWith ("tunecents"); // 1.5: so is the tuning system
 }
 
 juce::String PresetManager::getFactoryCategory (int index) const
@@ -106,6 +111,7 @@ int PresetManager::getCurrentIndex() const
 
 void PresetManager::applyValues (const std::vector<Entry>& values, bool includeTonal)
 {
+    struct Applying { std::atomic<bool>& a; explicit Applying (std::atomic<bool>& x) : a (x) { a = true; } ~Applying() { a = false; } } scope (applying);
     for (auto* p : apvts.processor.getParameters())
     {
         auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p);

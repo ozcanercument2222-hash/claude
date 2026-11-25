@@ -1,5 +1,54 @@
 # VSTM Tune – sürüm notları
 
+## 1.6.0 (aday, 25.11.2026) – Natural Auto Correction; yayımlanmadı, commit edilmedi
+
+**Dinleme yapılmadı, gerçek DAW'da denenmedi.** Ayrıntılar `docs/1.6.0/VSTM_Tune_1.6.0_Changelog.md`.
+
+- **Doğal perde merkezi:** vibrato yarım ses sınırını geçse de hedef nota değişmez.
+  - Uzun notada yanlış nota değişimi: doğal ayarda 6,9 → 1,8 /s, varsayılan ayarda 8,2 → 2,8 /s.
+  - Merkez hatası 12 → 7 ct (MEASURED, 145 gerçek kayıt).
+- **Hareket koruması:** vibrato sürerken yalnız merkez düzeltilir. Korunan vibrato 0,73 → 0,98 (doğal).
+- **Doğal geçişler:** insansı tarafta geçiş şarkıcıyı izler.
+  - Geçiş süresi / şarkıcınınki: 1,28 → 1,03.
+  - Oturma: 154 → 119 ms.
+- **Oktav koruması:** analiz adımında oktav sıçraması 40 ms beklenir; çıkıştaki oktav hataları 105 → 92 parça.
+- **Auto Character:** AÇIK / KAPALI; ROBOTISM, Retune / Humanize / Vibrato Scale'i yönetir. Kapatınca değerler devredilir.
+- **Davranış değişikliği:** varsayılan ses vibratolu kısımlarda değişti. İnsansı tarafta hızlı atlamalar artık uzatılmıyor.
+- **Hard tune** (Robotism %0): 1.5 ile bit bit aynı.
+- **Testler:** EngineTest 101/101, PluginTest hepsi, pluginval seviye 10 SUCCESS (Linux).
+- **Kör dinleme:** 1.5 ve 1.6 paketleri hazır (16 paket).
+
+## 1.5.0 (aday, 25.11.2026) – yayımlanmadı, commit edilmedi
+
+**Dinleme yapılmadı, gerçek DAW'da denenmedi.** Ayrıntılar `docs/1.5.0/VSTM_Tune_1.5.0_Changelog.md`; yol haritası durumu
+`docs/roadmap/`.
+
+**Yeni** (hepsi varsayılan olarak kapalı ya da "Auto"; varsayılan ses 1.4 ile bit bit aynı):
+
+- **Akort (A4):** 432–446 Hz.
+- **Nota geçişi:** Auto / 0–200 ms.
+- **Ünsüzleri formanttan koru.**
+- **Formant transpozu izlesin.**
+- **Note bypass:** özel dizide sağ tık.
+- **Tolerans, güven eşiği, sentetik vibrato, oktav kaydırma:** ⚙ → Gelişmiş.
+- **MIDI hedef notalar:** VST3 / Standalone.
+- **64 bit işleme.**
+
+**Düzeltilen:**
+
+- **Vibrato Scale:** %0 vibratoyu gerçekten siler; %200 tril yapmadan iki katına çıkarır.
+- **96 / 192 kHz:** perde doğruluğu 48 kHz'e eşit.
+- **Windows:** derleme hatası giderildi; CI'da henüz doğrulanmadı.
+- **Fail-safe:** motor içinde sayı dışı bir değer oluşursa kuru ses gider.
+
+**Uyumluluk:**
+
+- Eski parametre kimlikleri ve sırası aynı; 35 parametre en sona eklendi (toplam 48).
+- Otomasyonlu parametre sayısı aynı (25).
+- Eski oturumlar ve presetler yeni ayarlar kapalı / Auto / 440 Hz ile açılır.
+
+**Testler:** EngineTest 92/92, PluginTest 100/100, pluginval seviye 10 SUCCESS, sanitizer temiz (Linux).
+
 ## 1.4.0 (aday, 25.11.2026) – yayımlanmadı
 
 **Dinleme yapılmadı, DAW'da denenmedi, Windows / macOS derlemesi yapılmadı.** Ayrıntılar `docs/1.4.0/`:

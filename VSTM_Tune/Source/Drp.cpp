@@ -118,7 +118,8 @@ Error readFile (const juce::File& file, juce::MemoryBlock& out)
     if (in == nullptr || ! in->openedOk())
         return Error::cannotRead;
     out.reset();
-    in->readIntoMemoryBlock (out, (ssize_t) kMaxFileSize + 1);
+    // juce::pointer_sized_int, not ssize_t: MSVC has no ssize_t outside the juce namespace
+    in->readIntoMemoryBlock (out, (juce::pointer_sized_int) kMaxFileSize + 1);
     if (out.getSize() > (size_t) kMaxFileSize)
         return Error::tooLarge;
     return Error::none;

@@ -41,6 +41,13 @@ public:
         return param (vstm::ids::scaleNote (degree)).getValue() > 0.5f;
     }
 
+    /** 1.5 note bypass: a sung note nearest to this one passes through uncorrected (right-click). */
+    bool isBypassed (int pitchClass) const
+    {
+        const int degree = ((pitchClass - keyReference()) % 12 + 12) % 12;
+        return param (vstm::ids::scaleBypass (degree)).getValue() > 0.5f;
+    }
+
     void paint (juce::Graphics& g) override
     {
         using namespace juce;
@@ -56,10 +63,12 @@ public:
                 if (isBlack (pc) != (pass == 1))
                     continue;
                 const auto r = keyBounds (pc);
-                const bool on = isAllowed (pc);
+                const bool bypassed = isBypassed (pc);
+                const bool on = isAllowed (pc) && ! bypassed;
                 const bool over = hover == pc;
                 Colour fill = isBlack (pc) ? Colour (0xff25232c) : Colour (0xff3a3842);
                 if (on) fill = isBlack (pc) ? col::accent.darker (0.25f) : col::accent;
+                if (bypassed) fill = isBlack (pc) ? col::warn.darker (0.45f) : col::warn.darker (0.15f);
                 if (over) fill = fill.brighter (0.12f);
                 g.setColour (fill);
                 g.fillRoundedRectangle (r, 6.0f);
@@ -70,11 +79,23 @@ public:
                     g.setColour (Colours::white.withAlpha (0.9f));
                     g.drawRoundedRectangle (r.reduced (3.0f), 5.0f, 2.0f);
                 }
-                const auto tc = on ? Colours::white : col::dim;
+                const auto tc = bypassed ? Colour (0xff17161c) : (on ? Colours::white : col::dim);
                 const int degree = ((pc - keyRef) % 12 + 12) % 12;
                 drawText (g, vstm::noteName (pc), { r.getCentreX(), r.getBottom() - 34.0f }, font (15.0f, Weight::semibold), tc);
                 drawText (g, vstm::params::degreeName (degree), { r.getCentreX(), r.getBottom() - 15.0f }, font (12.5f), tc.withAlpha (0.8f));
             }
+
+        // legend: what the two colours mean (left of the copy button)
+        const float ly = (float) getHeight() - 30.0f;
+        auto swatch = [&g, ly] (float x, juce::Colour c) { g.setColour (c); g.fillRoundedRectangle (x, ly - 6.0f, 12.0f, 12.0f, 3.0f); };
+        const auto tuned = vstm::i18n::tr ("scale.tuned"), bypass = vstm::i18n::tr ("scale.bypass");
+        const auto f = font (12.5f);
+        swatch (24.0f, col::accent);
+        drawText (g, tuned, { 42.0f, ly }, f, col::dim, Justification::left);
+        const float bx = 42.0f + juce::GlyphArrangement::getStringWidth (f, tuned) + 18.0f;
+        swatch (bx, col::warn.darker (0.15f));
+        drawText (g, bypass, { bx + 18.0f, ly }, fitted (f, bypass, (float) getWidth() - 24.0f - 190.0f - 12.0f - (bx + 18.0f)), col::dim,
+                  Justification::left);
     }
 
     void resized() override
@@ -90,7 +111,8 @@ public:
         if (pc < 0)
             return;
         const int degree = ((pc - keyReference()) % 12 + 12) % 12;
-        auto& p = param (vstm::ids::scaleNote (degree));
+        // right-click (Ctrl-click on a Mac): note bypass; left click: the note is a target or not
+        auto& p = param (e.mods.isPopupMenu() ? vstm::ids::scaleBypass (degree) : vstm::ids::scaleNote (degree));
         p.beginChangeGesture();
         p.setValueNotifyingHost (p.getValue() > 0.5f ? 0.0f : 1.0f);
         p.endChangeGesture();
@@ -149,9 +171,12 @@ private:
 
     void timerCallback() override
     {
-        int sig = keyReference() * 4096;
+        int sig = keyReference() * (1 << 24);
         for (int i = 0; i < 12; ++i)
+        {
             if (param (vstm::ids::scaleNote (i)).getValue() > 0.5f) sig |= 1 << i;
+            if (param (vstm::ids::scaleBypass (i)).getValue() > 0.5f) sig |= 1 << (12 + i);
+        }
         if (sig != shown)
         {
             shown = sig;

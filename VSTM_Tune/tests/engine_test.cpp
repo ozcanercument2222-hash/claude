@@ -417,13 +417,16 @@ int main()
     const double sr = 48000.0;
     std::printf ("\n=== Robotism / humanize / key (48 kHz) ===\n");
 
-    // 6) robotism: note transition time, robotic vs human
+    // 6) robotism: note transition time, robotic vs human. 1.6 (P0, natural transitions): the human side follows
+    //    the singer's own transition (1.0 - 1.5 put a fixed S-curve of up to 110 ms on every change, also on a fast
+    //    jump). Robotik: a step whatever the singer does; Insansi: a fast jump stays fast (not stretched beyond 3x),
+    //    a 150 ms portamento is kept (0.75 - 1.3x the singer's 10-90 % time).
+    for (const double slideS : { 0.02, 0.15 })
     {
-        // singer jumps from A3 to C4 at t = 1.0 s (fast, 20 ms slide)
-        auto f0 = [] (double t)
+        auto f0 = [slideS] (double t)
         {
             const double a = 57.0, c = 60.0;
-            const double k = std::clamp ((t - 1.0) / 0.02, 0.0, 1.0);
+            const double k = std::clamp ((t - 1.0) / slideS, 0.0, 1.0);
             return midiToHz (a + (c - a) * k);
         };
         auto x = makeVoice (sr, 2.0, f0);
@@ -455,8 +458,73 @@ int main()
 
         const double robotMs = transitionMs (0.0f);
         const double humanMs = transitionMs (1.0f);
-        check (robotMs >= 0.0 && robotMs < 25.0, "Robotik: note change is a step (" + std::to_string (robotMs) + " ms)");
-        check (humanMs > 45.0, "Insansi: note change glides (" + std::to_string (humanMs) + " ms)");
+        const double sungMs = 0.8 * slideS * 1000.0;                    // the singer's own 10-90 % time
+        const std::string what = slideS < 0.05 ? "fast jump (20 ms)" : "portamento (150 ms)";
+        if (slideS < 0.05)          // (a slow portamento in C major steps A -> B -> C on the robotic side: a staircase)
+            check (robotMs >= 0.0 && robotMs < 25.0, "Robotik, " + what + ": note change is a step (" + std::to_string (robotMs) + " ms)");
+        if (slideS < 0.05)
+            check (humanMs >= 0.75 * sungMs && humanMs < 3.0 * sungMs,
+                   "Insansi, " + what + ": follows the singer (" + std::to_string (humanMs) + " ms, sung " + std::to_string (sungMs) + ")");
+        else
+            check (humanMs > 0.75 * sungMs && humanMs < 1.3 * sungMs,
+                   "Insansi, " + what + ": the singer's portamento is kept (" + std::to_string (humanMs) + " ms, sung " + std::to_string (sungMs) + ")");
+    }
+
+    // 6c) 1.6 (P0, natural pitch centre / motion): a sustained A3 sung 40 ct sharp with a 5.5 Hz +-60 ct vibrato, so the
+    //     vibrato reaches past the midpoint to A#3 on every cycle. Default ROBOTISM (50 %): the target stays on A3
+    //     (<= 1 switch per second after the first 0.5 s), the output's vibrato depth is kept (>= 85 %) and its centre is
+    //     on A3 (within 8 ct); hard tune (0 %) still follows every crossing (the warble of the robotic side stays).
+    {
+        auto f0 = [] (double t) { return midiToHz (57.4 + 0.6 * std::sin (2.0 * kPi * 5.5 * t) * std::min (1.0, t / 0.2)); };
+        auto x = makeVoice (sr, 3.0, f0);
+        auto runIt = [&] (float robotism, int& switches, double& depthRatio, double& centreCt)
+        {
+            TuneEngine e;
+            e.prepare (sr, true);
+            auto p = baseParams();
+            p.robotism = robotism;
+            p.retuneMs = robotism < 0.25f ? 0.0f : 15.0f;
+            p.humanize = robotism < 0.25f ? 0.0f : 0.35f;
+            e.setParams (p);
+            switches = 0;
+            int last = -2, hops = 0;
+            std::vector<double> outM, inM;
+            for (size_t pos = 0; pos < x.size(); pos += 256)
+            {
+                std::vector<float> blk (x.begin() + (long) pos, x.begin() + (long) std::min (x.size(), pos + 256));
+                float* ch[2] = { blk.data(), nullptr };
+                e.process (ch, 1, (int) blk.size());
+                TuneEngine::DisplayPoint d;
+                while (e.display.pop (d))
+                {
+                    if (++hops * e.getHopSeconds() < 0.5 || ! (d.flags & TuneEngine::kVoiced))
+                        continue;
+                    if (last != -2 && d.note != last) ++switches;
+                    last = d.note;
+                    outM.push_back (d.outMidi);
+                    inM.push_back (d.inMidi);
+                }
+            }
+            auto rmsAround = [] (const std::vector<double>& v)
+            {
+                double m = 0.0, s = 0.0;
+                for (double a : v) m += a;
+                m /= (double) v.size();
+                for (double a : v) s += (a - m) * (a - m);
+                return std::make_pair (m, std::sqrt (s / (double) v.size()));
+            };
+            const auto [mo, so] = rmsAround (outM);
+            const auto [mi, si] = rmsAround (inM);
+            depthRatio = so / si;
+            centreCt = 100.0 * (mo - 57.0);
+        };
+        int swDef = 0, swHard = 0;
+        double depthDef = 0.0, depthHard = 0.0, cDef = 0.0, cHard = 0.0;
+        runIt (0.5f, swDef, depthDef, cDef);
+        runIt (0.0f, swHard, depthHard, cHard);
+        check (swDef <= 3 && depthDef >= 0.85 && std::abs (cDef) < 8.0 && swHard >= 10,
+               "1.6 natural centre: vibrato past the midpoint, default: " + std::to_string (swDef) + " target switches in 2.5 s, vibrato depth kept "
+               + std::to_string (depthDef) + ", centre " + std::to_string (cDef) + " ct; hard tune: " + std::to_string (swHard) + " switches (warble kept)");
     }
 
     // 6b) no note chatter: a singer hovering right between E4 and F4 (64.5 +- 10 ct of
@@ -521,6 +589,478 @@ int main()
         const double human = vibDepth (1.0f, 60.0f);
         check (robot < 25.0, "Robotik flattens a +-50 ct vibrato to " + std::to_string (robot) + " ct p-p");
         check (human > 60.0, "Insansi keeps the vibrato: " + std::to_string (human) + " ct p-p");
+    }
+
+    // 7j) MIDI target notes (1.5, roadmap 42 / 46 / 52 / 33): the held MIDI pitch classes are the targets
+    {
+        auto tuned = [&] (uint16_t midiMask)
+        {
+            auto x = makeVoice (sr, 1.2, [] (double) { return midiToHz (57.4); });
+            TuneEngine e;
+            e.prepare (sr, false);
+            auto p = baseParams();
+            p.midiMask = midiMask;
+            e.setParams (p);
+            auto y = run (e, x, 256);
+            return hzToMidi (measureHz (y, sr, (int) (0.9 * sr) + e.getLatencySamples(), (int) (sr * 0.05), midiToHz (58.0)));
+        };
+        const double b = tuned ((uint16_t) (1u << 11)), none = tuned (0);
+        // MIDI perform (roadmap 49): the played note, octave as played (A4 and A2 for an A3 +40 ct voice)
+        auto perform = [&] (int midiNote, double expectHz)
+        {
+            auto x = makeVoice (sr, 1.2, [] (double) { return midiToHz (57.4); });
+            TuneEngine e;
+            e.prepare (sr, false);
+            auto p = baseParams();
+            p.midiNote = midiNote;
+            e.setParams (p);
+            auto y = run (e, x, 256);
+            return hzToMidi (measureHz (y, sr, (int) (0.9 * sr) + e.getLatencySamples(), (int) (sr * 0.05), expectHz));
+        };
+        // 1.5 tuning systems (roadmap 45): quarter-tone Rast on C (major, E and B 50 ct flat): E sung 40 ct flat goes to
+        // E half-flat (63.5), not to E or D#; a sung B half-flat stays there; D (untouched degree) stays on the grid
+        auto rast = [&] (double sungMidi)
+        {
+            auto x = makeVoice (sr, 1.2, [sungMidi] (double) { return midiToHz (sungMidi); });
+            TuneEngine e;
+            e.prepare (sr, false);
+            auto p = baseParams();
+            p.scale = kMajor;
+            p.degreeCents[4] = -50.0f;
+            p.degreeCents[11] = -50.0f;
+            e.setParams (p);
+            auto y = run (e, x, 256);
+            return hzToMidi (measureHz (y, sr, (int) (0.9 * sr) + e.getLatencySamples(), (int) (sr * 0.05), midiToHz (sungMidi)));
+        };
+        const double eHalfFlat = rast (63.6), bHalfFlat = rast (70.45), dNat = rast (62.2);
+        check (std::abs (eHalfFlat - 63.5) < 0.03 && std::abs (bHalfFlat - 70.5) < 0.03 && std::abs (dNat - 62.0) < 0.03,
+               "tuning (quarter-tone Rast on C): E -40 ct -> " + std::to_string (eHalfFlat) + " (63.5), B half-flat -> "
+               + std::to_string (bHalfFlat) + " (70.5), D +20 ct -> " + std::to_string (dNat) + " (62)");
+        const double up = perform (69, 440.0), down = perform (45, 110.0);
+        check (std::abs (up - 69.0) < 0.05 && std::abs (down - 45.0) < 0.05,
+               "MIDI perform: A3 +40 ct goes to the played note, octave as played: A4 -> " + std::to_string (up) + ", A2 -> " + std::to_string (down));
+        check (std::abs (b - 59.0) < 0.05 && std::abs (none - 57.0) < 0.05,
+               "MIDI target: A3 +40 ct with B held goes to " + std::to_string (b) + " (B3), without MIDI to " + std::to_string (none));
+    }
+
+    // 7k) notes as MIDI (1.5, roadmap 49 / 53): every note change is placed where the OUTPUT changes note
+    //     (measured on the output audio); one event per change, a note-off after the voice; the same events for
+    //     any block size. This jump (5 ms slide) makes the detector lose the voicing for ~13 ms: the new note
+    //     cannot be known before the voice is back, so REALTIME (~7 ms look-ahead) is late here by design
+    //     (limit 30 ms; on the 145 real recordings it is on time: midi_eval.py). HQ: within 10 ms. Never early.
+    for (bool rtMode : { true, false })
+    {
+        const std::vector<Note> line { { 57.0, 0.5 }, { 60.0, 0.5 }, { 64.0, 0.5 } };
+        auto x0 = makeVoice (sr, 1.5, melodyF0 (line, 0.005));
+        x0.resize (x0.size() + (size_t) (0.4 * sr), 0.0f);              // silence: the last note ends
+        auto render = [&] (std::vector<float>& x, int block)
+        {
+            TuneEngine e;
+            e.prepare (sr, rtMode);
+            e.setParams (baseParams());                                 // chromatic hard tune
+            std::vector<std::pair<int64_t, int>> evs;                   // (output sample, note)
+            for (size_t pos = 0; pos < x.size(); pos += (size_t) block)
+            {
+                const int n = (int) std::min ((size_t) block, x.size() - pos);
+                const int64_t start = e.getInputSampleCount();
+                float* ch[2] = { x.data() + pos, nullptr };
+                e.process (ch, 1, n);
+                e.takeNoteEvents (start, [&] (int at, int note) { evs.push_back ({ start + at, note }); });
+            }
+            return std::make_pair (evs, e.getLatencySamples());
+        };
+        auto x = x0, x97 = x0;
+        const auto [evs, latSamples] = render (x, 256);
+        const bool blockFree = render (x97, 97).first == evs;
+        // where the output crosses the midpoint between two notes (8 ms windows, 0.25 ms steps)
+        auto crossing = [&] (double fromMidi, double toMidi, double nearS)
+        {
+            const double mid = 0.5 * (fromMidi + toMidi);
+            const int len = (int) (0.008 * sr), step = (int) (0.00025 * sr);
+            const int a = (int) ((nearS - 0.06) * sr), b = (int) ((nearS + 0.06) * sr);
+            bool below = false;
+            for (int s = a; s < b; s += step)
+            {
+                const double m = hzToMidi (measureHz (x, sr, s, len, midiToHz (mid)));
+                if ((m - mid) * (toMidi - fromMidi) < 0.0)
+                    below = true;
+                else if (below)
+                    return (s + 0.5 * len) / sr;
+            }
+            return -1.0;
+        };
+        const double lat = latSamples / sr;
+        const double c1 = crossing (57.0, 60.0, 0.5 + lat), c2 = crossing (60.0, 64.0, 1.0 + lat);
+        const bool notesRight = evs.size() == 4 && evs[0].second == 57 && evs[1].second == 60 && evs[2].second == 64
+                             && evs[3].second == -1;
+        const double d1 = notesRight ? 1000.0 * (evs[1].first / sr - c1) : 1.0e9;
+        const double d2 = notesRight ? 1000.0 * (evs[2].first / sr - c2) : 1.0e9;
+        const double offEnd = notesRight ? 1000.0 * (evs[3].first / sr - (1.5 + lat)) : 1.0e9;
+        std::string seq;
+        for (const auto& ev : evs) seq += std::to_string (ev.second) + "@" + std::to_string ((int) std::lround (1000.0 * ev.first / sr)) + " ";
+        const double lim = rtMode ? 30.0 : 10.0;
+        check (notesRight && blockFree && c1 > 0.0 && c2 > 0.0 && d1 > -5.0 && d2 > -5.0 && d1 < lim && d2 < lim && std::abs (offEnd) < 40.0,
+               std::string ("notes as MIDI (") + (rtMode ? "REALTIME" : "HQ") + "): events " + seq + "ms; the note changes are "
+               + std::to_string (d1) + " / " + std::to_string (d2) + " ms after the output changes note (limit "
+               + std::to_string ((int) lim) + "), the note-off " + std::to_string (offEnd) + " ms from the end of the voice; blocks 256 / 97 "
+               + (blockFree ? "same events" : "DIFFERENT events"));
+    }
+
+    // 7l) diatonic transpose (1.5, roadmap 41): C major, +2 steps: C -> E (4 st), D -> F (3 st); -1 step: C -> B;
+    //     chromatic +2 steps = 2 semitones; the note sent as MIDI is the moved one
+    {
+        auto moved = [&] (double sung, int steps, int scale, double expect, int& midiNote)
+        {
+            auto x = makeVoice (sr, 1.2, [sung] (double) { return midiToHz (sung); });
+            TuneEngine e;
+            e.prepare (sr, false);
+            auto p = baseParams();
+            p.scale = scale;
+            p.scaleSteps = steps;
+            e.setParams (p);
+            auto y = run (e, x, 256);
+            midiNote = e.currentNote.load();
+            return hzToMidi (measureHz (y, sr, (int) (0.9 * sr) + e.getLatencySamples(), (int) (sr * 0.05), midiToHz (expect)));
+        };
+        int nCE = 0, nDF = 0, nCB = 0, nChr = 0;
+        const double ce = moved (60.2, 2, kMajor, 64.0, nCE), df = moved (62.1, 2, kMajor, 65.0, nDF);
+        const double cb = moved (59.9, -1, kMajor, 59.0, nCB), chr = moved (60.1, 2, kChromatic, 62.0, nChr);
+        check (std::abs (ce - 64.0) < 0.03 && std::abs (df - 65.0) < 0.03 && std::abs (cb - 59.0) < 0.03 && std::abs (chr - 62.0) < 0.03
+               && nCE == 64 && nDF == 65 && nCB == 59 && nChr == 62,
+               "scale transpose: C +2 steps -> " + std::to_string (ce) + " (E), D +2 -> " + std::to_string (df) + " (F), C -1 -> "
+               + std::to_string (cb) + " (B), chromatic C +2 -> " + std::to_string (chr) + "; MIDI notes " + std::to_string (nCE) + " "
+               + std::to_string (nDF) + " " + std::to_string (nCB) + " " + std::to_string (nChr));
+    }
+
+    // 7m) attack / release (1.5, roadmap 27). Attack: a phrase sung 40 ct sharp; Auto at ROBOTISM 50 % corrects at once,
+    //     attack 200 ms still leaves most of the 40 ct 50 ms in and none of it at 500 ms. Release: a held A3 decays 30 dB
+    //     while falling 1.5 st; with release 50 ms the fall passes as sung once the note is 12 dB down, without it the
+    //     fall is corrected in semitone steps; before the decay both are on A3.
+    {
+        auto attackRun = [&] (float attackMs, double atS)
+        {
+            auto x = makeVoice (sr, 0.8, [] (double) { return midiToHz (57.4); });
+            TuneEngine e;
+            e.prepare (sr, false);
+            auto p = baseParams();
+            p.attackMs = attackMs;
+            e.setParams (p);
+            auto y = run (e, x, 256);
+            return hzToMidi (measureHz (y, sr, (int) (atS * sr) + e.getLatencySamples(), (int) (sr * 0.01), midiToHz (57.2)));
+        };
+        const double autoAt50 = attackRun (-1.0f, 0.05), slowAt50 = attackRun (200.0f, 0.05), slowAt500 = attackRun (200.0f, 0.5);
+        check (std::abs (autoAt50 - 57.0) < 0.03 && slowAt50 - 57.0 > 0.25 && std::abs (slowAt500 - 57.0) < 0.03,
+               "attack: 40 ct sharp phrase, 50 ms in: Auto " + std::to_string (autoAt50) + ", 200 ms attack "
+               + std::to_string (slowAt50) + "; 500 ms in: " + std::to_string (slowAt500));
+
+        auto fallF0 = [] (double t) { return midiToHz (t < 0.6 ? 57.0 : 57.0 - 1.5 * std::min (1.0, (t - 0.6) / 0.3)); };
+        auto releaseRun = [&] (float releaseMs, double atS)
+        {
+            auto x = makeVoice (sr, 1.0, fallF0);
+            for (size_t i = 0; i < x.size(); ++i)
+            {
+                const double t = (double) i / sr;
+                x[i] *= (float) std::pow (10.0, -30.0 * std::clamp ((t - 0.6) / 0.3, 0.0, 1.0) / 20.0);   // -30 dB over the fall
+            }
+            TuneEngine e;
+            e.prepare (sr, false);
+            auto p = baseParams();
+            p.releaseMs = releaseMs;
+            e.setParams (p);
+            auto y = run (e, x, 256);
+            return hzToMidi (measureHz (y, sr, (int) (atS * sr) + e.getLatencySamples(), (int) (sr * 0.01), fallF0 (atS)));
+        };
+        const double sungLate = hzToMidi (fallF0 (0.85));
+        const double relEarly = releaseRun (50.0f, 0.4), relLate = releaseRun (50.0f, 0.85), offLate = releaseRun (0.0f, 0.85);
+        check (std::abs (relEarly - 57.0) < 0.03 && std::abs (relLate - sungLate) < 0.1 && std::abs (offLate - std::round (offLate)) < 0.05,
+               "release: before the decay " + std::to_string (relEarly) + " (A3); 25 dB down: release 50 ms " + std::to_string (relLate)
+               + " (sung " + std::to_string (sungLate) + "), off " + std::to_string (offLate) + " (on a semitone)");
+    }
+
+    // 7i) 1.5 batch 2: tolerance (22), confidence threshold (28), synthetic vibrato (26), octave shift (35)
+    {
+        auto render = [&] (double midi, std::function<void (TuneEngine::Params&)> set, double seconds = 1.2)
+        {
+            auto x = makeVoice (sr, seconds, [midi] (double) { return midiToHz (midi); });
+            TuneEngine e;
+            e.prepare (sr, false);
+            auto p = baseParams();          // chromatic, hard tune
+            set (p);
+            e.setParams (p);
+            auto y = run (e, x, 256);
+            return std::make_pair (y, e.getLatencySamples());
+        };
+        auto pitchAt = [&] (const std::pair<std::vector<float>, int>& r, double t, double expectHz)
+        { return hzToMidi (measureHz (r.first, sr, (int) (t * sr) + r.second, (int) (sr * 0.02), expectHz)); };
+
+        // tolerance 25 ct: +15 ct stays as sung, +40 ct is pulled to +25
+        const auto t15 = render (57.15, [] (auto& p) { p.toleranceCt = 25.0f; });
+        const auto t40 = render (57.40, [] (auto& p) { p.toleranceCt = 25.0f; });
+        const double m15 = pitchAt (t15, 0.9, 220.0), m40 = pitchAt (t40, 0.9, 220.0);
+        check (std::abs (m15 - 57.15) < 0.03 && std::abs (m40 - 57.25) < 0.03,
+               "tolerance 25 ct: +15 ct stays at " + std::to_string (m15) + ", +40 ct goes to " + std::to_string (m40));
+
+        // confidence threshold: a clean voice is above 0.5 (corrected); a threshold of 1 is never reached (left as sung)
+        const auto cLow = render (57.30, [] (auto& p) { p.confidenceMin = 0.5f; });
+        const auto cHigh = render (57.30, [] (auto& p) { p.confidenceMin = 1.0f; });
+        const double ml = pitchAt (cLow, 0.9, 220.0), mh = pitchAt (cHigh, 0.9, 220.0);
+        check (std::abs (ml - 57.0) < 0.03 && std::abs (mh - 57.30) < 0.03,
+               "confidence threshold: corrected to " + std::to_string (ml) + " when sure, left at " + std::to_string (mh) + " when not");
+
+        // synthetic vibrato 5.5 Hz, 30 ct on a straight note: about 60 ct peak to peak once it has faded in
+        const auto sv = render (57.0, [] (auto& p) { p.synthVibRateHz = 5.5f; p.synthVibDepthCt = 30.0f; }, 2.0);
+        double lo = 1e9, hi = -1e9;
+        for (double t = 1.0; t < 1.6; t += 0.004)
+        {
+            const double m = pitchAt (sv, t, 220.0);
+            lo = std::min (lo, m); hi = std::max (hi, m);
+        }
+        const double svPP = (hi - lo) * 100.0;
+        check (svPP > 45.0 && svPP < 75.0, "synthetic vibrato 30 ct: " + std::to_string (svPP) + " ct peak to peak");
+
+        // octave shift +1 on A3: A4
+        const auto oc = render (57.0, [] (auto& p) { p.octave = 1; });
+        const double mo = pitchAt (oc, 0.9, 440.0);
+        check (std::abs (mo - 69.0) < 0.05, "octave shift +1: A3 comes out at " + std::to_string (mo) + " (A4 = 69)");
+    }
+
+    // 7h) note bypass (1.5, roadmap 32 / 51): in the custom scale, a bypassed note passes through uncorrected
+    {
+        auto sung = [&] (double midi, uint16_t bypass)
+        {
+            auto x = makeVoice (sr, 1.2, [midi] (double) { return midiToHz (midi); });
+            TuneEngine e;
+            e.prepare (sr, false);
+            auto p = baseParams();           // key C, hard tune
+            p.customScale = true;
+            p.customMask = 0x0fff;
+            p.bypassMask = bypass;
+            e.setParams (p);
+            auto y = run (e, x, 256);
+            return hzToMidi (measureHz (y, sr, (int) (0.8 * sr) + e.getLatencySamples(), (int) (sr * 0.1), midiToHz (midi)));
+        };
+        const uint16_t bypassA = (uint16_t) (1u << 9);       // A, relative to C
+        const double aBypassed = sung (57.3, bypassA), bCorrected = sung (59.3, bypassA), aCorrected = sung (57.3, 0);
+        check (std::abs (aBypassed - 57.3) < 0.05 && std::abs (bCorrected - 59.0) < 0.05 && std::abs (aCorrected - 57.0) < 0.05,
+               "note bypass: A sung +30 ct stays at " + std::to_string (aBypassed) + " (bypassed), B +30 ct goes to "
+                   + std::to_string (bCorrected) + ", A without bypass to " + std::to_string (aCorrected));
+    }
+
+    // 7f) Note Transition (1.5, roadmap 20 / 36): Auto keeps the robotic jump, a set time glides
+    {
+        auto x = makeVoice (sr, 1.2, [] (double t) { return midiToHz (t < 0.6 ? 57.0 : 59.0); });
+        auto arrival = [&] (float transitionMs)
+        {
+            TuneEngine e;
+            e.prepare (sr, false);
+            auto p = baseParams();           // robotic, retune 0, chromatic
+            p.robotism = 0.0f;
+            p.transitionMs = transitionMs;
+            e.setParams (p);
+            auto y = x;
+            double changeAt = -1.0, arrivedAt = -1.0;
+            int hops = 0;
+            for (size_t pos = 0; pos < y.size(); pos += 256)
+            {
+                const int n = (int) std::min ((size_t) 256, y.size() - pos);
+                float* chans[2] = { y.data() + pos, nullptr };
+                e.process (chans, 1, n);
+                TuneEngine::DisplayPoint d;
+                while (e.display.pop (d))
+                {
+                    const double t = ++hops * e.getHopSeconds();
+                    if (changeAt < 0.0 && t > 0.3 && (d.flags & TuneEngine::kNoteChange) && d.note == 59)
+                        changeAt = t;
+                    if (changeAt >= 0.0 && arrivedAt < 0.0 && std::abs (d.outMidi - 59.0f) < 0.1f)
+                        arrivedAt = t;
+                }
+            }
+            return (arrivedAt - changeAt) * 1000.0;       // ms from the decision to the new note (within 10 ct)
+        };
+        const double autoMs = arrival (-1.0f), setMs = arrival (100.0f);
+        check (autoMs >= 0.0 && autoMs < 10.0 && setMs > 60.0 && setMs < 120.0,
+               "Note Transition: Auto jumps (" + std::to_string (autoMs) + " ms), 100 ms glides (" + std::to_string (setMs) + " ms to the new note)");
+    }
+
+    // 7g) Formant follows Transpose (1.5, roadmap 34): +12 st moves the formants up an octave with the pitch
+    {
+        auto x = makeVoice (sr, 1.0, [] (double) { return midiToHz (57.0); });
+        auto centroid = [&] (bool follow)
+        {
+            TuneEngine e;
+            e.prepare (sr, false);
+            auto p = baseParams();
+            p.transpose = 12.0f;
+            p.formantFollowsTranspose = follow;
+            e.setParams (p);
+            auto y = run (e, x, 256);
+            const int N = 8192, start = (int) (0.5 * sr);
+            double num = 0.0, den = 0.0;
+            for (int k = 1; k * sr / N < 8000.0; ++k)
+            {
+                double re = 0.0, im = 0.0;
+                for (int i = 0; i < N; ++i)
+                {
+                    const double w = 0.5 - 0.5 * std::cos (2.0 * kPi * i / (N - 1));
+                    const double v = w * y[(size_t) (start + i)];
+                    re += v * std::cos (2.0 * kPi * k * i / N);
+                    im -= v * std::sin (2.0 * kPi * k * i / N);
+                }
+                const double mag = std::sqrt (re * re + im * im), f = k * sr / N;
+                num += f * mag; den += mag;
+            }
+            return num / std::max (den, 1.0e-12);
+        };
+        const double off = centroid (false), on = centroid (true);
+        check (on > 1.4 * off, "Formant follows transpose: +12 st moves the spectral centroid " + std::to_string (off)
+                                   + " -> " + std::to_string (on) + " Hz (off keeps the formants, as before)");
+    }
+
+    // 7e) consonant protection (1.5, roadmap items 15 - 17, off by default): with Formant -6 st a noise burst
+    //     (an "s") between two sung vowels keeps its high band when the option is on
+    {
+        const double vowelS = 0.6, sS = 0.25;
+        auto vowel = makeVoice (sr, vowelS, [] (double) { return midiToHz (57.0); });
+        std::vector<float> x;
+        x.insert (x.end(), vowel.begin(), vowel.end());
+        {
+            uint32_t state = 12345u;       // fixed seed: the same noise every run
+            const int n = (int) (sS * sr);
+            float hp = 0.0f, prev = 0.0f;
+            for (int i = 0; i < n; ++i)
+            {
+                state = state * 1664525u + 1013904223u;
+                const float w = (float) ((double) (state >> 8) / 16777216.0 * 2.0 - 1.0);
+                hp = 0.9f * (hp + w - prev); prev = w;            // bright noise, like a sibilant
+                x.push_back (0.15f * hp);
+            }
+        }
+        x.insert (x.end(), vowel.begin(), vowel.end());
+        auto hfDb = [&] (bool protect)
+        {
+            TuneEngine e;
+            e.prepare (sr, false);
+            auto p = baseParams();
+            p.formant = -6.0f;
+            p.protectConsonants = protect;
+            e.setParams (p);
+            auto y = run (e, x, 256);
+            const int L = e.getLatencySamples();
+            // energy in the middle of the burst, output vs input (aligned by the latency)
+            const int a0 = (int) ((vowelS + 0.06) * sr), a1 = (int) ((vowelS + sS - 0.06) * sr);
+            double ein = 0.0, eout = 0.0;
+            for (int i = a0; i < a1; ++i) { ein += (double) x[(size_t) i] * x[(size_t) i]; eout += (double) y[(size_t) (i + L)] * y[(size_t) (i + L)]; }
+            return 10.0 * std::log10 (eout / std::max (ein, 1.0e-12));
+        };
+        const double off = hfDb (false), on = hfDb (true);
+        check (std::abs (on) < 1.0 && off < on - 1.0,
+               "Formant -6 st: a sibilant keeps its level with consonant protection (" + std::to_string (on)
+                   + " dB) and loses " + std::to_string (-off) + " dB without it (the default, as before)");
+    }
+
+    // 7d) A4 reference (1.5, roadmap item 45): the note grid moves with it
+    {
+        auto tuned = [&] (double inHz, float refHz)
+        {
+            auto x = makeVoice (sr, 1.5, [inHz] (double) { return inHz; });
+            TuneEngine e;
+            e.prepare (sr, false);
+            auto p = baseParams();            // chromatic, hard tune
+            p.tuningRefHz = refHz;
+            e.setParams (p);
+            auto y = run (e, x, 256);
+            return measureHz (y, sr, (int) (1.0 * sr) + e.getLatencySamples(), (int) (sr * 0.1), refHz);
+        };
+        const double a = tuned (441.0, 440.0f), b = tuned (441.0, 442.0f), c = tuned (433.0, 432.0f);
+        check (std::abs (a - 440.0) < 0.3 && std::abs (b - 442.0) < 0.3 && std::abs (c - 432.0) < 0.3,
+               "A4 reference: 441 Hz goes to " + std::to_string (a) + " Hz at 440 and " + std::to_string (b)
+                   + " Hz at 442; 433 Hz goes to " + std::to_string (c) + " Hz at 432");
+    }
+
+    // 7c) fail-safe (1.5, roadmap item 80): a processed sample that is not a finite number is replaced
+    //     by the dry sample; every other sample is exactly what it would have been
+    {
+        auto x = makeVoice (sr, 1.0, [] (double) { return midiToHz (57.3); });
+        struct Render { std::vector<float> y; uint32_t events; int latency; };
+        auto render = [&] (int inject)
+        {
+            TuneEngine e;
+            e.prepare (sr, true);
+            e.setParams (baseParams());
+            auto y = x;
+            for (size_t pos = 0; pos < y.size(); pos += 256)
+            {
+                if (inject > 0 && pos == 256 * 100)
+                    e.testInjectNonFinite (inject);
+                const int n = (int) std::min ((size_t) 256, y.size() - pos);
+                float* chans[2] = { y.data() + pos, nullptr };
+                e.process (chans, 1, n);
+            }
+            return Render { y, e.failSafeSamples.load(), e.getLatencySamples() };
+        };
+        const auto clean = render (0), hit = render (64);
+        const int start = 256 * 100, L = hit.latency;
+        bool finite = true, othersSame = true, spanDry = true;
+        for (size_t k = 0; k < hit.y.size(); ++k)
+        {
+            finite = finite && std::isfinite (hit.y[k]);
+            const bool inSpan = (int) k >= start && (int) k < start + 64;
+            if (inSpan)
+                spanDry = spanDry && (int) k >= L && hit.y[k] == x[k - (size_t) L];
+            else
+                othersSame = othersSame && hit.y[k] == clean.y[k];
+        }
+        check (finite && spanDry && othersSame && clean.events == 0 && hit.events == 64,
+               "fail-safe: 64 injected NaN samples go out as the dry input (" + std::to_string (hit.events)
+                   + " replaced), the rest is bit-identical, a clean run replaces none (" + std::to_string (clean.events) + ")");
+    }
+
+    // 7b) Vibrato Scale follows its setting (1.5). Before: 0 % kept ~half of a 5.5 Hz vibrato (the 3 Hz
+    //     note centre carries it), and 200 % pushed the vibrato over the midpoint, so the target note
+    //     switched on every cycle (less vibrato than 150 % on the natural side, a trill in hard tune).
+    {
+        auto f0 = [] (double t) { return midiToHz (57.0 + 0.35 * std::sin (2.0 * kPi * 5.5 * t) * std::min (1.0, t / 0.3)); };
+        auto x = makeVoice (sr, 3.0, f0);
+        struct Result { double depthCt; int changes; };
+        auto measure = [&] (float vibScale, bool hard)
+        {
+            TuneEngine e;
+            e.prepare (sr, false);
+            auto p = baseParams();
+            p.retuneMs = hard ? 0.0f : 15.0f;
+            p.robotism = hard ? 0.0f : 0.5f;
+            p.humanize = 0.35f;
+            p.vibratoScale = vibScale;
+            e.setParams (p);
+            auto y = x;
+            int changes = 0, hops = 0;
+            for (size_t pos = 0; pos < y.size(); pos += 256)
+            {
+                const int n = (int) std::min ((size_t) 256, y.size() - pos);
+                float* chans[2] = { y.data() + pos, nullptr };
+                e.process (chans, 1, n);
+                TuneEngine::DisplayPoint d;
+                while (e.display.pop (d))
+                    if (++hops * e.getHopSeconds() > 0.5 && (d.flags & TuneEngine::kNoteChange))
+                        ++changes;
+            }
+            const int L = e.getLatencySamples();
+            double lo = 1e9, hi = -1e9;
+            for (double t = 1.6; t < 2.6; t += 0.004)
+            {
+                const double m = hzToMidi (measureHz (y, sr, (int) (t * sr) + L, (int) (sr * 0.01), 220.0));
+                lo = std::min (lo, m); hi = std::max (hi, m);
+            }
+            return Result { (hi - lo) * 100.0, changes };      // peak-to-peak cents, target note switches
+        };
+        const auto r0 = measure (0.0f, false), r1 = measure (1.0f, false), r2 = measure (2.0f, false), h2 = measure (2.0f, true);
+        check (r0.depthCt < 0.25 * r1.depthCt, "Vibrato Scale 0 % removes the vibrato: " + std::to_string (r0.depthCt)
+                                                   + " ct p-p (100 %: " + std::to_string (r1.depthCt) + ")");
+        check (r2.depthCt > 1.6 * r1.depthCt && r2.depthCt < 2.5 * r1.depthCt && r2.changes <= r1.changes,
+               "Vibrato Scale 200 % doubles it (" + std::to_string (r2.depthCt) + " ct p-p) without note switches ("
+                   + std::to_string (r2.changes) + ", at 100 %: " + std::to_string (r1.changes) + ")");
+        check (h2.depthCt < 25.0 && h2.changes == 0, "hard tune stays flat at Vibrato Scale 200 % (no trill): "
+                                                        + std::to_string (h2.depthCt) + " ct p-p, " + std::to_string (h2.changes) + " switches");
     }
 
     // 8) automatic key: a C major melody sung slightly out of tune (4 times: the one-shot lock waits

@@ -405,7 +405,7 @@ class MiniKnob : public juce::Component
 {
 public:
     MiniKnob (juce::RangedAudioParameter& p, const juce::String& labelText, const juce::String& tip)
-        : param (p), label (labelText), attachment (p, knob)
+        : param (p), label (labelText), attachment (std::make_unique<juce::SliderParameterAttachment> (p, knob))
     {
         addAndMakeVisible (knob);
         knob.gestureParam = &p;
@@ -418,6 +418,26 @@ public:
     MiniKnobSlider knob;
     juce::RangedAudioParameter& getParameter() const noexcept { return param; }
 
+    /** 1.6 Auto Character: the knob shows a value the plugin sets (plainValue) and cannot be edited; its parameter
+        keeps its own (manual) value meanwhile. Off: bound to the parameter again. */
+    void setManaged (bool shouldBeManaged, float plainValue)
+    {
+        if (shouldBeManaged == managed && (! managed || std::abs (plainValue - managedValue) < 1.0e-4f))
+            return;
+        managed = shouldBeManaged;
+        managedValue = plainValue;
+        if (managed)
+        {
+            attachment.reset();
+            knob.setValue (plainValue, juce::dontSendNotification);
+        }
+        else if (attachment == nullptr)
+            attachment = std::make_unique<juce::SliderParameterAttachment> (param, knob);
+        knob.setEnabled (! managed);
+        repaint();
+    }
+    bool isManaged() const noexcept { return managed; }
+
     void resized() override
     {
         knob.setBounds (juce::Rectangle<int> (0, 0, 104, 104).withCentre ({ getWidth() / 2, 52 }));
@@ -428,12 +448,15 @@ public:
         const float cx = (float) getWidth() * 0.5f;
         drawText (g, label, { cx, 120.0f }, fitted (font (15.8f, Weight::medium, 0.05f), label, (float) getWidth() - 12.0f), col::label);
         if (! editor.isShowing())
-            drawText (g, param.getCurrentValueAsText(), { cx, 151.0f }, font (23.0f), col::text);
+            drawText (g, managed ? param.getText (param.convertTo0to1 (managedValue), 32) : param.getCurrentValueAsText(),
+                      { cx, 151.0f }, font (23.0f), managed ? col::accentText : col::text);
+        if (managed && ! editor.isShowing())
+            drawAutoBadge (g, { cx + 30.0f + 0.5f * textWidth (font (23.0f), param.getText (param.convertTo0to1 (managedValue), 32)), 151.0f });
     }
 
     void mouseDown (const juce::MouseEvent& e) override
     {
-        if (valueArea().contains (e.position))
+        if (! managed && valueArea().contains (e.position))
             editor.show (*this, valueArea().toNearestInt(), param.getCurrentValueAsText(), 21.0f, [this] (const juce::String& t)
             {
                 const float v = param.getValueForText (t);
@@ -449,8 +472,10 @@ private:
 
     juce::RangedAudioParameter& param;
     juce::String label;
-    juce::SliderParameterAttachment attachment;
+    std::unique_ptr<juce::SliderParameterAttachment> attachment;
     InlineEditor editor;
+    bool managed = false;
+    float managedValue = 0.0f;
 };
 
 //==============================================================================
@@ -539,7 +564,7 @@ public:
     enum class Align { left, centre };
 
     ValueSlider (juce::RangedAudioParameter& p, Align a, const juce::String& tip)
-        : param (p), align (a), attachment (p, slider)
+        : param (p), align (a), attachment (std::make_unique<juce::SliderParameterAttachment> (p, slider))
     {
         addAndMakeVisible (slider);
         slider.gestureParam = &p;
@@ -550,6 +575,26 @@ public:
     }
 
     TrackSlider slider;
+
+    /** 1.6 Auto Character: shows a value the plugin sets (plainValue), not editable; the parameter keeps its own
+        (manual) value meanwhile. Off: bound to the parameter again. */
+    void setManaged (bool shouldBeManaged, float plainValue)
+    {
+        if (shouldBeManaged == managed && (! managed || std::abs (plainValue - managedValue) < 1.0e-4f))
+            return;
+        managed = shouldBeManaged;
+        managedValue = plainValue;
+        if (managed)
+        {
+            attachment.reset();
+            slider.setValue (plainValue, juce::dontSendNotification);
+        }
+        else if (attachment == nullptr)
+            attachment = std::make_unique<juce::SliderParameterAttachment> (param, slider);
+        slider.setEnabled (! managed);
+        repaint();
+    }
+    bool isManaged() const noexcept { return managed; }
 
     /** box = value well, track = slider (both in this component's coordinates) */
     void setLayout (juce::Rectangle<int> box, juce::Rectangle<int> track)
@@ -566,7 +611,9 @@ public:
             return;
 
         // number big, unit small: "15 ms", "35%", "100%"
-        auto text = param.getCurrentValueAsText();
+        auto text = managed ? param.getText (param.convertTo0to1 (managedValue), 32) : param.getCurrentValueAsText();
+        if (managed)
+            drawAutoBadge (g, { box.getRight() - 34.0f, box.getCentreY() });
         juce::String number = text, unit;
         const int split = text.indexOfAnyOf ("% m");
         if (split > 0)
@@ -581,12 +628,13 @@ public:
         const float total = wn + (unit.isEmpty() ? 0.0f : gap + wu);
         float x = align == Align::centre ? box.getCentreX() - total * 0.5f : box.getX() + 20.0f;
         const float cy = box.getCentreY();
-        drawText (g, number, { x, cy }, fn, col::value, juce::Justification::left);
+        const auto valueColour = managed ? col::accentText : col::value;
+        drawText (g, number, { x, cy }, fn, valueColour, juce::Justification::left);
         if (unit.isNotEmpty())
         {
             // unit sits on the number's baseline
             const float baseShift = (fn.getAscent() - fu.getAscent()) * 0.36f;
-            drawText (g, unit, { x + wn + gap, cy + baseShift }, fu, col::value.withAlpha (0.85f), juce::Justification::left);
+            drawText (g, unit, { x + wn + gap, cy + baseShift }, fu, valueColour.withAlpha (0.85f), juce::Justification::left);
         }
     }
 
@@ -599,7 +647,7 @@ public:
 
     void mouseDown (const juce::MouseEvent& e) override
     {
-        if (boxArea().contains (e.position))
+        if (! managed && boxArea().contains (e.position))
             editor.show (*this, boxArea().reduced (6.0f).toNearestInt(), param.getCurrentValueAsText(), 26.0f, [this] (const juce::String& t)
             {
                 param.beginChangeGesture();
@@ -614,10 +662,12 @@ private:
 
     juce::RangedAudioParameter& param;
     Align align;
-    juce::SliderParameterAttachment attachment;
+    std::unique_ptr<juce::SliderParameterAttachment> attachment;
     juce::Rectangle<int> boxR;
     InlineEditor editor;
     bool hoverBox = false;
+    bool managed = false;
+    float managedValue = 0.0f;
 };
 
 //==============================================================================
@@ -798,6 +848,69 @@ public:
     void mouseEnter (const juce::MouseEvent&) override { repaint(); }
     void mouseExit (const juce::MouseEvent&) override  { repaint(); }
     void mouseUp (const juce::MouseEvent& e) override { if (getLocalBounds().contains (e.getPosition()) && onClick) onClick(); }
+};
+
+//==============================================================================
+/** 1.6 Auto Character: a lit pill next to the ROBOTISM title ("AUTO"). onToggle decides what a click does (the
+    editor hands the auto values over before switching off); the state follows the parameter (host automation). */
+class AutoPill : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    explicit AutoPill (juce::RangedAudioParameter& p) : param (p), attachment (p, [this] (float) { repaint(); })
+    {
+        attachment.sendInitialUpdate();
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        setTitle (p.getName (64));
+        setWantsKeyboardFocus (true);
+    }
+    std::function<void (bool turnOn)> onToggle;
+    bool isOn() const { return param.getValue() > 0.5f; }
+
+    void paint (juce::Graphics& g) override
+    {
+        const auto r = getLocalBounds().toFloat().withSizeKeepingCentre ((float) getWidth() - 4.0f, 30.0f);
+        const bool on = isOn(), over = isMouseOver();
+        g.setColour (on ? col::accent.withAlpha (over ? 0.30f : 0.22f) : (over ? juce::Colour (0xff27262e) : juce::Colour (0xff1c1b22)));
+        g.fillRoundedRectangle (r, 11.0f);
+        if (on)
+        {
+            g.setColour (col::accent.withAlpha (0.75f));
+            g.drawRoundedRectangle (r.reduced (0.5f), 11.0f, 1.2f);
+        }
+        const float dotX = r.getX() + 13.0f;
+        if (on) fillGlowCircle (g, { dotX, r.getCentreY() }, 4.2f, juce::Colour (0xffb59bfd), 0.9f);
+        else { g.setColour (juce::Colour (0xff3a3942)); g.fillEllipse (dotX - 4.2f, r.getCentreY() - 4.2f, 8.4f, 8.4f); }
+        drawText (g, "AUTO", { dotX + 11.0f, r.getCentreY() + 0.5f }, font (13.6f, Weight::medium, 0.12f),
+                  on ? col::accentText : (over ? col::text : col::label), juce::Justification::left);
+        if (tabFocus.shown && hasKeyboardFocus (false))
+        {
+            g.setColour (col::accent.withAlpha (0.8f));
+            g.drawRoundedRectangle (r.expanded (2.0f), 13.0f, 1.2f);
+        }
+    }
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        if (k.getKeyCode() != juce::KeyPress::returnKey && k.getKeyCode() != juce::KeyPress::spaceKey)
+            return false;
+        toggle();
+        return true;
+    }
+    void focusGained (FocusChangeType cause) override   { tabFocus.gained (*this, cause); }
+    void focusLost (FocusChangeType) override           { tabFocus.lost (*this); }
+    void mouseEnter (const juce::MouseEvent&) override { repaint(); }
+    void mouseExit (const juce::MouseEvent&) override  { repaint(); }
+    void mouseUp (const juce::MouseEvent& e) override  { if (getLocalBounds().contains (e.getPosition())) toggle(); }
+
+private:
+    void toggle()
+    {
+        const bool turnOn = ! isOn();
+        if (onToggle) onToggle (turnOn);
+        else attachment.setValueAsCompleteGesture (turnOn ? 1.0f : 0.0f);
+    }
+    juce::RangedAudioParameter& param;
+    juce::ParameterAttachment attachment;
+    TabFocus tabFocus;
 };
 
 //==============================================================================

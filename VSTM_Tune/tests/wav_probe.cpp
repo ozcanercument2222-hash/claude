@@ -1,7 +1,8 @@
 //==============================================================================
 //  VSTM Tune - gercek kayitlar icin cevrimdisi render + analiz kaydi (JUCE gerektirmez)
 //
-//    wav_probe in.wav out.wav [--csv hops.csv] [name=value ...]
+//    wav_probe in.wav out.wav [--csv hops.csv] [--notes notes.csv] [name=value ...]
+//    --notes: the note changes the plugin sends as MIDI (1.5): output time (s, latency included), note (-1 = off)
 //
 //  name: key (-1 = Auto, 0..11), scale (0..12), amount (0..1), retune (ms),
 //        humanize (0..1), robotism (0..1), vibrato (0..2), formant (st),
@@ -121,7 +122,7 @@ int main (int argc, char** argv)
 {
     if (argc < 3)
     {
-        std::fprintf (stderr, "usage: wav_probe in.wav out.wav [--csv hops.csv] [name=value ...]\n");
+        std::fprintf (stderr, "usage: wav_probe in.wav out.wav [--csv hops.csv] [--notes notes.csv] [name=value ...]\n");
         return 2;
     }
     Wav w;
@@ -133,10 +134,12 @@ int main (int argc, char** argv)
     int lockKey = -1;
     double switchEvery = 0.0;
     const char* csvPath = nullptr;
+    const char* notesPath = nullptr;
     for (int i = 3; i < argc; ++i)
     {
         const std::string a = argv[i];
         if (a == "--csv" && i + 1 < argc) { csvPath = argv[++i]; continue; }
+        if (a == "--notes" && i + 1 < argc) { notesPath = argv[++i]; continue; }
         const auto eq = a.find ('=');
         if (eq == std::string::npos) { std::fprintf (stderr, "bad arg %s\n", a.c_str()); return 2; }
         const std::string k = a.substr (0, eq);
@@ -159,6 +162,29 @@ int main (int argc, char** argv)
         else if (k == "backdate")  p.backdateSwitch = v != 0.0;
         else if (k == "fresh")     p.freshAnalysis = v != 0.0;
         else if (k == "swingkeep") p.swingKeep = v != 0.0;
+        else if (k == "vibband")   p.vibratoBand = v != 0.0;
+        else if (k == "tuning")    p.tuningRefHz = (float) v;
+        else if (k == "protect")   p.protectConsonants = v != 0.0;
+        else if (k == "ffollow")   p.formantFollowsTranspose = v != 0.0;
+        else if (k == "transition") p.transitionMs = (float) v;
+        else if (k == "bypassnotes") p.bypassMask = (uint16_t) ((int) v & 0x0fff);
+        else if (k == "tolerance") p.toleranceCt = (float) v;
+        else if (k == "confmin")   p.confidenceMin = (float) v;
+        else if (k == "svibrate")  p.synthVibRateHz = (float) v;
+        else if (k == "svibdepth") p.synthVibDepthCt = (float) v;
+        else if (k == "octave")    p.octave = (int) v;
+        else if (k == "midimask")  p.midiMask = (uint16_t) ((int) v & 0x0fff);
+        else if (k == "midinote")  p.midiMinNoteS = (float) v;      // notes as MIDI: minimum note (s)
+        else if (k == "performnote") p.midiNote = (int) v;          // MIDI perform: target note, octave as played
+        else if (k == "scalesteps") p.scaleSteps = (int) v;         // diatonic transpose (steps of the scale)
+        else if (k == "attack")    p.attackMs = (float) v;          // correction attack (ms, < 0 = automatic)
+        else if (k == "natcentre") p.naturalCentre = v > 0.5;       // 1.6: vibrato-free note decision (internal switch)
+        else if (k == "natmotion") p.naturalMotion = v > 0.5;       // 1.6: centre-only correction during a vibrato
+        else if (k == "nattrans")  p.naturalTransition = v > 0.5;   // 1.6: the automatic glide follows the singer
+        else if (k == "octguard")  p.octaveGuard = v > 0.5;         // 1.6: sudden octave jumps held 40 ms
+        else if (k == "natref")    p.naturalCentreRef = (int) v;    // 1.6 experiments: 0 centre2, 1 = 2-pole 1.5 Hz
+        else if (k == "release")   p.releaseMs = (float) v;         // correction release (ms, 0 = off)
+        else if (k == "midigap")   p.midiMinGapS = (float) v;       // notes as MIDI: shortest break that ends a note (s)
         else if (k == "lock")      lockKey = (int) v;
         else if (k == "realtime")  realtime = v != 0.0;
         else if (k == "block")     block = std::max (1, (int) v);
@@ -180,6 +206,8 @@ int main (int argc, char** argv)
 
     FILE* csv = csvPath ? std::fopen (csvPath, "w") : nullptr;
     if (csv) std::fprintf (csv, "time_s,voiced,in_midi,out_midi,note,deviation,note_change,settled,auto_key,key_state,key_conf,est_delay_s,clarity\n");
+    FILE* notes = notesPath ? std::fopen (notesPath, "w") : nullptr;
+    if (notes) std::fprintf (notes, "out_time_s,note\n");
     const double hopS = e.getHopSeconds();
     const double latS = e.getLatencySamples() / w.rate;
     int64_t hopIndex = 0;
@@ -195,7 +223,11 @@ int main (int argc, char** argv)
         }
         const int n = (int) std::min ((size_t) block, frames - pos);
         float* ch[2] = { w.data[0].data() + pos, nc > 1 ? w.data[1].data() + pos : nullptr };
+        const int64_t blockStart = e.getInputSampleCount();
         e.process (ch, nc, n);
+        if (notes)
+            e.takeNoteEvents (blockStart, [&] (int at, int note)
+                              { std::fprintf (notes, "%.6f,%d\n", (double) (blockStart + at) / w.rate, note); });
         TuneEngine::DisplayPoint d;
         while (e.display.pop (d))
         {
@@ -208,6 +240,7 @@ int main (int argc, char** argv)
         }
     }
     if (csv) std::fclose (csv);
+    if (notes) std::fclose (notes);
 
     Wav out = w;
     out.channels = nc;

@@ -88,5 +88,10 @@ private:
     juce::String currentName { "Default Preset" };
     std::vector<std::pair<juce::RangedAudioParameter*, float>> snapshot;
     std::atomic<bool> keepTonal { true };       // read by getStateInformation (any thread)
+public:
+    /** 1.6: true while a preset's values are being applied (Auto Character does not hand its values over then). */
+    bool isApplying() const noexcept { return applying.load(); }
+private:
+    std::atomic<bool> applying { false };
 };
 } // namespace vstm

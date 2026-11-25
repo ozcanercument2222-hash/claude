@@ -1,7 +1,8 @@
 # VSTM Tune – gerçek zamanlı vokal autotune
 
 Tek düğmeyle **robotik ↔ insansı** arasında gezinen, gerçek zamanlı perde düzeltme plugin'i.
-Formatlar: **VST3**, **AU** (yalnız macOS), **Standalone**. Mono ve stereo. Sürüm **1.2.0** (değişiklikler: `RELEASE_NOTES.md`, kalite raporu: `docs/1.2.0/`).
+Formatlar: **VST3**, **AU** (yalnız macOS), **Standalone**. Mono ve stereo. Sürüm **1.6.0 adayı** (değişiklikler: `RELEASE_NOTES.md`,
+1.6 ayrıntıları ve ölçümler: `docs/1.6.0/`).
 
 ![VSTM Tune](docs/vstm_tune.png)
 
@@ -130,6 +131,33 @@ ROBOTISM ayarların üstünde çalışan bir makrodur; parametrelerin **değerin
 
 Ara değerler iki yarıda da sürekli ve monotondur (tablo: `VSTM_TUNE_AUDIT.md` 17.4).
 
+**Akort (A4)** (1.5, ⚙ menüsü): 432–446 Hz. Nota ızgarası referansla birlikte kayar. Varsayılan 440 Hz; oturuma kaydedilir,
+presetlere girmez, otomasyonsuz.
+
+**Ünsüzleri formanttan koru** (1.5, ⚙ menüsü, varsayılan kapalı): açıkken FORMANT yalnız sesli bölümlere uygulanır; s, ş ve
+nefes doğal kalır. Presetlere kaydedilir.
+
+**Nota geçişi** (1.5, ⚙ menüsü): notalar arası kayma süresi. Auto (varsayılan) ROBOTISM'e bağlıdır, bugünkü gibi; 0 / 20 / 50 /
+100 / 200 ms ise iki tarafta da sabit S-eğrili kaymadır. Presetlere kaydedilir.
+
+**Formant transpozu izlesin** (1.5, ⚙ menüsü, varsayılan kapalı): formant transpozla birlikte kayar; ince ya da kalın ses
+efekti için. Kapalıyken transpoz formantı korur.
+
+**Note bypass** (1.5, özel dizi editörü): bir notaya **sağ tık** (Mac'te Ctrl-tık) o notayı "atla" yapar. O notaya yakın söylenen
+ses düzeltilmeden geçer. Sol tık eskisi gibi notayı açar ya da kapatır.
+
+**⚙ → Gelişmiş** (1.5; hepsi varsayılan olarak kapalı):
+
+- nota geçişi;
+- **tolerans** (5–50 sent): hedefe bu kadar yakın notalar söylendiği gibi kalır;
+- **güven eşiği**: algılayıcı emin değilken düzeltme yapılmaz;
+- **sentetik vibrato**: hafif / orta / geniş;
+- **oktav kaydırma**: ±2 oktav;
+- ünsüz koruması ve formant izleme;
+- **Hedef notalar MIDI'den**: basılı MIDI notaları hedef olur, oktav fark etmez. VST3 ve Standalone'da çalışır; AU'da yok.
+
+**64 bit host'lar:** double ses blokları desteklenir; motor 32 bitte çalışır.
+
 Kullanıcı presetleri: `<kullanıcı veri klasörü>/VSTM Audio/VSTM Tune/Presets/*.drp`
 (Windows: `%APPDATA%`, macOS: `~/Library`, Linux: `~/.config`).
 
@@ -137,6 +165,19 @@ Kullanıcı presetleri: `<kullanıcı veri klasörü>/VSTM Audio/VSTM Tune/Prese
   başka bir eklentinin dosyası yüklenmez, hiçbir şeyi değiştirmez.
 - **Eski presetler:** 1.0–1.3 `*.vstmpreset` dosyaları okunmaya devam eder; yeniden adlandırılınca `.drp` olur.
 - **1.3 ve öncesi** `.drp` okuyamaz.
+
+## Natural Auto Correction ve Auto Character (1.6)
+
+- **Doğal düzeltme** (Robotism %25'ten itibaren devreye girer, %50'den itibaren tam; hard tune değişmez):
+  - vibrato sürerken nota vibratosuz merkezden seçilir;
+  - yalnız merkez düzeltilir, vibrato geçer;
+  - insansı tarafta geçişler şarkıcının portamentosunu izler;
+  - analiz adımında oktav sıçraması 40 ms beklenir.
+- **Auto Character** (ROBOTISM başlığının solundaki **AUTO**):
+  - **Açık:** ROBOTISM, Retune Speed, Humanize ve Vibrato Scale'i yönetir. Bu kontroller "AUTO" rozetli ve kilitlidir; %50'de fabrika değerlerini verir.
+  - **Kapatınca:** o anki değerler manuel değer olarak kalır, ses değişmez.
+  - Otomasyonlu ve presete girer; varsayılan kapalı.
+- Ölçümler ve davranış değişiklikleri: `docs/1.6.0/VSTM_Tune_1.6.0_Changelog.md`. **Dinleme yapılmadı.**
 
 ## Admin yetkisi ve geliştirici paneli (1.4)
 

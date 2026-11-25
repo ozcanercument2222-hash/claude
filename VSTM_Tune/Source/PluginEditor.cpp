@@ -328,6 +328,7 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
       retune (param (ids::retune), ValueSlider::Align::centre, tr ("Retune Speed: how fast the pitch is pulled to the note. 0 ms = instant (robotic).")),
       humanize (param (ids::humanize), ValueSlider::Align::centre, tr ("Humanize: relaxes the correction on long, sustained notes so they keep their natural movement.")),
       robotAttachment (param (ids::robotism), robot),
+      autoPill (param (ids::autoCharacter)),
       vibratoKnob (param (ids::vibrato), tr ("knob.vibrato"), tr ("Vibrato Scale: depth of the natural vibrato and pitch movement (100% = as sung).")),
       formantKnob (param (ids::formant), tr ("FORMANT"), tr ("Formant: shifts the vocal character (throat size) in semitones without changing the pitch.")),
       transposeKnob (param (ids::transpose), tr ("PITCH RANGE"), tr ("Pitch Range: transposes the corrected voice by up to 12 semitones up or down.")),
@@ -343,7 +344,7 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
     addAndMakeVisible (canvas);
     for (juce::Component* c : std::initializer_list<juce::Component*> {
              &presetBar, &saveButton, &sizeButton, &settingsButton, &display, &keySelector, &keyHint, &scaleSelector,
-             &correction, &retune, &humanize, &robot, &infoButton, &vibratoKnob, &formantKnob, &transposeKnob,
+             &correction, &retune, &humanize, &robot, &infoButton, &autoPill, &vibratoKnob, &formantKnob, &transposeKnob,
              &mixKnob, &autotuneToggle, &waveButton, &realtimeToggle, &adaptiveToggle })
         canvas.addAndMakeVisible (c);
 
@@ -369,6 +370,8 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
     robot.setBounds (juce::roundToInt (kKnobAxis) - 215, 275, 430, 430);
     // the "i" pill follows the title, which is centred on the knob axis
     infoButton.setBounds (juce::roundToInt (kKnobAxis + textWidth (titleFont(), tr ("ROBOTISM")) * 0.5f + 18.0f), 279, 40, 36);
+    // 1.6 Auto Character: mirrors the "i" pill on the title's left
+    autoPill.setBounds (juce::roundToInt (kKnobAxis - textWidth (titleFont(), tr ("ROBOTISM")) * 0.5f - 18.0f - 78.0f), 279, 78, 36);
     vibratoKnob.setBounds (450, 731, 160, 172);
     formantKnob.setBounds (611, 731, 160, 172);
     transposeKnob.setBounds (770, 731, 160, 172);
@@ -416,6 +419,19 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
     humanize.slider.onContextMenu = [this] { showHostMenu (param (ids::humanize)); };
 
     infoButton.setTooltip (tr ("What does ROBOTISM do?"));
+    autoPill.setTooltip (tr ("Auto Character: ROBOTISM also sets Retune Speed, Humanize and Vibrato Scale (marked AUTO). Off: those controls are yours again, with the values they had."));
+    autoPill.onToggle = [this] (bool turnOn)
+    {
+        // switching off: the values Auto Character gave become the manual ones first (no jump in the sound)
+        if (! turnOn)
+            audio.handOffCharacter();
+        auto& ac = param (ids::autoCharacter);
+        ac.beginChangeGesture();
+        ac.setValueNotifyingHost (turnOn ? 1.0f : 0.0f);
+        ac.endChangeGesture();
+        updateAutoCharacter();
+    };
+    updateAutoCharacter();
     infoButton.onClick = [this] { showRobotismInfo(); };
     saveButton.setTooltip (tr ("Save preset"));
     saveButton.onClick = [this] { askPresetName(); };
@@ -484,6 +500,8 @@ void VSTMTuneEditor::timerCallback()
     if (isDeveloperPanelShown())
         devPanel->update();
 
+    updateAutoCharacter();
+
     const bool active = param (ids::bypass).getValue() < 0.5f;
     if (active != lastActive)
     {
@@ -510,6 +528,16 @@ void VSTMTuneEditor::timerCallback()
         lastKeyShown = shown;
         keySelector.repaint();
     }
+}
+
+void VSTMTuneEditor::updateAutoCharacter()
+{
+    const bool on = param (ids::autoCharacter).getValue() > 0.5f;
+    auto& rob = param (ids::robotism);
+    const auto c = vstm::params::characterFor (rob.convertFrom0to1 (rob.getValue()));
+    retune.setManaged (on, c.retuneMs);
+    humanize.setManaged (on, c.humanizePct);
+    vibratoKnob.setManaged (on, c.vibratoPct);
 }
 
 bool VSTMTuneEditor::isAutoKey()
@@ -648,23 +676,74 @@ void VSTMTuneEditor::closeScaleEditor()
 
 void VSTMTuneEditor::showHostMenu (juce::RangedAudioParameter& p)
 {
+    // the host's own items (automation etc.) when it offers them, else our reset; then MIDI Learn (1.5)
+    juce::PopupMenu m;
     if (auto* ctx = getHostContext())
         if (auto menu = ctx->getContextMenuForParameter (&p))
-        {
-            menu->showNativeMenu (getMouseXYRelative());
-            return;
-        }
-
-    juce::PopupMenu m;
-    m.addItem (1, trf ("Reset to default (%1)", p.getText (p.getDefaultValue(), 32)));
+            m = menu->getEquivalentPopupMenu();
     juce::Component::SafePointer<VSTMTuneEditor> safe (this);
-    m.showMenuAsync (juce::PopupMenu::Options(), [&p, safe] (int r)
+    if (m.getNumItems() == 0)
+        m.addItem (trf ("Reset to default (%1)", p.getText (p.getDefaultValue(), 32)), [&p, safe]
+        {
+            if (safe == nullptr) return;
+            p.beginChangeGesture();
+            p.setValueNotifyingHost (p.getDefaultValue());
+            p.endChangeGesture();
+        });
+
+    auto& learn = audio.midiLearn;
+    if (learn.canLearn (p))
     {
-        if (safe == nullptr || r != 1) return;
-        p.beginChangeGesture();
-        p.setValueNotifyingHost (p.getDefaultValue());
-        p.endChangeGesture();
-    });
+        m.addSeparator();
+        if (learn.isLearning (p))
+            m.addItem (tr ("Cancel MIDI Learn"), [safe] { if (safe != nullptr) safe->audio.midiLearn.cancelLearning(); });
+        else
+            m.addItem (tr ("MIDI Learn"), [&p, safe] { if (safe != nullptr) safe->audio.midiLearn.startLearning (p); });
+        const int cc = learn.ccFor (p);
+        if (cc >= 0)
+            m.addItem (trf ("Forget MIDI CC %1", juce::String (cc)), [&p, safe] { if (safe != nullptr) safe->audio.midiLearn.forget (p); });
+    }
+    m.showMenuAsync (juce::PopupMenu::Options());
+}
+
+void VSTMTuneEditor::showCustomTuningDialog()
+{
+    // 12 values in cents (-50 .. +50), one per degree from the key's tonic; OK also selects "Custom"
+    juce::StringArray now;
+    for (int i = 0; i < 12; ++i)
+    {
+        auto& c = param (ids::tuneCents (i));
+        now.add (juce::String (c.convertFrom0to1 (c.getValue()), 1));
+    }
+    auto* w = new juce::AlertWindow (tr ("Custom tuning"),
+                                     tr ("Cents per degree from the key's tonic (12 values, -50 to +50), e.g. a quarter-tone flat third: 0,0,0,0,-50,0,0,0,0,0,0,0"),
+                                     juce::MessageBoxIconType::NoIcon, this);
+    w->addTextEditor ("cents", now.joinIntoString (", "));
+    w->addButton (tr ("OK"), 1, juce::KeyPress (juce::KeyPress::returnKey));
+    w->addButton (tr ("Cancel"), 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    juce::Component::SafePointer<VSTMTuneEditor> safe (this);
+    w->enterModalState (true, juce::ModalCallbackFunction::create ([safe, w] (int result)
+    {
+        if (safe == nullptr || result != 1)
+            return;
+        auto values = juce::StringArray::fromTokens (w->getTextEditorContents ("cents"), ",; ", "");
+        values.removeEmptyStrings();
+        if (values.size() != 12)
+            return;
+        auto& ed = *safe;
+        for (int i = 0; i < 12; ++i)
+        {
+            auto& c = ed.param (ids::tuneCents (i));
+            const float v = juce::jlimit (-50.0f, 50.0f, values[i].getFloatValue());
+            c.beginChangeGesture();
+            c.setValueNotifyingHost (c.convertTo0to1 (std::isfinite (v) ? v : 0.0f));
+            c.endChangeGesture();
+        }
+        auto& sys = ed.param (ids::tuningSys);
+        sys.beginChangeGesture();
+        sys.setValueNotifyingHost (sys.convertTo0to1 ((float) vstm::params::kCustomTuning));
+        sys.endChangeGesture();
+    }), true);
 }
 
 void VSTMTuneEditor::showSizeMenu()
@@ -692,8 +771,85 @@ void VSTMTuneEditor::showSettingsMenu()
     for (int i = 0; i < names.size(); ++i)
         voice.addItem (100 + i, names[i], true, i == current);
 
+    // 1.5: A4 reference (setup choice, like the vocal range)
+    static constexpr float kTunings[] = { 432.0f, 435.0f, 438.0f, 440.0f, 442.0f, 443.0f, 444.0f, 446.0f };
+    auto& tuning = param (ids::tuningRef);
+    const float tuningNow = tuning.convertFrom0to1 (tuning.getValue());
+    juce::PopupMenu tuningMenu;
+    bool listed = false;
+    for (int i = 0; i < (int) std::size (kTunings); ++i)
+    {
+        const bool on = std::abs (tuningNow - kTunings[i]) < 0.05f;
+        listed = listed || on;
+        tuningMenu.addItem (200 + i, "A4 = " + juce::String (kTunings[i], 0) + " Hz", true, on);
+    }
+    if (! listed)       // a value from a session that is not in the list
+        tuningMenu.addItem (299, "A4 = " + juce::String (tuningNow, 1) + " Hz", false, true);
+
+    // 1.5: Note Transition (Auto = follows ROBOTISM, or a set glide time)
+    auto& transition = param (ids::transition);
+    const int transitionNow = juce::roundToInt (transition.convertFrom0to1 (transition.getValue()));
+    const auto transitionNames = vstm::params::transitionChoices();
+    juce::PopupMenu transitionMenu;
+    for (int i = 0; i < transitionNames.size(); ++i)
+        transitionMenu.addItem (300 + i, transitionNames[i], true, i == transitionNow);
+
+    // 1.5 (roadmap 45): tuning system (cents per degree from the key's tonic) and the custom cents
+    auto& tuningSys = param (ids::tuningSys);
+    const int sysNow = juce::roundToInt (tuningSys.convertFrom0to1 (tuningSys.getValue()));
+    const auto sysNames = vstm::params::tuningChoices();
+    juce::PopupMenu sysMenu;
+    for (int i = 0; i < sysNames.size(); ++i)
+        sysMenu.addItem (800 + i, tr (sysNames[i].toRawUTF8()), true, i == sysNow);
+    sysMenu.addSeparator();
+    sysMenu.addItem (12, tr ("Edit custom tuning..."));
+
     juce::PopupMenu m;
     m.addSubMenu (tr ("Vocal range"), voice);
+    m.addSubMenu (tr ("Tuning (A4)") + ": " + juce::String (tuningNow, std::abs (tuningNow - std::round (tuningNow)) < 0.05f ? 0 : 1) + " Hz",
+                  tuningMenu);
+    m.addSubMenu (tr ("Tuning system") + ": " + tr (sysNames[juce::jlimit (0, sysNames.size() - 1, sysNow)].toRawUTF8()), sysMenu);
+    // 1.5: the expressive / creative options in one "Advanced" submenu (each a choice list with a tick)
+    auto choiceMenu = [this] (const juce::String& id, const juce::StringArray& choices, int baseId, juce::String& currentName)
+    {
+        auto& prm = param (id);
+        const int now = juce::roundToInt (prm.convertFrom0to1 (prm.getValue()));
+        juce::PopupMenu sub;
+        for (int i = 0; i < choices.size(); ++i)
+            sub.addItem (baseId + i, choices[i], true, i == now);
+        currentName = choices[juce::jlimit (0, choices.size() - 1, now)];
+        return sub;
+    };
+    juce::String tolNow, confNow, vibNow, octNow;
+    auto toleranceMenu = choiceMenu (ids::tolerance, vstm::params::toleranceChoices(), 400, tolNow);
+    auto confidenceMenu = choiceMenu (ids::confidence, vstm::params::confidenceChoices(), 500, confNow);
+    auto synthVibMenu = choiceMenu (ids::synthVib, vstm::params::synthVibChoices(), 600, vibNow);
+    auto octaveMenu = choiceMenu (ids::octave, vstm::params::octaveChoices(), 700, octNow);
+    juce::String stepsNow;
+    auto stepsMenu = choiceMenu (ids::scaleTr, vstm::params::scaleStepChoices(), 900, stepsNow);
+    juce::String attackNow, releaseNow;
+    auto attackMenu = choiceMenu (ids::attack, vstm::params::attackChoices(), 1000, attackNow);
+    auto releaseMenu = choiceMenu (ids::release, vstm::params::releaseChoices(), 1100, releaseNow);
+    juce::PopupMenu advanced;
+    advanced.addSubMenu (tr ("Note transition") + ": " + transitionNames[juce::jlimit (0, transitionNames.size() - 1, transitionNow)], transitionMenu);
+    advanced.addSubMenu (tr ("Attack") + ": " + attackNow, attackMenu);
+    advanced.addSubMenu (tr ("Release") + ": " + releaseNow, releaseMenu);
+    advanced.addSubMenu (tr ("Tolerance") + ": " + tolNow, toleranceMenu);
+    advanced.addSubMenu (tr ("Confidence threshold") + ": " + confNow, confidenceMenu);
+    advanced.addSubMenu (tr ("Synthetic vibrato") + ": " + vibNow, synthVibMenu);
+    advanced.addSubMenu (tr ("Octave shift") + ": " + octNow, octaveMenu);
+    advanced.addSubMenu (tr ("Scale transpose") + ": " + stepsNow, stepsMenu);
+    advanced.addSeparator();
+    advanced.addItem (6, tr ("Protect consonants from formant"), true, param (ids::protectCons).getValue() > 0.5f);
+    advanced.addItem (7, tr ("Formant follows transpose"), true, param (ids::formantFollow).getValue() > 0.5f);
+    advanced.addSeparator();
+    advanced.addItem (8, tr ("Target notes from MIDI"), true, param (ids::midiTarget).getValue() > 0.5f);
+    advanced.addItem (10, tr ("MIDI: octave as played"), param (ids::midiTarget).getValue() > 0.5f,
+                      param (ids::midiOctave).getValue() > 0.5f);
+    advanced.addItem (9, tr ("Send notes as MIDI"), true, param (ids::midiOut).getValue() > 0.5f);
+    advanced.addItem (11, trf ("Clear MIDI CC assignments (%1)", juce::String (audio.midiLearn.numAssigned())),
+                      audio.midiLearn.numAssigned() > 0 || audio.midiLearn.isLearningAny(), false);
+    m.addSubMenu (tr ("Advanced"), advanced);
     m.addItem (2, tr ("Show input pitch"), true, display.showInput);
     m.addSeparator();
     m.addItem (3, tr ("Reset all parameters"));
@@ -709,7 +865,37 @@ void VSTMTuneEditor::showSettingsMenu()
     {
         if (safe == nullptr || r == 0) return;
         auto& ed = *safe;
-        if (r >= 100)
+        auto setChoice = [&ed] (const juce::String& id, int index)
+        {
+            auto& cp = ed.param (id);
+            cp.beginChangeGesture();
+            cp.setValueNotifyingHost (cp.convertTo0to1 ((float) index));
+            cp.endChangeGesture();
+        };
+        if (r >= 800 && r < 800 + (int) vstm::params::kNumTunings) setChoice (ids::tuningSys, r - 800);
+        else if (r == 12) ed.showCustomTuningDialog();
+        else if (r >= 400 && r < 500) setChoice (ids::tolerance, r - 400);
+        else if (r >= 500 && r < 600) setChoice (ids::confidence, r - 500);
+        else if (r >= 600 && r < 700) setChoice (ids::synthVib, r - 600);
+        else if (r >= 700 && r < 800) setChoice (ids::octave, r - 700);
+        else if (r >= 900 && r < 915) setChoice (ids::scaleTr, r - 900);
+        else if (r >= 1000 && r < 1000 + (int) std::size (vstm::params::kAttackMs)) setChoice (ids::attack, r - 1000);
+        else if (r >= 1100 && r < 1100 + (int) std::size (vstm::params::kReleaseMs)) setChoice (ids::release, r - 1100);
+        else if (r >= 300 && r < 300 + (int) std::size (vstm::params::kTransitionMs))
+        {
+            auto& tp = ed.param (ids::transition);
+            tp.beginChangeGesture();
+            tp.setValueNotifyingHost (tp.convertTo0to1 ((float) (r - 300)));
+            tp.endChangeGesture();
+        }
+        else if (r >= 200 && r < 200 + (int) std::size (kTunings))
+        {
+            auto& tp = ed.param (ids::tuningRef);
+            tp.beginChangeGesture();
+            tp.setValueNotifyingHost (tp.convertTo0to1 (kTunings[r - 200]));
+            tp.endChangeGesture();
+        }
+        else if (r >= 100 && r < 200)
         {
             auto& rp = ed.param (ids::range);
             rp.beginChangeGesture();
@@ -719,6 +905,43 @@ void VSTMTuneEditor::showSettingsMenu()
         else if (r == 2) ed.waveButton.onClick();
         else if (r == 3) { ed.audio.presets.resetAll(); ed.presetBar.refresh(); }
         else if (r == 5) ed.showDeveloperPanel (! ed.isDeveloperPanelShown());
+        else if (r == 11)
+            ed.audio.midiLearn.clear();
+        else if (r == 10)
+        {
+            auto& mo = ed.param (ids::midiOctave);
+            mo.beginChangeGesture();
+            mo.setValueNotifyingHost (mo.getValue() > 0.5f ? 0.0f : 1.0f);
+            mo.endChangeGesture();
+        }
+        else if (r == 9)
+        {
+            auto& mo = ed.param (ids::midiOut);
+            mo.beginChangeGesture();
+            mo.setValueNotifyingHost (mo.getValue() > 0.5f ? 0.0f : 1.0f);
+            mo.endChangeGesture();
+        }
+        else if (r == 8)
+        {
+            auto& mt = ed.param (ids::midiTarget);
+            mt.beginChangeGesture();
+            mt.setValueNotifyingHost (mt.getValue() > 0.5f ? 0.0f : 1.0f);
+            mt.endChangeGesture();
+        }
+        else if (r == 7)
+        {
+            auto& ff = ed.param (ids::formantFollow);
+            ff.beginChangeGesture();
+            ff.setValueNotifyingHost (ff.getValue() > 0.5f ? 0.0f : 1.0f);
+            ff.endChangeGesture();
+        }
+        else if (r == 6)
+        {
+            auto& pc = ed.param (ids::protectCons);
+            pc.beginChangeGesture();
+            pc.setValueNotifyingHost (pc.getValue() > 0.5f ? 0.0f : 1.0f);
+            pc.endChangeGesture();
+        }
         else if (r == 4)
             juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::NoIcon, juce::String ("VSTM Tune ") + VSTM_TUNE_VERSION,
                 trf ("about.text", juce::String (ed.audio.getLatencySamples())), tr ("OK"), &ed);

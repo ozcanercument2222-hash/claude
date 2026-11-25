@@ -6,7 +6,7 @@ if(APPLE)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
 endif()
 
-project(VSTMTune VERSION 1.4.0 LANGUAGES C CXX)
+project(VSTMTune VERSION 1.6.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -73,10 +73,10 @@ juce_add_plugin(VSTMTune
     PRODUCT_NAME "VSTM Tune"
     BUNDLE_ID com.vstmaudio.vstmtune
     VST3_CATEGORIES Fx Pitch Shift
-    AU_MAIN_TYPE kAudioUnitType_Effect
+    AU_MAIN_TYPE kAudioUnitType_Effect      # stays an effect ('aufx'): the AU identity of 1.0 - 1.4 is kept
     IS_SYNTH FALSE
-    NEEDS_MIDI_INPUT FALSE
-    NEEDS_MIDI_OUTPUT FALSE
+    NEEDS_MIDI_INPUT TRUE                   # 1.5: MIDI target notes (VST3 / Standalone; AU effects get no MIDI)
+    NEEDS_MIDI_OUTPUT TRUE                  # 1.5: detected notes as MIDI (VST3 / Standalone)
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     COPY_PLUGIN_AFTER_BUILD ${VSTM_COPY_AFTER_BUILD}
@@ -157,6 +157,7 @@ target_link_libraries(VSTMTune
 option(VSTM_BUILD_TESTS "Test programlarini da olustur" OFF)
 if(VSTM_BUILD_TESTS)
     add_executable(VSTMTune_EngineTest tests/engine_test.cpp)
+    target_compile_definitions(VSTMTune_EngineTest PRIVATE VSTM_TEST_HOOKS=1)   # test-only hooks (TuneEngine::testInjectNonFinite)
 
     # gercek kayitlar icin cevrimdisi render + analiz kaydi (tests/vocal_metrics.py ile)
     add_executable(VSTMTune_WavProbe tests/wav_probe.cpp)

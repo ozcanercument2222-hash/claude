@@ -148,4 +148,15 @@ inline juce::Image makeNoise (int w, int h, float alpha, uint32_t seed = 1234)
         }
     return img;
 }
+/** 1.6 Auto Character: a small "AUTO" tag on a control whose value the plugin sets (centred at c). */
+inline void drawAutoBadge (juce::Graphics& g, juce::Point<float> c)
+{
+    const juce::Rectangle<float> r (c.x - 23.0f, c.y - 9.5f, 46.0f, 19.0f);
+    g.setColour (col::accent.withAlpha (0.18f));
+    g.fillRoundedRectangle (r, 6.5f);
+    g.setColour (col::accent.withAlpha (0.6f));
+    g.drawRoundedRectangle (r.reduced (0.5f), 6.5f, 1.0f);
+    drawText (g, "AUTO", c.translated (0.0f, 0.5f), font (11.5f, Weight::medium, 0.1f), col::accentText);
+}
+
 } // namespace vui

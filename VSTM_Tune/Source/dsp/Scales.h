@@ -75,6 +75,29 @@ inline bool isAllowed (int midiNote, int key, uint16_t mask) noexcept
 }
 
 /** Nearest note (integer MIDI) to `midi` that belongs to the scale. */
+/** 1.5 (roadmap 45): the nearest allowed note when each pitch class sits pcOffset[pc] semitones off the
+    equal-tempered grid (just / Pythagorean / quarter-tone / custom tunings). */
+inline int nearestAllowedTunedNote (float midi, int key, uint16_t mask, const float* pcOffset) noexcept
+{
+    if (mask == 0)
+        mask = 0x0fff;
+    const int centre = (int) std::lround (midi);
+    int best = centre;
+    float bestDist = 1.0e9f;
+    for (int n = centre - 7; n <= centre + 7; ++n)
+    {
+        if (! isAllowed (n, key, mask))
+            continue;
+        const float d = std::abs (midi - ((float) n + pcOffset[((n % 12) + 12) % 12]));
+        if (d < bestDist)
+        {
+            bestDist = d;
+            best = n;
+        }
+    }
+    return best;
+}
+
 inline int nearestAllowedNote (float midi, int key, uint16_t mask) noexcept
 {
     if (mask == 0)
