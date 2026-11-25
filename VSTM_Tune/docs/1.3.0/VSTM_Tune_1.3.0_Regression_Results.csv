@@ -32,3 +32,55 @@ false note switching (77 synthetic),rejected C,REALTIME,hard,steady per min / vi
 "peaks, 145 recordings, input peak -6 dBFS (typical)",1.2.0 (guard off) -> 1.3-cand1,REALTIME,natural,files >0 dBFS / max sample peak dBFS / max true peak dBTP (cand1) / files guard active / max GR dB,0->0 / -3.24->-3.24 / -3.22 / 0 / -0.0
 "peaks, 145 recordings, input peak -6 dBFS (typical)",1.2.0 (guard off) -> 1.3-cand1,REALTIME,tr+12,files >0 dBFS / max sample peak dBFS / max true peak dBTP (cand1) / files guard active / max GR dB,3->0 / 2.91->-1.0 / -0.91 / 4 / 3.91
 "peaks, 145 recordings, input peak -6 dBFS (typical)",1.2.0 (guard off) -> 1.3-cand1,REALTIME,fm+12,files >0 dBFS / max sample peak dBFS / max true peak dBTP (cand1) / files guard active / max GR dB,9->0 / 2.89->-1.0 / -0.75 / 12 / 3.89
+"transition (43 clean, synthetic exact truth)",1.3-cand2,REALTIME,"hard (robotism 0, retune 0, chromatic)",decision median / |p95| ms,9.75 / 31.11
+"transition (43 clean, synthetic exact truth)",1.3-cand2,REALTIME,hard,audible median / |p95| ms / late>15ms,11.65 / 38.02 / 0.465
+"transition (43 clean, synthetic exact truth)",1.3-cand2,HQ,hard,audible median / |p95| ms / late>15ms,"6.33 / 29.72 / 0.140 (= cand1; bit-identical)"
+false note switching (77 synthetic),1.3-cand2,REALTIME,hard,steady per min / vibrato per min,28.18 / 665.98
+"detector, synthetic 77 (exact truth)",1.2.0,REALTIME,detector only,octave_low / octave_high / coarse / oct runs 20-30-50ms / voiced recall / false voiced,0.000699 / 0.0 / 0.003314 / 7-4-0 / 0.9916 / 0.00253
+"detector, synthetic 77 (exact truth)",1.3-cand2,REALTIME,detector only,octave_low / octave_high / coarse / oct runs 20-30-50ms / voiced recall / false voiced,0.000617 / 0.0 / 0.003145 / 5-2-1 / 0.99046 / 0.00369
+"detector, resynthesis 145 (exact truth)",1.2.0,REALTIME,detector only,octave_low / octave_high / coarse / oct runs 20-30-50ms / voiced recall / false voiced,4.1e-05 / 0.000706 / 0.001589 / 32-14-2 / 0.9904 / 0.00031
+"detector, resynthesis 145 (exact truth)",1.3-cand2,REALTIME,detector only,octave_low / octave_high / coarse / oct runs 20-30-50ms / voiced recall / false voiced,4.1e-05 / 0.000566 / 0.001614 / 26-6-1 / 0.99024 / 0.00094
+"detector, real 145 (reference tracker)",1.2.0,REALTIME,detector only,octave_low / octave_high / coarse / oct runs 20-30-50ms / voiced recall / false voiced,0.001414 / 0.000833 / 0.00834 / 86-31-12 / 0.96919 / 0.11721
+"detector, real 145 (reference tracker)",1.3-cand2,REALTIME,detector only,octave_low / octave_high / coarse / oct runs 20-30-50ms / voiced recall / false voiced,0.001435 / 0.000752 / 0.008205 / 74-29-11 / 0.96719 / 0.11194
+"peaks, 145 recordings, input peak -1 dBFS (hot)",1.3-cand2,REALTIME,hard,files >0 dBFS / max sample peak dBFS / max true peak dBTP / files guard active / max GR dB,0 / -1.0 / -0.35 / 68 / 6.77
+"peaks, 145 recordings, input peak -1 dBFS (hot)",1.3-cand2,REALTIME,default,files >0 dBFS / max sample peak dBFS / max true peak dBTP / files guard active / max GR dB,0 / -1.0 / -0.49 / 58 / 6.39
+"peaks, 145 recordings, input peak -1 dBFS (hot)",1.3-cand2,REALTIME,natural,files >0 dBFS / max sample peak dBFS / max true peak dBTP / files guard active / max GR dB,0 / -1.0 / -0.42 / 63 / 2.09
+"peaks, 145 recordings, input peak -1 dBFS (hot)",1.3-cand2,REALTIME,tr+12,files >0 dBFS / max sample peak dBFS / max true peak dBTP / files guard active / max GR dB,0 / -1.0 / -0.34 / 44 / 9.0
+"peaks, 145 recordings, input peak -1 dBFS (hot)",1.3-cand2,REALTIME,tr-12,files >0 dBFS / max sample peak dBFS / max true peak dBTP / files guard active / max GR dB,0 / -1.0 / 0.26 / 145 / 4.86
+"peaks, 145 recordings, input peak -1 dBFS (hot)",1.3-cand2,REALTIME,fm+12,files >0 dBFS / max sample peak dBFS / max true peak dBTP / files guard active / max GR dB,0 / -1.0 / 0.58 / 145 / 8.76
+"peaks, 145 recordings, input peak -1 dBFS (hot)",1.3-cand2,REALTIME,fm-12,files >0 dBFS / max sample peak dBFS / max true peak dBTP / files guard active / max GR dB,0 / -1.0 / -0.83 / 42 / 6.85
+"peaks, 145 recordings, input peak -1 dBFS (hot)",1.3-cand2,REALTIME,tr+7_fm+12,files >0 dBFS / max sample peak dBFS / max true peak dBTP / files guard active / max GR dB,0 / -1.0 / 0.33 / 140 / 9.68
+"peaks, 145 recordings, input peak -1 dBFS (hot)",1.3-cand2,REALTIME,hard_tr+12,files >0 dBFS / max sample peak dBFS / max true peak dBTP / files guard active / max GR dB,0 / -1.0 / 0.01 / 52 / 11.19
+"peaks, 145 recordings, input peak -6 dBFS (typical)",1.3-cand2,REALTIME,hard,files >0 dBFS / max sample peak dBFS / max true peak dBTP / files guard active / max GR dB,0 / -1.0 / -0.89 / 5 / 1.77
+"peaks, 145 recordings, input peak -6 dBFS (typical)",1.3-cand2,REALTIME,default,files >0 dBFS / max sample peak dBFS / max true peak dBTP / files guard active / max GR dB,0 / -1.0 / -0.96 / 1 / 1.39
+"peaks, 145 recordings, input peak -6 dBFS (typical)",1.3-cand2,REALTIME,natural,files >0 dBFS / max sample peak dBFS / max true peak dBTP / files guard active / max GR dB,0 / -3.91 / -3.88 / 0 / -0.0
+"peaks, 145 recordings, input peak -6 dBFS (typical)",1.3-cand2,REALTIME,tr+12,files >0 dBFS / max sample peak dBFS / max true peak dBTP / files guard active / max GR dB,0 / -1.0 / -0.92 / 4 / 4.0
+"peaks, 145 recordings, input peak -6 dBFS (typical)",1.3-cand2,REALTIME,fm+12,files >0 dBFS / max sample peak dBFS / max true peak dBTP / files guard active / max GR dB,0 / -1.0 / -0.68 / 10 / 3.76
+"ROBOTISM sweep, 91 real recordings (ALL)",1.2.0,REALTIME,robotism 0 / 50 / 100 %,vibrato_kept_pct,97.1 / 84.5 / 91.8
+"ROBOTISM sweep, 91 real recordings (ALL)",1.2.0,REALTIME,robotism 0 / 50 / 100 %,tight_ct,1.5 / 18.0 / 23.5
+"ROBOTISM sweep, 91 real recordings (ALL)",1.2.0,REALTIME,robotism 0 / 50 / 100 %,transition_ms,61.0 / 63.9 / 34.8
+"ROBOTISM sweep, 91 real recordings (ALL)",1.3-cand2,REALTIME,robotism 0 / 50 / 100 %,vibrato_kept_pct,97.0 / 86.3 / 81.0
+"ROBOTISM sweep, 91 real recordings (ALL)",1.3-cand2,REALTIME,robotism 0 / 50 / 100 %,tight_ct,1.6 / 15.5 / 23.3
+"ROBOTISM sweep, 91 real recordings (ALL)",1.3-cand2,REALTIME,robotism 0 / 50 / 100 %,transition_ms,40.6 / 52.2 / 40.6
+"ROBOTISM sweep, 91 real recordings (ALL)",1.2.0,HQ,robotism 0 / 50 / 100 %,vibrato_kept_pct,96.2 / 86.2 / 80.3
+"ROBOTISM sweep, 91 real recordings (ALL)",1.2.0,HQ,robotism 0 / 50 / 100 %,tight_ct,1.7 / 15.7 / 23.4
+"ROBOTISM sweep, 91 real recordings (ALL)",1.2.0,HQ,robotism 0 / 50 / 100 %,transition_ms,46.4 / 52.2 / 40.6
+"tests",1.3-cand2,both,-,EngineTest / PluginTest / pluginval strictness 10 / ASan+UBSan,78/78 / 73/73 / SUCCESS / 0 findings
+"CPU, 218 configs (shared VM, relative)",1.3-cand2 vs cand1,REALTIME / HQ,matrix,median avg-time ratio / allocs in process(),0.98 / 0.98 / 0
+"RT <-> HQ switching, 132 cases",1.3-cand2,both,-,repeat or skip / pitch dev ct / max step ratio,0 / 0.01 / 1.59
+"ROBOTISM sweep, 91 real recordings (ALL)",1.3-cand2,REALTIME,"robotism 65 / 80 %",vibrato_kept_pct,74.7 / 46.9
+"ROBOTISM sweep, 91 real recordings (ALL)",1.3-cand2,REALTIME,"robotism 65 / 80 %",tight_ct,20.9 / 23.5
+"ROBOTISM sweep, 91 real recordings (ALL)",1.3-cand2,REALTIME,"robotism 65 / 80 %",transition_ms,63.9 / 63.9
+"ROBOTISM sweep, 91 real recordings (ALL)",1.3-cand3,REALTIME,"robotism 65 / 80 / 100 %",vibrato_kept_pct,80.2 / 74.0 / 91.9
+"ROBOTISM sweep, 91 real recordings (ALL)",1.3-cand3,REALTIME,"robotism 65 / 80 / 100 %",tight_ct,20.7 / 23.3 / 24.2
+"ROBOTISM sweep, 91 real recordings (ALL)",1.3-cand3,REALTIME,"robotism 65 / 80 / 100 %",transition_ms,58.0 / 52.2 / 40.6
+"ROBOTISM sweep, 91 real recordings (ALL)",1.3-cand2,HQ,"robotism 65 / 80 / 100 %",vibrato_kept_pct,74.5 / 46.5 / 80.3
+"ROBOTISM sweep, 91 real recordings (ALL)",1.3-cand2,HQ,"robotism 65 / 80 / 100 %",tight_ct,20.5 / 23.6 / 23.4
+"ROBOTISM sweep, 91 real recordings (ALL)",1.3-cand2,HQ,"robotism 65 / 80 / 100 %",transition_ms,63.9 / 61.0 / 40.6
+"ROBOTISM sweep, 91 real recordings (ALL)",1.3-cand3,HQ,"robotism 65 / 80 / 100 %",vibrato_kept_pct,80.5 / 73.8 / 91.4
+"ROBOTISM sweep, 91 real recordings (ALL)",1.3-cand3,HQ,"robotism 65 / 80 / 100 %",tight_ct,20.7 / 23.1 / 24.2
+"ROBOTISM sweep, 91 real recordings (ALL)",1.3-cand3,HQ,"robotism 65 / 80 / 100 %",transition_ms,55.1 / 52.2 / 40.6
+"synthetic vibrato A3+25ct +-50ct 5.5 Hz (target flips every cycle)",1.3-cand2 -> 1.3-cand3,REALTIME,"robotism 80 / 100 %",vibrato kept % (audio),"32.4 -> 74.9 / 74.2 -> 93.5"
+"note decisions, 6 recordings x 65/80/100 % x RT/HQ",1.3-cand3 vs cand2,both,-,identical runs,36/36
+"output at robotism 0 / 25 / 50 %, 4 recordings x RT/HQ",1.3-cand3 vs cand2,both,-,bit-identical renders,24/24
+"tests",1.3-cand3,both,-,EngineTest / PluginTest / pluginval strictness 10 / ASan+UBSan,78/78 / 73/73 / SUCCESS / 0 findings

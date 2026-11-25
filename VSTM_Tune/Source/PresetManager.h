@@ -2,7 +2,11 @@
 //==============================================================================
 //  Fabrika + kullanici presetleri
 //
-//  Kullanici presetleri:  <kullanici veri klasoru>/VSTM Audio/VSTM Tune/Presets/*.vstmpreset
+//  Kullanici presetleri:  <kullanici veri klasoru>/VSTM Audio/VSTM Tune/Presets/
+//    1.4: yeni kayitlar *.drp (ikili, surumlu, dogrulanan; Drp.h). 1.0 - 1.3'un *.vstmpreset (XML)
+//    dosyalari okunmaya devam eder; ayni adda .drp varsa .drp gosterilir; yeniden adlandirilan eski
+//    preset .drp olarak yazilir. Ice aktarma dosyayi dogrular ve yalniz preset klasorune yeni bir ada
+//    kopyalar (hicbir dosyanin uzerine yazmaz).
 //  Bypass, REALTIME ve vokal araligi presetlere dahil degildir (genel ayarlar).
 //
 //  Ton ve dizi sarkinin ayaridir, presetin degil: "Presetler ton ve diziyi korur" acikken
@@ -11,6 +15,7 @@
 //  "Tum parametreleri sifirla" (resetAll) her seyi, ton ve dizi dahil, varsayilana dondurur.
 //==============================================================================
 #include <juce_audio_processors/juce_audio_processors.h>
+#include "Drp.h"
 
 namespace vstm
 {
@@ -37,6 +42,10 @@ public:
     bool deleteUserPreset (int index);
     /** Renames a user preset file (fails if the name is empty or another preset already has it). */
     bool renameUserPreset (int index, const juce::String& newName);
+    /** Imports a preset file (.drp, or a 1.0 - 1.3 .vstmpreset): validates it, copies it into the user preset
+        folder as .drp under a free name (never overwriting) and loads it. An authorization file is refused
+        (Error::wrongType). On success `importedName` is the name it got. */
+    drp::Error importPreset (const juce::File& file, juce::String& importedName);
 
     juce::String getCurrentName() const                { return currentName; }
     int getCurrentIndex() const;
@@ -52,6 +61,8 @@ public:
 
     static juce::File getUserPresetFolder();
     static bool isPresetParameter (const juce::String& paramID);
+    static constexpr const char* kExtension = ".drp";
+    static constexpr const char* kLegacyExtension = ".vstmpreset";
     /** Key, Scale, Custom Scale and its 12 notes: the song's settings. */
     static bool isTonalParameter (const juce::String& paramID);
 
@@ -63,6 +74,12 @@ private:
     struct Factory { juce::String name, category; std::vector<Entry> values; };
 
     void applyValues (const std::vector<Entry>& values, bool includeTonal);
+    /** Reads a user preset file of either format; false if it is damaged or not a preset. */
+    static drp::Error readPresetFile (const juce::File& file, std::vector<Entry>& values, juce::String* storedName = nullptr);
+    /** The current values as a .drp file. */
+    juce::MemoryBlock currentAsDrp (const juce::String& name) const;
+    static drp::Error writeAtomically (const juce::File& file, const juce::MemoryBlock& data);
+    juce::String freeUserName (const juce::String& wanted) const;
     void takeSnapshot();
 
     juce::AudioProcessorValueTreeState& apvts;

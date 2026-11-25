@@ -78,7 +78,25 @@ vstm::TuneEngine::Params VSTMTuneProcessor::readParams() const noexcept
     p.customMask = mask;
     p.adaptive = pAdaptive.get() > 0.5f;
     p.followKeyChanges = followKeyChanges.load (std::memory_order_relaxed);
+    p.peakGuard = getExpert (Expert::peakGuard);
+    p.backdateSwitch = getExpert (Expert::backdateSwitch);
+    p.freshAnalysis = getExpert (Expert::freshAnalysis);
+    p.swingKeep = getExpert (Expert::swingKeep);
     return p;
+}
+
+bool VSTMTuneProcessor::setExpert (Expert e, bool on)
+{
+    if (! auth.isAdmin())
+        return false;
+    expert[(int) e].store (on, std::memory_order_relaxed);
+    return true;
+}
+
+void VSTMTuneProcessor::resetExpert() noexcept
+{
+    for (auto& x : expert)
+        x.store (true, std::memory_order_relaxed);
 }
 
 void VSTMTuneProcessor::prepareToPlay (double sampleRate, int)

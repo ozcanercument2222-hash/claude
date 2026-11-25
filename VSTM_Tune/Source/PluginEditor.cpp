@@ -274,6 +274,14 @@ void PresetBar::showMenu()
         m.addItem (10002, trf ("Delete \"%1\"", presets.getCurrentName()));
     }
     m.addItem (10003, tr ("Open preset folder"));
+    m.addItem (10006, tr ("Import preset..."));
+    m.addSeparator();
+    const auto authStatus = authorizationStatus ? authorizationStatus() : juce::String();
+    if (authStatus.isNotEmpty())
+        m.addItem (10009, authStatus, false);
+    m.addItem (10007, tr ("Import authorization file..."));
+    if (authStatus.isNotEmpty())
+        m.addItem (10008, tr ("Remove authorization"));
     m.addSeparator();
     // the song's key and scale stay when a preset is loaded (off: presets set them, as in 1.0)
     m.addItem (10005, tr ("Presets keep key and scale"), true, presets.getKeepTonal());
@@ -288,6 +296,10 @@ void PresetBar::showMenu()
                          else if (result == 10002) { pm.deleteUserPreset (pm.getCurrentIndex()); pm.loadPreset (0); }
                          else if (result == 10004) { if (safe->onRenameRequest) safe->onRenameRequest(); }
                          else if (result == 10005) { if (safe->onKeepKeyChanged) safe->onKeepKeyChanged (! pm.getKeepTonal()); }
+                         else if (result == 10006) { if (safe->onImportPreset) safe->onImportPreset(); }
+                         else if (result == 10007) { if (safe->onImportAuthorization) safe->onImportAuthorization(); }
+                         else if (result == 10008) { if (safe->onRemoveAuthorization) safe->onRemoveAuthorization(); }
+                         else if (result == 10009) {}
                          else if (result == 10003)
                          {
                              auto folder = vstm::PresetManager::getUserPresetFolder();
@@ -410,6 +422,10 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
     presetBar.onSaveRequest = [this] { askPresetName(); };
     presetBar.onRenameRequest = [this] { askRenamePreset(); };
     presetBar.onKeepKeyChanged = [this] (bool keep) { audio.setPresetsKeepKey (keep); presetBar.refresh(); presetBar.repaint(); };
+    presetBar.onImportPreset = [this] { importPreset(); };
+    presetBar.onImportAuthorization = [this] { importAuthorization(); };
+    presetBar.onRemoveAuthorization = [this] { removeAuthorization(); };
+    presetBar.authorizationStatus = [this] { return authorizationStatusText(); };
     sizeButton.setTooltip (tr ("Window size"));
     sizeButton.onClick = [this] { showSizeMenu(); };
     settingsButton.setTooltip (tr ("Settings"));
@@ -450,6 +466,23 @@ void VSTMTuneEditor::resized()
 void VSTMTuneEditor::timerCallback()
 {
     presetBar.refresh();
+
+    // 1.4: the authorization is checked again once a minute (expiry, a removed or changed file)
+    if (++authCheckTicks >= 15 * 60)
+    {
+        authCheckTicks = 0;
+        if (audio.auth.isAdmin())
+        {
+            audio.auth.refresh();
+            if (! audio.auth.isAdmin())
+            {
+                audio.resetExpert();
+                showDeveloperPanel (false);
+            }
+        }
+    }
+    if (isDeveloperPanelShown())
+        devPanel->update();
 
     const bool active = param (ids::bypass).getValue() < 0.5f;
     if (active != lastActive)
@@ -665,6 +698,11 @@ void VSTMTuneEditor::showSettingsMenu()
     m.addSeparator();
     m.addItem (3, tr ("Reset all parameters"));
     m.addItem (4, tr ("About VSTM Tune"));
+    if (audio.auth.isAdmin())
+    {
+        m.addSeparator();
+        m.addItem (5, tr ("Developer panel"), true, isDeveloperPanelShown());
+    }
 
     juce::Component::SafePointer<VSTMTuneEditor> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&settingsButton), [safe] (int r)
@@ -680,6 +718,7 @@ void VSTMTuneEditor::showSettingsMenu()
         }
         else if (r == 2) ed.waveButton.onClick();
         else if (r == 3) { ed.audio.presets.resetAll(); ed.presetBar.refresh(); }
+        else if (r == 5) ed.showDeveloperPanel (! ed.isDeveloperPanelShown());
         else if (r == 4)
             juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::NoIcon, juce::String ("VSTM Tune ") + VSTM_TUNE_VERSION,
                 trf ("about.text", juce::String (ed.audio.getLatencySamples())), tr ("OK"), &ed);
@@ -767,3 +806,107 @@ void VSTMTuneEditor::askPresetName()
         }
     }), true);
 }
+
+//------------------------------------------------------------------------------ 1.4: .drp, authorization
+juce::String VSTMTuneEditor::drpErrorText (vstm::drp::Error e, bool authorization)
+{
+    using E = vstm::drp::Error;
+    switch (e)
+    {
+        case E::none:               return {};
+        case E::cannotRead:         return tr ("drp.cannotRead");
+        case E::tooLarge:           return tr ("drp.tooLarge");
+        case E::truncated:
+        case E::badLength:
+        case E::badChecksum:        return tr ("drp.damaged");
+        case E::badMagic:           return tr ("drp.notDrp");
+        case E::unsupportedVersion: return tr ("drp.newer");
+        case E::wrongType:          return tr (authorization ? "drp.isPreset" : "drp.isAuth");
+        case E::badPayload:         return tr ("drp.invalid");
+        case E::wrongPlugin:        return tr ("drp.wrongPlugin");
+        case E::unknownKey:         return tr ("drp.unknownKey");
+        case E::badSignature:       return tr ("drp.badSignature");
+        case E::unsupportedRole:    return tr ("drp.role");
+        case E::revoked:            return tr ("drp.revoked");
+        case E::notYetValid:        return tr ("drp.notYet");
+        case E::expired:            return tr ("drp.expired");
+    }
+    return tr ("drp.invalid");
+}
+
+juce::String VSTMTuneEditor::authorizationStatusText() const
+{
+    if (! audio.auth.isAdmin())
+        return {};
+    const auto& a = audio.auth.current();
+    return trf ("auth.active", a.expiresAt == 0 ? tr ("auth.noexpiry")
+                                                : trf ("auth.until", juce::Time ((int64_t) a.expiresAt * 1000).formatted ("%Y-%m-%d")));
+}
+
+void VSTMTuneEditor::importPreset()
+{
+    chooser = std::make_unique<juce::FileChooser> (tr ("Import preset"), juce::File::getSpecialLocation (juce::File::userHomeDirectory),
+                                                   "*.drp;*.vstmpreset");
+    juce::Component::SafePointer<VSTMTuneEditor> safe (this);
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [safe] (const juce::FileChooser& fc)
+                          {
+                              const auto file = fc.getResult();
+                              if (safe == nullptr || file == juce::File())
+                                  return;
+                              juce::String name;
+                              const auto e = safe->audio.presets.importPreset (file, name);
+                              safe->presetBar.refresh();
+                              safe->presetBar.repaint();
+                              juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::NoIcon, tr ("Import preset"),
+                                  e == vstm::drp::Error::none ? trf ("preset.imported", name)
+                                                              : trf ("preset.error", drpErrorText (e, false)),
+                                  tr ("OK"), safe.getComponent());
+                          });
+}
+
+void VSTMTuneEditor::importAuthorization()
+{
+    chooser = std::make_unique<juce::FileChooser> (tr ("Authorization"), juce::File::getSpecialLocation (juce::File::userHomeDirectory), "*.drp");
+    juce::Component::SafePointer<VSTMTuneEditor> safe (this);
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [safe] (const juce::FileChooser& fc)
+                          {
+                              const auto file = fc.getResult();
+                              if (safe == nullptr || file == juce::File())
+                                  return;
+                              const auto e = safe->audio.auth.importFile (file);
+                              juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::NoIcon, tr ("Authorization"),
+                                  e == vstm::drp::Error::none ? tr ("auth.ok") : trf ("auth.error", drpErrorText (e, true)),
+                                  tr ("OK"), safe.getComponent());
+                          });
+}
+
+void VSTMTuneEditor::removeAuthorization()
+{
+    audio.auth.remove();
+    audio.resetExpert();
+    showDeveloperPanel (false);
+    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::NoIcon, tr ("Authorization"), tr ("auth.removed"), tr ("OK"), this);
+}
+
+void VSTMTuneEditor::showDeveloperPanel (bool show)
+{
+    if (! show || ! audio.auth.isAdmin())
+    {
+        if (devPanel != nullptr)
+            devPanel->setVisible (false);
+        return;
+    }
+    if (devPanel == nullptr)
+    {
+        devPanel = std::make_unique<vui::DeveloperPanel> (audio);
+        devPanel->onClose = [this] { showDeveloperPanel (false); };
+        canvas.addChildComponent (*devPanel);
+        devPanel->setBounds (juce::Rectangle<int> (0, 0, 760, 450).withCentre ({ (int) kDesignW / 2, (int) kDesignH / 2 }));
+    }
+    devPanel->update();
+    devPanel->setVisible (true);
+    devPanel->toFront (true);
+}
+

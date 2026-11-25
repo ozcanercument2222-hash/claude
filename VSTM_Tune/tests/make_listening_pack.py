@@ -3,7 +3,7 @@
 itself is the human's job: results are USER-REPORTED).
 
     make_listening_pack.py --plan plan.json --probe-new build/VSTMTune_WavProbe
-                           [--probe-old OLD/VSTMTune_WavProbe] --out DIR [--seed 7]
+                           [--probe-old OLD/VSTMTune_WavProbe] [--probe-exp EXP/VSTMTune_WavProbe] --out DIR [--seed 7]
 
 plan.json:
   {"materials": {"<name>": {"path": "...wav", "range": 1, "category": "...", "license": "...",
@@ -69,11 +69,12 @@ def main():
     ap.add_argument("--plan", required=True)
     ap.add_argument("--probe-new", required=True)
     ap.add_argument("--probe-old")
+    ap.add_argument("--probe-exp", help="a third build (variants with \"probe\": \"exp\"), e.g. an experimental patch")
     ap.add_argument("--out", required=True)
     ap.add_argument("--seed", type=int, default=7)
     a = ap.parse_args()
     plan = json.loads(Path(a.plan).read_text())
-    probes = {"new": a.probe_new, "old": a.probe_old}
+    probes = {"new": a.probe_new, "old": a.probe_old, "exp": a.probe_exp}
     out = Path(a.out)
     (out / "_ANSWER_KEY").mkdir(parents=True, exist_ok=True)
     rng = random.Random(a.seed)

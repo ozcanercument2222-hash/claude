@@ -50,6 +50,7 @@ public:
         decCount = 0;
         wasVoiced = false;
         lastPeriod = 0.0;
+        hopsSinceVoiced = 1 << 20;
         voicedRms = 0.0f;
         voicedRun = 0;
     }
@@ -80,6 +81,26 @@ public:
         }
         r.rms = (float) std::sqrt (energy / n);
 
+        // Newest-aligned only while an established voice continues: at an onset (and for the first
+        // kContinuityMinHops hops) the newest window lies in the new sound while the longer lags reach
+        // back into the gap before it, which favours an octave-up lag (resynthesised corpus: G4 after a
+        // short break read as G5 for 100 ms). There the 1.2 layout is used, as in HQ.
+        aligned = newestAligned && wasVoiced && voicedRun >= kContinuityMinHops;
+
+        // newest-aligned: if the newest ~5 ms are far quieter than the frame (the voice was just cut off
+        // or stopped hard), the newest window mixes voice and silence and its dip is unreliable: this hop
+        // is not voiced (the tracker holds the last pitch over a 1-2 hop gap). The 1.2 layout never read
+        // the newest samples for the voice's own period, so it does not need this.
+        bool endingCut = false;
+        if (aligned)
+        {
+            const int q = kWindow / 4;
+            double eNew = 0.0;
+            for (int i = n - q; i < n; ++i)
+                eNew += (double) frame[(size_t) i] * frame[(size_t) i];
+            endingCut = eNew / q < kCutRatio * (energy / n);
+        }
+
         // difference function + cumulative mean normalised difference
         diff[0] = 0.0f;
         cmnd[0] = 1.0f;
@@ -87,8 +108,11 @@ public:
         for (int tau = 1; tau < tauMax; ++tau)
         {
             double s = 0.0;
-            const float* a = frame.data();
-            const float* b = frame.data() + tau;
+            // newest-aligned (REALTIME, 1.3): every lag compares the newest kWindow samples with those
+            // tau earlier, so the estimate is (kWindow + tau) / 2 old instead of sitting at the middle
+            // of a frame long enough for the longest lag (tenor 220 Hz: 13 ms instead of 22.5 ms)
+            const float* a = frame.data() + (aligned ? tauMax - tau : 0);
+            const float* b = a + tau;
             for (int j = 0; j < kWindow; ++j)
             {
                 const float d = a[j] - b[j];
@@ -137,7 +161,7 @@ public:
         // 208 Hz voice), and the hard-tuned grains peaked up to +9.6 dB over the dry signal there.
         if (shortLagCheck && best >= 2 * tauMin && tauMin <= kSubharmonicMaxLag)
         {
-            const double frameCentre = (double) (kWindow + tauMax) * decim - (kWindow + best) * decim * 0.5;
+            const double frameCentre = centreDelayFor (best);
             for (int k = 4; k >= 2; --k)
             {
                 const double sub = (double) best / k;
@@ -162,17 +186,22 @@ public:
         // Octave choices are judged on the full-rate signal between the lag samples
         // (periodicity()): on the decimated grid a short period reads too shallow (A5 at ~12 kHz:
         // 13.4 samples -> CMND 0.024 at lag 13 but 0.006 at lag 27).
-        if (wasVoiced && lastPeriod > 0.0)
+        // 1.4: the downward guards below also apply when the voice comes back after a short gap
+        // (kReacquireHops): in noise (exact-truth corpus, 5 dB SNR) the voice drops to unvoiced for a
+        // few hops and was then picked up again an octave low, with nothing to compare it to.
+        const bool recentVoice = wasVoiced || hopsSinceVoiced <= kReacquireHops;
+        if (recentVoice && lastPeriod > 0.0)
         {
             const double prevTau = lastPeriod / decim;
             const double ratio = best / prevTau;
-            if (ratio > 1.8 && ratio < 2.2)
+            // YIN dropped an octave (2P) or, 1.4, an octave and a fifth (3P): the previous period
+            // stays while it is still a dip, unless the long lag is overwhelmingly more periodic (a real
+            // downward leap). Real voices often alternate slightly from pulse to pulse, so "somewhat
+            // more periodic" at 2P is no evidence: that would move them an octave down.
+            const int div = ratio > 1.8 && ratio < 2.2 ? 2 : (ratio > 2.7 && ratio < 3.3 ? 3 : 0);
+            if (div != 0)
             {
-                // YIN dropped an octave: the previous octave stays while it is still a dip, unless
-                // the long lag is overwhelmingly more periodic (a real downward leap). Real voices
-                // often alternate slightly from pulse to pulse, so "somewhat more periodic" at 2P
-                // is no evidence: that would move them an octave down.
-                const int alt = localMin ((int) std::lround (best * 0.5));
+                const int alt = localMin ((int) std::lround (best / (double) div));
                 if (alt > 0 && cmnd[(size_t) alt] < kStayVoiced)
                 {
                     const int w = std::clamp ((int) (1.5 * best * decim), 256, 2048);
@@ -182,7 +211,7 @@ public:
                         best = alt;
                 }
             }
-            else if (ratio > 0.45 && ratio < 0.55)
+            else if (wasVoiced && ratio > 0.45 && ratio < 0.55)
             {
                 // YIN went an octave up. A signal with period P is also periodic with 2P, so the
                 // previous (lower) octave is kept only when the signal is clearly more periodic
@@ -226,7 +255,7 @@ public:
         if (wasVoiced && lastPeriod > 0.0 && voicedRun >= kContinuityMinHops)
             continuing = std::abs (12.0 * std::log2 (tauF * decim / lastPeriod)) < kContinuityStep
                       && r.rms > kContinuityLevel * voicedRms;
-        r.voiced = loudEnough && minVal < (wasVoiced ? (continuing ? kStayVoicedContinuing : kStayVoiced) : kBecomeVoiced);
+        r.voiced = loudEnough && ! endingCut && minVal < (wasVoiced ? (continuing ? kStayVoicedContinuing : kStayVoiced) : kBecomeVoiced);
         if (r.voiced)
             voicedRms = voicedRms > 0.0f && wasVoiced ? voicedRms + (r.rms - voicedRms) * 0.05f : r.rms;
         voicedRun = r.voiced ? std::min (voicedRun + 1, 1 << 20) : 0;
@@ -235,10 +264,11 @@ public:
         // frame, so the full-rate refinement must measure the same audio. 1.0 / 1.1 refined on the
         // newest samples (~6 ms back, the frame centre is ~19-26 ms back): in vibrato and at note
         // changes the period was ~17 ms newer than its time stamp (exact-truth corpus, 1.2 report).
-        r.centreDelay = (double) (kWindow + tauMax) * decim - (kWindow + tauF) * decim * 0.5;
+        r.centreDelay = centreDelayFor (tauF);
         r.period = refine (tauF * decim, fullRing, fullMask, endIndex, endIndex - (int64_t) std::llround (r.centreDelay));
 
         wasVoiced = r.voiced;
+        hopsSinceVoiced = r.voiced ? 0 : std::min (hopsSinceVoiced + 1, 1 << 20);
         if (r.voiced)
             lastPeriod = r.period;
         return r;
@@ -246,7 +276,19 @@ public:
 
     double getDecimatedRate() const noexcept { return decRate; }
 
+    /** REALTIME (1.3): align the difference windows to the newest samples (see analyse()). The 1.2
+        layout (false) centres every lag in one frame sized for the longest lag; HQ keeps it. */
+    void setNewestAligned (bool b) noexcept { newestAligned = b; }
+    bool isNewestAligned() const noexcept   { return newestAligned; }
+
 private:
+    /** Full-rate samples between "now" and the centre of the audio a lag of `tau` (decimated) compares. */
+    double centreDelayFor (double tau) const noexcept
+    {
+        return aligned ? (kWindow + tau) * decim * 0.5
+                             : (double) (kWindow + tauMax) * decim - (kWindow + tau) * decim * 0.5;
+    }
+
     static constexpr int kDecRing = 8192;
     static constexpr int kWindow = 256;
     static constexpr float kThreshold = 0.15f;
@@ -254,9 +296,11 @@ private:
     static constexpr float kStayVoiced = 0.34f;
     static constexpr float kStayVoicedContinuing = 0.50f;   // the voice keeps its pitch and level: see analyse()
     static constexpr double kContinuityStep = 2.0;          // semitones
+    static constexpr int kReacquireHops = 36;               // 1.4: a gap this short (~100 ms) keeps the octave reference
     static constexpr float kContinuityLevel = 0.5f;         // rms relative to the recent voiced rms
     static constexpr int kContinuityMinHops = 8;             // voiced hops in a row before the rule applies
     static constexpr float kGate = 0.0015f;       // about -56 dBFS
+    static constexpr double kCutRatio = 0.04;     // newest quarter window 14 dB under the frame: a cut / hard stop
     static constexpr int kRefineLags = 64;        // lags per refine() window (192 kHz: 2 x 18 + 2)
     // Octave thresholds on periodicity() residuals, chosen on real voices (145 recordings: 14
     // VocalSet singers, RAVDESS, a dry rap vocal, a separated stem; 7 variants compared, see
@@ -395,7 +439,10 @@ private:
     int64_t decCount = 0;
     bool wasVoiced = false;
     double lastPeriod = 0.0;
+    int hopsSinceVoiced = 1 << 20;                 // 1.4: hops since the last voiced hop (re-acquisition guard)
     bool shortLagCheck = false;    // setRange(): the short-lag check of analyse() is used in this range
+    bool newestAligned = false;    // setNewestAligned(): REALTIME window layout
+    bool aligned = false;          // this analysis uses the newest-aligned layout (see analyse())
     float voicedRms = 0.0f;             // smoothed rms of the recent voiced frames (~50 hops)
     int voicedRun = 0;                  // voiced hops in a row
 };

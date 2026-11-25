@@ -62,7 +62,8 @@ noktalar nota geçişleri. Kafadaki etiket o an söylenen notayı ve girişin o 
 Ses yokken ekran durur (gereksiz CPU yok).
 
 **Üst bar:** preset seçici (`<` `>` veya isme tıkla: 12 fabrika preseti Robotik / Doğal / Efekt grupları + kendi presetlerin;
-değiştirince isim yanında nokta çıkar; menüde kaydet, **yeniden adlandır**, sil, klasörü aç ve **Presetler ton ve diziyi korur**),
+değiştirince isim yanında nokta çıkar; menüde kaydet, **yeniden adlandır**, sil, klasörü aç, **preset içe aktar** ve
+**Presetler ton ve diziyi korur**; 1.4'ten beri **yetki dosyası içe aktar / kaldır**),
 ⤓ preset kaydet, ▢ pencere boyutu (768 × 512 … 1536 × 1024, köşeden de sürüklenir), ⚙ ayarlar (vokal aralığı:
 Soprano / Alto, Tenor, Bas / Bariton; tüm parametreleri sıfırla; hakkında).
 
@@ -129,8 +130,25 @@ ROBOTISM ayarların üstünde çalışan bir makrodur; parametrelerin **değerin
 
 Ara değerler iki yarıda da sürekli ve monotondur (tablo: `VSTM_TUNE_AUDIT.md` 17.4).
 
-Kullanıcı presetleri: `<kullanıcı veri klasörü>/VSTM Audio/VSTM Tune/Presets/*.vstmpreset`
+Kullanıcı presetleri: `<kullanıcı veri klasörü>/VSTM Audio/VSTM Tune/Presets/*.drp`
 (Windows: `%APPDATA%`, macOS: `~/Library`, Linux: `~/.config`).
+
+- **`.drp` (1.4):** sürümlü, doğrulanan, sıkıştırılmış ikili biçim (`docs/1.4.0/VSTM_Tune_1.4.0_DRP_Format.md`). Bozuk ya da
+  başka bir eklentinin dosyası yüklenmez, hiçbir şeyi değiştirmez.
+- **Eski presetler:** 1.0–1.3 `*.vstmpreset` dosyaları okunmaya devam eder; yeniden adlandırılınca `.drp` olur.
+- **1.3 ve öncesi** `.drp` okuyamaz.
+
+## Admin yetkisi ve geliştirici paneli (1.4)
+
+- **Nasıl açılır:** Preset menüsü → **Yetki dosyası içe aktar…** ile imzalı bir yetki dosyası (`.drp`, Ed25519) yüklenince,
+  ⚙ menüsünde **Geliştirici paneli** görünür.
+- **Panelde:**
+  - canlı tanılama: giriş / çıkış perdesi, hedef nota, algılayıcı kesinliği, analiz ve eklenti gecikmesi;
+  - uzman motor anahtarları: varsayılan açık, kaydedilmez.
+- **Kapsam:** Yetki yalnız bu eklentinin içinde geçerli; işletim sistemine, DAW'a ya da dosya sistemine hiçbir yetki vermez.
+- **Doğrulama:** Eklentide yalnız açık anahtar var. Dosya açılışta ve dakikada bir yeniden doğrulanır. Preset menüsü →
+  **Yetkiyi kaldır** ile silinir.
+- **Ayrıntı:** `docs/1.4.0/VSTM_Tune_1.4.0_Authorization.md`. Dosya verme aracı: `tools/drp_auth.py`.
 
 ## Nasıl çalışır
 

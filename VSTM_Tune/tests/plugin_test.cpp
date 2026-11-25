@@ -12,6 +12,9 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "Parameters.h"
+#include "Drp.h"
+#include "Authorization.h"
+#include "third_party/monocypher/monocypher-ed25519.h"
 
 #include <cstdio>
 
@@ -127,6 +130,44 @@ double measureHz (const std::vector<float>& x, int start, int length, double exp
     const double a = r[(size_t) best - 1], b = r[(size_t) best], c = r[(size_t) best + 1];
     const double den = a - 2 * b + c;
     return kFs / (best + (std::abs (den) > 1e-12 ? 0.5 * (a - c) / den : 0.0));
+}
+
+//------------------------------------------------------------------------------ 1.4 test keys (never a real key)
+struct TestKey
+{
+    uint8_t secret[64] {};
+    uint8_t pub[32] {};
+    vstm::AuthorizationManager::TrustedKey trusted {};
+    explicit TestKey (int seedValue)
+    {
+        uint8_t seed[32];
+        juce::Random r (seedValue);
+        for (auto& b : seed) b = (uint8_t) r.nextInt (256);
+        crypto_ed25519_key_pair (secret, pub, seed);            // wipes the seed
+        std::memcpy (trusted.publicKey.data(), pub, 32);
+        trusted.id = vstm::AuthorizationManager::keyIdFor (pub);
+    }
+};
+
+juce::MemoryBlock signAuth (const vstm::Authorization& a, const TestKey& k)
+{
+    auto mb = vstm::AuthorizationManager::buildSignedPart (a);
+    uint8_t sig[64];
+    crypto_ed25519_sign (sig, k.secret, static_cast<const uint8_t*> (mb.getData()), mb.getSize());
+    mb.append (sig, 64);
+    return mb;
+}
+
+vstm::Authorization adminAuth (const TestKey& k, uint32_t serial = 1)
+{
+    vstm::Authorization a;
+    a.role = vstm::Authorization::Role::admin;
+    a.entitlements = vstm::AuthorizationManager::kAllEntitlements;
+    a.issuedAt = 1'780'000'000;
+    a.serial = serial;
+    a.keyId = k.trusted.id;
+    a.label = "test admin";
+    return a;
 }
 
 void setParam (juce::AudioProcessor& p, const juce::String& id, float plainValue)
@@ -249,6 +290,11 @@ int main (int argc, char* argv[])
     // the checks below are written against the English texts; section 1b covers the other languages
     using vstm::i18n::Lang;
     vstm::i18n::setCurrent (Lang::english);
+
+    // 1.4: authorization storage in a throw-away folder (never the user's real authorization file)
+    const auto authFolder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("VSTMTune_PluginTest_Auth");
+    authFolder.deleteRecursively();
+    vstm::AuthorizationManager::setStorageFolderOverride (authFolder);
 
     //--------------------------------------------------------------------------
     std::printf ("\n=== 1) Parameters ===\n");
@@ -855,10 +901,18 @@ int main (int argc, char* argv[])
             if (pm.getPresetName (i) == "Renamed One") renamedIdx = i;
         const bool refusedUser = ! pm.renameUserPreset (renamedIdx, "C range");
         const bool refusedFactory = ! pm.renameUserPreset (renamedIdx, "Hard Tune");
-        CHECK (renamed && renamedIdx >= 0 && pm.getCurrentName() == "Renamed One" && folder.getChildFile ("Renamed One.vstmpreset").existsAsFile()
-                   && ! folder.getChildFile ("Test Save.vstmpreset").exists() && refusedUser && refusedFactory
-                   && juce::XmlDocument::parse (folder.getChildFile ("Renamed One.vstmpreset"))->getStringAttribute ("name") == "Renamed One",
-               "rename a user preset (file, name inside, shown name); an existing name or a factory name is refused");
+        // 1.4: user presets are .drp files; the name inside is read back from the binary file
+        juce::String nameInside;
+        {
+            juce::MemoryBlock mb;
+            vstm::drp::PresetData pd;
+            if (vstm::drp::readFile (folder.getChildFile ("Renamed One.drp"), mb) == vstm::drp::Error::none
+                && vstm::drp::readPreset (mb.getData(), mb.getSize(), pd) == vstm::drp::Error::none)
+                nameInside = pd.name;
+        }
+        CHECK (renamed && renamedIdx >= 0 && pm.getCurrentName() == "Renamed One" && folder.getChildFile ("Renamed One.drp").existsAsFile()
+                   && ! folder.getChildFile ("Test Save.drp").exists() && refusedUser && refusedFactory && nameInside == "Renamed One",
+               "rename a user preset (.drp file, name inside, shown name); an existing name or a factory name is refused");
         saved = renamedIdx;
 
         // a user preset still stores its key and scale: they load only with "presets keep key and scale" off
@@ -879,10 +933,320 @@ int main (int argc, char* argv[])
         pm.deleteUserPreset (songIdx);
         CHECK (keptAuto && loadedD, "the preset file keeps D Dorian: not applied while presets keep the key, applied when that is off (1.0 behaviour)");
 
-        CHECK (pm.deleteUserPreset (saved) && ! folder.getChildFile ("Renamed One.vstmpreset").exists(), "delete it");
+        CHECK (pm.deleteUserPreset (saved) && ! folder.getChildFile ("Renamed One.drp").exists(), "delete it");
 
         vstm::PresetManager::setUserPresetFolderOverride ({});
         folder.deleteRecursively();
+    }
+
+
+    //--------------------------------------------------------------------------
+    std::printf ("\n=== 3h) .drp preset files (1.4) ===\n");
+    {
+        using namespace vstm::drp;
+        const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("VSTMTune_PluginTest_Drp");
+        folder.deleteRecursively();
+        folder.createDirectory();
+        vstm::PresetManager::setUserPresetFolderOverride (folder);
+
+        VSTMTuneProcessor p;
+        auto& pm = p.presets;
+        pm.setKeepTonal (false);
+        juce::Random rnd (1404);
+        auto randomise = [&]
+        {
+            for (auto* prm : p.getParameters())
+                if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (prm))
+                    if (vstm::PresetManager::isPresetParameter (rp->paramID))
+                        rp->setValueNotifyingHost (rp->convertTo0to1 (rp->convertFrom0to1 (rnd.nextFloat())));   // snapped to legal values
+        };
+        auto snapshot = [&]
+        {
+            std::vector<float> v;
+            for (auto* prm : p.getParameters())
+                if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (prm))
+                    if (vstm::PresetManager::isPresetParameter (rp->paramID))
+                        v.push_back (rp->getValue());
+            return v;
+        };
+        randomise();
+        const auto before = snapshot();
+        CHECK (pm.saveUserPreset ("Round Trip"), "save a preset (.drp)");
+        const auto file = folder.getChildFile ("Round Trip.drp");
+        juce::MemoryBlock good;
+        readFile (file, good);
+        const auto text = juce::String::fromUTF8 ((const char*) good.getData(), (int) good.getSize());
+        bool readable = false;
+        for (const auto* id : { "robotism", "humanize", "retune", "correction", "transpose", "formant", "Round Trip" })
+            readable = readable || text.contains (id);
+        CHECK (file.existsAsFile() && ! folder.getChildFile ("Round Trip.vstmpreset").exists() && good.getSize() > 20
+                   && std::memcmp (good.getData(), "VSTMDRP\x1a", 8) == 0 && ! readable,
+               "the file is .drp, starts with the magic and shows no parameter names or values as text (%d bytes)", (int) good.getSize());
+        randomise();
+        int idx = -1;
+        for (int i = 0; i < pm.getNumPresets(); ++i)
+            if (pm.getPresetName (i) == "Round Trip") idx = i;
+        pm.loadPreset (idx);
+        const auto after = snapshot();
+        float worst = 0.0f;
+        for (size_t i = 0; i < before.size(); ++i)
+            worst = std::max (worst, std::abs (before[i] - after[i]));
+        CHECK (idx >= 0 && before.size() == after.size() && worst < 1.0e-6f,
+               "every preset parameter comes back (%d parameters, largest normalised difference %.2g)", (int) before.size(), (double) worst);
+
+        // 1.0 - 1.3 presets still load; a .drp of the same name wins in the list
+        folder.getChildFile ("Legacy.vstmpreset").replaceWithText ("<VSTMTunePreset name=\"Legacy\" version=\"1\"><PARAM id=\"robotism\" value=\"33\"/></VSTMTunePreset>");
+        folder.getChildFile ("Round Trip.vstmpreset").replaceWithText ("<VSTMTunePreset name=\"Round Trip\" version=\"1\"><PARAM id=\"robotism\" value=\"1\"/></VSTMTunePreset>");
+        pm.refreshUserPresets();
+        int legacy = -1, roundTrips = 0;
+        for (int i = 0; i < pm.getNumPresets(); ++i)
+        {
+            if (pm.getPresetName (i) == "Legacy") legacy = i;
+            if (pm.getPresetName (i) == "Round Trip") ++roundTrips;
+        }
+        pm.loadPreset (legacy);
+        CHECK (legacy >= 0 && std::abs (plain (p, vstm::ids::robotism) - 33.0f) < 1.0e-3f && roundTrips == 1,
+               "a 1.0 - 1.3 .vstmpreset still loads; the .drp of the same name is listed once");
+        const bool migrated = pm.renameUserPreset (legacy, "Legacy Renamed");
+        CHECK (migrated && folder.getChildFile ("Legacy Renamed.drp").existsAsFile() && ! folder.getChildFile ("Legacy.vstmpreset").exists(),
+               "renaming an old preset stores it as .drp");
+
+        // import: a copy under a free name, never overwriting
+        const auto outside = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("VSTMTune_PluginTest_Outside");
+        outside.deleteRecursively();
+        outside.createDirectory();
+        const auto ext = outside.getChildFile ("Shared.drp");
+        ext.replaceWithData (good.getData(), good.getSize());
+        juce::String n1, n2, n3;
+        const auto i1 = pm.importPreset (ext, n1);
+        const auto i2 = pm.importPreset (ext, n2);
+        CHECK (i1 == Error::none && i2 == Error::none && n1 == "Round Trip (2)" && n2 == "Round Trip (3)"
+                   && folder.getChildFile ("Round Trip (2).drp").existsAsFile() && folder.getChildFile ("Round Trip.drp").getSize() == (int64_t) good.getSize(),
+               "import copies under a free name, never over an existing preset (%s, %s)", n1.toRawUTF8(), n2.toRawUTF8());
+        const auto oldFmt = outside.getChildFile ("Old One.vstmpreset");
+        oldFmt.replaceWithText ("<VSTMTunePreset name=\"Old One\" version=\"1\"><PARAM id=\"humanize\" value=\"42\"/></VSTMTunePreset>");
+        const auto i3 = pm.importPreset (oldFmt, n3);
+        CHECK (i3 == Error::none && folder.getChildFile ("Old One.drp").existsAsFile() && std::abs (plain (p, vstm::ids::humanize) - 42.0f) < 1.0e-3f,
+               "an old .vstmpreset imports as .drp and loads");
+
+        // damaged files: every truncation, every single-byte change, random data
+        PresetData pd;
+        int acceptedTrunc = 0, acceptedFlip = 0, acceptedRandom = 0;
+        for (size_t n = 0; n < good.getSize(); ++n)
+            acceptedTrunc += readPreset (good.getData(), n, pd) == Error::none;
+        for (size_t i = 0; i < good.getSize(); ++i)
+        {
+            juce::MemoryBlock m (good);
+            static_cast<uint8_t*> (m.getData())[i] ^= 0x5a;
+            acceptedFlip += readPreset (m.getData(), m.getSize(), pd) == Error::none;
+        }
+        for (int t = 0; t < 2000; ++t)
+        {
+            juce::MemoryBlock m ((size_t) rnd.nextInt (400));
+            for (size_t i = 0; i < m.getSize(); ++i) static_cast<uint8_t*> (m.getData())[i] = (uint8_t) rnd.nextInt (256);
+            if (m.getSize() >= 8 && t % 2 == 0) std::memcpy (m.getData(), "VSTMDRP\x1a", 8);    // half of them with the magic
+            acceptedRandom += readPreset (m.getData(), m.getSize(), pd) == Error::none;
+        }
+        CHECK (acceptedTrunc == 0 && acceptedFlip == 0 && acceptedRandom == 0,
+               "rejected: %d truncations, %d single-byte changes, 2000 random files (accepted %d / %d / %d)",
+               (int) good.getSize(), (int) good.getSize(), acceptedTrunc, acceptedFlip, acceptedRandom);
+
+        // a gzip bomb with a correct header, a foreign plug-in, bad ids, nan values
+        auto makeFile = [] (const juce::MemoryBlock& raw)
+        {
+            juce::MemoryBlock payload;
+            {
+                juce::MemoryOutputStream mo (payload, false);
+                juce::GZIPCompressorOutputStream gz (mo, 9, juce::GZIPCompressorOutputStream::windowBitsGZIP);
+                gz.write (raw.getData(), raw.getSize());
+            }
+            juce::MemoryBlock f;
+            writeHeader (f, FileType::preset, payload);
+            f.append (payload.getData(), payload.getSize());
+            return f;
+        };
+        juce::MemoryBlock zeros (2 * 1024 * 1024, true);
+        const auto bomb = makeFile (zeros);
+        juce::MemoryBlock foreignRaw;
+        { Writer w { foreignRaw }; w.u32 (0x41424344); w.u32 (kPluginCode); w.u16 (2); w.u16 (0); w.u16 (0); }
+        juce::MemoryBlock badIdRaw;
+        { Writer w { badIdRaw }; w.u32 (kManufacturerCode); w.u32 (kPluginCode); w.u16 (2); w.u16 (0); w.u16 (1); w.u8 (8); w.bytes ("Robotism", 8); w.u32 (0); }
+        CHECK (bomb.getSize() < 8192 && readPreset (bomb.getData(), bomb.getSize(), pd) == Error::badPayload
+                   && readPreset (makeFile (foreignRaw).getData(), makeFile (foreignRaw).getSize(), pd) == Error::wrongPlugin
+                   && readPreset (makeFile (badIdRaw).getData(), makeFile (badIdRaw).getSize(), pd) == Error::badPayload,
+               "refused: a %d-byte file that expands to 2 MB, another plug-in's file, an invalid parameter id", (int) bomb.getSize());
+        PresetData nanPreset;
+        nanPreset.name = "Nan";
+        nanPreset.values = { { "robotism", std::numeric_limits<float>::quiet_NaN() }, { "mix", std::numeric_limits<float>::infinity() },
+                             { "humanize", 1.0e9f }, { "unknown_id", 5.0f }, { "retune", 30.0f } };
+        const auto nanFile = writePreset (nanPreset);
+        outside.getChildFile ("Nan.drp").replaceWithData (nanFile.getData(), nanFile.getSize());
+        juce::String n4;
+        const auto i4 = pm.importPreset (outside.getChildFile ("Nan.drp"), n4);
+        CHECK (i4 == Error::none && paramsAndAudioFinite (p) && std::abs (plain (p, vstm::ids::retune) - 30.0f) < 1.0e-3f
+                   && std::abs (plain (p, vstm::ids::humanize) - 100.0f) < 1.0e-3f,
+               "nan / inf / huge / unknown values: defaults, clamped or ignored; valid values load; audio stays finite");
+
+        // an authorization file is not a preset
+        TestKey k (7);
+        const auto authFile = signAuth (adminAuth (k), k);
+        outside.getChildFile ("Admin.drp").replaceWithData (authFile.getData(), authFile.getSize());
+        const int countBefore = pm.getNumPresets();
+        juce::String n5;
+        CHECK (pm.importPreset (outside.getChildFile ("Admin.drp"), n5) == Error::wrongType && pm.getNumPresets() == countBefore,
+               "an authorization file is refused by the preset import and nothing is written");
+        juce::MemoryBlock huge ((size_t) kMaxFileSize + 10, true);
+        outside.getChildFile ("Huge.drp").replaceWithData (huge.getData(), huge.getSize());
+        juce::MemoryBlock tmp;
+        CHECK (readFile (outside.getChildFile ("Huge.drp"), tmp) == Error::tooLarge, "a file larger than %d bytes is not read", kMaxFileSize);
+
+        vstm::PresetManager::setUserPresetFolderOverride ({});
+        folder.deleteRecursively();
+        outside.deleteRecursively();
+    }
+
+    //--------------------------------------------------------------------------
+    std::printf ("\n=== 3i) Authorization files (1.4) ===\n");
+    {
+        using namespace vstm::drp;
+        using vstm::AuthorizationManager;
+        using vstm::Authorization;
+        const TestKey kA (11), kB (12);
+        AuthorizationManager am;                                   // storage: the test folder (main)
+        am.setTrustedKeysForTesting ({ kA.trusted });
+        int64_t now = 1'800'000'000;
+        am.setClockForTesting ([&now] { return now; });
+        am.remove();
+
+        const auto valid = signAuth (adminAuth (kA), kA);
+        Authorization a;
+        CHECK (am.verify (valid.getData(), valid.getSize(), a) == Error::none && a.role == Authorization::Role::admin && a.label == "test admin",
+               "a valid admin file signed by a trusted key verifies (%d bytes)", (int) valid.getSize());
+        CHECK (! am.isAdmin() && am.importData (valid.getData(), valid.getSize()) == Error::none && am.isAdmin()
+                   && AuthorizationManager::getStoredFile().existsAsFile(),
+               "import: authorized, stored");
+        {
+            juce::MemoryBlock stored;
+            AuthorizationManager::getStoredFile().loadFileAsData (stored);
+            AuthorizationManager again;
+            again.setTrustedKeysForTesting ({ kA.trusted });
+            again.setClockForTesting ([&now] { return now; });
+            again.refresh();
+            CHECK (stored == valid && again.isAdmin(), "the stored copy is byte for byte the imported file and verifies again in a new instance");
+        }
+
+        int accepted = 0, flips = 0;
+        for (size_t i = 0; i < valid.getSize(); ++i)
+            for (int bit = 0; bit < 8; ++bit, ++flips)
+            {
+                juce::MemoryBlock m (valid);
+                static_cast<uint8_t*> (m.getData())[i] ^= (uint8_t) (1u << bit);
+                accepted += am.verify (m.getData(), m.getSize(), a) == Error::none;
+            }
+        int acceptedTrunc = 0;
+        for (size_t n = 0; n < valid.getSize(); ++n)
+            acceptedTrunc += am.verify (valid.getData(), n, a) == Error::none;
+        CHECK (accepted == 0 && acceptedTrunc == 0, "every single-bit change (%d bits of %d bytes) and every truncation (%d) is rejected",
+               flips, (int) valid.getSize(), (int) valid.getSize());
+
+        auto with = [&] (std::function<void (Authorization&)> change, const TestKey& signer)
+        {
+            auto x = adminAuth (kA);
+            change (x);
+            return signAuth (x, signer);
+        };
+        auto check = [&] (const juce::MemoryBlock& f) { return am.verify (f.getData(), f.getSize(), a); };
+        juce::MemoryBlock unsignedFile (valid);
+        std::memset (static_cast<uint8_t*> (unsignedFile.getData()) + unsignedFile.getSize() - 64, 0, 64);
+        const auto otherKey = with ([&] (Authorization& x) { x.keyId = kB.trusted.id; }, kB);
+        const auto forged = with ([] (Authorization&) {}, kB);              // claims key A, signed by B
+        const auto user = with ([] (Authorization& x) { x.role = Authorization::Role::none; }, kA);
+        const auto partial = with ([] (Authorization& x) { x.entitlements = 1; }, kA);
+        const auto expired = with ([&] (Authorization& x) { x.expiresAt = now - 1; }, kA);
+        const auto future = with ([&] (Authorization& x) { x.notBefore = now + 3600; }, kA);
+        const auto revoked = with ([] (Authorization& x) { x.serial = 77; }, kA);
+        am.setRevokedSerialsForTesting ({ 77 });
+        juce::MemoryBlock wrongPlugin;
+        {
+            juce::MemoryBlock signedPart = AuthorizationManager::buildSignedPart (adminAuth (kA));
+            static_cast<uint8_t*> (signedPart.getData())[kHeaderSize + 4] ^= 0xff;    // plug-in code
+            juce::MemoryBlock payload (static_cast<uint8_t*> (signedPart.getData()) + kHeaderSize, signedPart.getSize() - kHeaderSize);
+            writeHeader (wrongPlugin, FileType::authorization, payload);
+            wrongPlugin.append (payload.getData(), payload.getSize());
+            uint8_t sig[64];
+            crypto_ed25519_sign (sig, kA.secret, static_cast<const uint8_t*> (wrongPlugin.getData()), wrongPlugin.getSize());
+            wrongPlugin.append (sig, 64);
+        }
+        PresetData pd;
+        pd.name = "x";
+        const auto presetFile = writePreset (pd);
+        CHECK (check (unsignedFile) == Error::badSignature && check (otherKey) == Error::unknownKey && check (forged) == Error::badSignature
+                   && check (user) == Error::unsupportedRole && check (partial) == Error::unsupportedRole && check (expired) == Error::expired
+                   && check (future) == Error::notYetValid && check (revoked) == Error::revoked && check (wrongPlugin) == Error::wrongPlugin
+                   && check (presetFile) == Error::wrongType,
+               "refused: unsigned, untrusted key, forged signature, unknown role, partial rights, expired, not yet valid, revoked, "
+               "another plug-in, a preset");
+        CHECK (am.importData (forged.getData(), forged.getSize()) == Error::badSignature && am.isAdmin(),
+               "a rejected import changes nothing (the valid authorization stays)");
+
+        // the stored copy is checked again: tampering on disk and expiry end the authorization
+        {
+            AuthorizationManager timed;
+            timed.setTrustedKeysForTesting ({ kA.trusted });
+            timed.setClockForTesting ([&now] { return now; });
+            const auto shortLived = with ([&] (Authorization& x) { x.expiresAt = now + 100; }, kA);
+            const bool okNow = timed.importData (shortLived.getData(), shortLived.getSize()) == Error::none && timed.isAdmin();
+            now += 200;
+            timed.refresh();
+            const bool endedByTime = ! timed.isAdmin() && timed.storedStatus() == Error::expired;
+            now -= 200;
+            timed.importData (valid.getData(), valid.getSize());
+            juce::MemoryBlock onDisk;
+            AuthorizationManager::getStoredFile().loadFileAsData (onDisk);
+            static_cast<uint8_t*> (onDisk.getData())[30] ^= 0x10;
+            AuthorizationManager::getStoredFile().replaceWithData (onDisk.getData(), onDisk.getSize());
+            timed.refresh();
+            const bool endedByChange = ! timed.isAdmin();
+            CHECK (okNow && endedByTime && endedByChange, "the stored copy stops working when it expires or is changed on disk");
+            timed.importData (valid.getData(), valid.getSize());
+            CHECK (timed.remove() && ! timed.isAdmin() && ! AuthorizationManager::getStoredFile().exists(), "remove: the stored file is deleted");
+        }
+
+        // the build's own key: consistent id, and a file from any other key is not accepted
+        {
+            AuthorizationManager real;
+            CHECK (real.verify (valid.getData(), valid.getSize(), a) == Error::unknownKey && ! real.isAdmin(),
+                   "the shipped build trusts only its own public key (a test key is refused)");
+            if (const char* path = std::getenv ("VSTM_TEST_AUTH_FILE"))
+            {
+                juce::MemoryBlock mb;
+                const auto er = readFile (juce::File (path), mb);
+                const auto ev = er == Error::none ? real.verify (mb.getData(), mb.getSize(), a) : er;
+                CHECK (ev == Error::none && a.role == Authorization::Role::admin,
+                       "VSTM_TEST_AUTH_FILE (issued with tools/drp_auth.py): %s, key %s", toString (ev),
+                       juce::String::toHexString (a.keyId.data(), 8, 0).toRawUTF8());
+            }
+        }
+
+        // the expert switches follow the authorization
+        {
+            VSTMTuneProcessor p;
+            p.auth.setTrustedKeysForTesting ({ kA.trusted });
+            p.auth.remove();
+            const bool lockedOut = ! p.setExpert (VSTMTuneProcessor::Expert::peakGuard, false) && p.getExpert (VSTMTuneProcessor::Expert::peakGuard);
+            p.auth.importData (valid.getData(), valid.getSize());
+            const bool admin = p.setExpert (VSTMTuneProcessor::Expert::peakGuard, false) && ! p.getExpert (VSTMTuneProcessor::Expert::peakGuard);
+            juce::MemoryBlock state;
+            p.getStateInformation (state);
+            VSTMTuneProcessor q;
+            q.setStateInformation (state.getData(), (int) state.getSize());
+            const bool notSaved = q.getExpert (VSTMTuneProcessor::Expert::peakGuard);
+            p.auth.remove();
+            p.resetExpert();
+            CHECK (lockedOut && admin && notSaved && p.getExpert (VSTMTuneProcessor::Expert::peakGuard),
+                   "expert switches: refused without authorization, work with it, are not saved in the session, reset when it ends");
+        }
+        am.remove();
     }
 
     //--------------------------------------------------------------------------
@@ -1081,6 +1445,29 @@ int main (int argc, char* argv[])
             setParam (p, vstm::ids::scale, (float) vstm::kMajor);
             pump (80);
 
+            // 1.4: the developer panel opens only with a valid admin authorization
+            ed->closeScaleEditor();
+            {
+                const TestKey k (21);
+                p.auth.setTrustedKeysForTesting ({ k.trusted });
+                p.auth.remove();
+                ed->showDeveloperPanel (true);
+                const bool hiddenWithout = ! ed->isDeveloperPanelShown();
+                const auto file = signAuth (adminAuth (k), k);
+                p.auth.importData (file.getData(), file.getSize());
+                ed->showDeveloperPanel (true);
+                processSeconds (p, melody, 1.0);
+                pump (120);
+                const bool shownWith = ed->isDeveloperPanelShown();
+                savePng (*ed, shotDir.getChildFile ("09_developer_panel.png"), 1.0f);
+                p.auth.remove();
+                p.resetExpert();
+                ed->showDeveloperPanel (false);
+                pump (40);
+                CHECK (hiddenWithout && shownWith && ! ed->isDeveloperPanelShown(),
+                       "developer panel: not shown without authorization, shown with an admin authorization (09_developer_panel.png)");
+            }
+
             // the editor in every UI language (07_lang_tr.png, ...)
             for (int l = 0; l < vstm::i18n::kNumLangs; ++l)
             {
@@ -1153,6 +1540,7 @@ int main (int argc, char* argv[])
         }
     }
 
+    authFolder.deleteRecursively();
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASSED" : "FAILED", failures, failures == 1 ? "" : "s");
     return failures == 0 ? 0 : 1;
 }

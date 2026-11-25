@@ -6,7 +6,7 @@ if(APPLE)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
 endif()
 
-project(VSTMTune VERSION 1.2.0 LANGUAGES C CXX)
+project(VSTMTune VERSION 1.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -93,6 +93,11 @@ set(VSTM_PLUGIN_SOURCES
     Source/Lang.h
     Source/PresetManager.cpp
     Source/PresetManager.h
+    Source/Drp.cpp
+    Source/Drp.h
+    Source/Authorization.cpp
+    Source/Authorization.h
+    Source/ui/DeveloperPanel.h
     Source/ui/Theme.h
     Source/ui/Icons.h
     Source/ui/Controls.h
@@ -107,6 +112,14 @@ set(VSTM_DSP_HEADERS
     Source/dsp/KeyDetector.h
     Source/dsp/PitchCorrector.h
     Source/dsp/TuneEngine.h)
+
+# Ed25519 signature verification for authorization files (Monocypher 4.0.2, vendored, unmodified;
+# Source/third_party/monocypher/README.md). A plain C library: kept out of the JUCE warning flags.
+add_library(vstm_monocypher STATIC
+    Source/third_party/monocypher/monocypher.c
+    Source/third_party/monocypher/monocypher-ed25519.c)
+target_include_directories(vstm_monocypher PUBLIC Source/third_party/monocypher)
+set_target_properties(vstm_monocypher PROPERTIES POSITION_INDEPENDENT_CODE ON C_STANDARD 99)
 
 target_sources(VSTMTune PRIVATE ${VSTM_PLUGIN_SOURCES} ${VSTM_DSP_HEADERS})
 target_include_directories(VSTMTune PRIVATE Source)
@@ -124,6 +137,7 @@ target_compile_options(VSTMTune PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 target_link_libraries(VSTMTune
     PRIVATE
         VSTMTuneAssets
+        vstm_monocypher
         juce::juce_audio_utils
     PUBLIC
         juce::juce_recommended_config_flags
@@ -185,6 +199,7 @@ if(VSTM_BUILD_TESTS)
     target_compile_options(VSTMTune_PluginTest PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
     target_link_libraries(VSTMTune_PluginTest
         PRIVATE
+            vstm_monocypher
             VSTMTuneAssets
             juce::juce_audio_utils
         PUBLIC

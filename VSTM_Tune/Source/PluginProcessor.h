@@ -2,6 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "dsp/TuneEngine.h"
 #include "PresetManager.h"
+#include "Authorization.h"
 
 class VSTMTuneProcessor : public juce::AudioProcessor,
                           private juce::AudioProcessorValueTreeState::Listener
@@ -39,6 +40,8 @@ public:
     juce::AudioProcessorValueTreeState apvts;
     vstm::PresetManager presets { apvts };
     vstm::TuneEngine engine;
+    /** 1.4: signed admin authorization (Authorization.h). Message thread only. */
+    vstm::AuthorizationManager auth;
 
     /** Editor size, as a fraction of the 1536 x 1024 design canvas. Saved with the session. */
     std::atomic<float> uiScale { 0.75f };
@@ -55,6 +58,16 @@ public:
     bool getFollowKeyChanges() const noexcept           { return followKeyChanges.load(); }
     /** Loading a preset keeps Key, Scale and the custom scale (default on). */
     void setPresetsKeepKey (bool keep);
+
+    //---------------------------------------------------------------- admin (1.4)
+    /** Expert engine switches of the developer panel. They only change while an admin authorization is
+        valid, are never saved (session, preset) and are all on (= normal behaviour) otherwise. */
+    enum class Expert { peakGuard = 0, backdateSwitch, freshAnalysis, swingKeep, count };
+    /** Message thread. Ignored (false) without a valid admin authorization. */
+    bool setExpert (Expert e, bool on);
+    bool getExpert (Expert e) const noexcept       { return expert[(int) e].load (std::memory_order_relaxed); }
+    /** All expert switches back on (called when the authorization goes away). */
+    void resetExpert() noexcept;
 
     /** 1: VSTM Tune 1.0. 2: adds autoKeyLock, autoKeyConf, followKeyChanges, presetsKeepKey. */
     static constexpr int kStateVersion = 2;
@@ -78,6 +91,7 @@ private:
     RawParam pScaleNote[12];
 
     double currentRate = 44100.0;
+    std::atomic<bool> expert[(int) Expert::count] { true, true, true, true };
     std::atomic<bool> followKeyChanges { false };
 
     void notifyStateChanged();

@@ -4,6 +4,7 @@
 #include "ui/RobotKnob.h"
 #include "ui/PitchDisplay.h"
 #include "ui/ScaleEditor.h"
+#include "ui/DeveloperPanel.h"
 
 //==============================================================================
 /** Preset pill: < name >. Click the name for the full list, Save / Delete. */
@@ -16,6 +17,10 @@ public:
     std::function<void()> onRenameRequest;
     /** "Presets keep key and scale" was toggled (the owner saves it and tells the host). */
     std::function<void (bool)> onKeepKeyChanged;
+    /** 1.4: import a .drp / .vstmpreset preset; import, remove an authorization file. */
+    std::function<void()> onImportPreset, onImportAuthorization, onRemoveAuthorization;
+    /** Empty unless an admin authorization is valid; then the status line shown in the menu. */
+    std::function<juce::String()> authorizationStatus;
 
     void refresh()
     {
@@ -92,6 +97,11 @@ public:
     /** The status line of the Auto key menu (tests: it must state the same confidence the engine holds). */
     juce::String autoKeyMenuStatus() const;
     bool isKeyHintShown() const noexcept { return keyHint.isShown(); }
+    /** 1.4 developer panel (admin only). */
+    void showDeveloperPanel (bool show);
+    bool isDeveloperPanelShown() const noexcept { return devPanel != nullptr && devPanel->isVisible(); }
+    /** Text for a rejected .drp file (translated); `authorization` selects the wrong-type wording. */
+    static juce::String drpErrorText (vstm::drp::Error e, bool authorization);
 
 private:
     void timerCallback() override;
@@ -105,6 +115,10 @@ private:
     void setCustomScale (bool on);
     void askPresetName();
     void showHostMenu (juce::RangedAudioParameter& p);
+    void importPreset();
+    void importAuthorization();
+    void removeAuthorization();
+    juce::String authorizationStatusText() const;
     juce::RangedAudioParameter& param (const juce::String& id) { return *audio.apvts.getParameter (id); }
 
     VSTMTuneProcessor& audio;
@@ -135,6 +149,9 @@ private:
     std::unique_ptr<juce::CallOutBox> scaleCallout;
     std::unique_ptr<juce::Label> infoContent;
     std::unique_ptr<juce::CallOutBox> infoCallout;
+    std::unique_ptr<juce::FileChooser> chooser;            // must live while its async dialog is open
+    std::unique_ptr<vui::DeveloperPanel> devPanel;
+    int authCheckTicks = 0;
     // ids of the Auto key items in the KEY menu (after the 13 choices)
     enum { kLockNow = vui::DropSelector::kExtraItem + 11, kUseSuggestion, kReanalyze, kFollow };
 

@@ -1417,6 +1417,18 @@ int main()
         check (tOn < tOff - 2.0 && tOn - tIn < 8.0,
                "backdated switch, HQ: output changes note " + std::to_string (tOn - tIn) + " ms after the input does (without backdating "
                    + std::to_string (tOff - tIn) + " ms)");
+
+        // REALTIME fresh analysis (1.3): the detector reads the newest samples, so the hard-tune output
+        // changes note sooner; HQ never uses it (bit for bit the same with the flag off)
+        const auto rtFresh = render (step, true, hard);
+        const auto rtOld = render (step, true, [&] (TuneEngine::Params& p) { hard (p); p.freshAnalysis = false; });
+        const auto hqNoFresh = render (step, false, [&] (TuneEngine::Params& p) { hard (p); p.freshAnalysis = false; });
+        const int latRT = TuneEngine::latencyFor (sr, true);
+        const double tFresh = switchTime (rtFresh, latRT), tOld = switchTime (rtOld, latRT);
+        check (tFresh < tOld - 4.0,
+               "REALTIME fresh analysis: output changes note " + std::to_string (tFresh - tIn) + " ms after the input (1.2 window layout: "
+                   + std::to_string (tOld - tIn) + " ms)");
+        check (hqNoFresh == hqOn, "REALTIME fresh analysis: HQ output unchanged (bit for bit)");
     }
 
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASSED" : "FAILED", failures, failures == 1 ? "" : "s");

@@ -68,6 +68,8 @@ public:
         bool  followKeyChanges = false; // Auto key: opt-in modulation tracking after the lock (off = the lock stays)
         bool  peakGuard = true;         // output safety limiter (internal, not a plug-in parameter; tests switch it off)
         bool  backdateSwitch = true;    // hard tune: backdate confirmed note switches (internal; tests switch it off)
+        bool  freshAnalysis = true;     // REALTIME: newest-aligned detector windows (internal; tests switch it off)
+        bool  swingKeep = true;         // human side: keep the retune speed across a switch in a vibrato swing (internal)
     };
 
     struct DisplayPoint
@@ -104,6 +106,7 @@ public:
         marks.assign ((size_t) kMarkRing, Mark {});
 
         detector.prepare (sr, decim);
+        detector.setNewestAligned (realtime && params.freshAnalysis);
         const double fc = 0.30 * sr / decim;
         aa1.setLowpass (sr, fc, 0.5412);
         aa2.setLowpass (sr, fc, 1.3066);
@@ -136,6 +139,7 @@ public:
         if (shouldBeRealtime == realtime)
             return;
         realtime = shouldBeRealtime;
+        detector.setNewestAligned (realtime && params.freshAnalysis);   // analysis ~10 ms fresher in REALTIME (1.3)
         latency = latencyFor (sr, realtime);
         const int64_t tNow = nIn - accLatency;                  // the next output sample on the synthesis axis
         const double dNow = contentOffset ((double) tNow);
@@ -256,6 +260,7 @@ public:
         p.transpose    = keep (p.transpose,    params.transpose,    -24.0f,   24.0f);
         p.mix          = keep (p.mix,          params.mix,            0.0f,    1.0f);
         p.customMask = (uint16_t) (p.customMask & 0x0fff);
+        detector.setNewestAligned (realtime && p.freshAnalysis);
         if (p.key < -1 || p.key > 11) p.key = -1;
         p.scale = std::clamp (p.scale, 0, (int) kNumScales - 1);
         p.range = std::clamp (p.range, 0, 2);
@@ -414,6 +419,8 @@ public:
     std::atomic<bool>  currentVoiced { false };
     std::atomic<float> currentInMidi { 0.0f };
     std::atomic<float> currentOutMidi { 0.0f };
+    std::atomic<float> currentClarity { 0.0f };    // 1.4 developer panel: detector certainty 0..1
+    std::atomic<float> currentDelayMs { 0.0f };    // 1.4 developer panel: analysis delay of the last hop
 
     /** Adaptive's view of the performance (tests, display). Audio thread only. */
     const PitchCorrector::AdaptiveState& getAdaptiveState() const noexcept { return corrector.getAdaptiveState(); }
@@ -632,6 +639,7 @@ private:
         cs.vibratoScale = params.vibratoScale;
         cs.transpose = params.transpose;
         cs.adaptive = params.adaptive;
+        cs.swingKeep = params.swingKeep;
         if (mask == 0x0fff || mask == 0)         { cs.key = 0; cs.mask = 0x0fff; }    // every note allowed
         else if (params.key >= 0)                { cs.key = params.key; cs.mask = mask; }
         else if (autoKey >= 0)                   { cs.key = autoKey;    cs.mask = mask; }
@@ -639,8 +647,16 @@ private:
 
         const auto o = corrector.process (r.voiced, inMidi, (float) dt, cs, r.clarity);
 
+        // the history must stay in time order: after REALTIME -> HQ the analysis is centred further
+        // back than the last REALTIME records, so those (now "in the future") are dropped
+        const double recTime = (double) nIn - r.centreDelay;
+        while (recCount > 0 && recs[(size_t) ((recWrite - 1 + kRecRing) % kRecRing)].time >= recTime)
+        {
+            recWrite = (recWrite - 1 + kRecRing) % kRecRing;
+            --recCount;
+        }
         Rec& rec = recs[(size_t) recWrite];
-        rec.time = (double) nIn - r.centreDelay;
+        rec.time = recTime;
         rec.inMidi = inMidi;
         rec.outMidi = o.outMidi;
         rec.pass = o.passThrough;
@@ -669,6 +685,8 @@ private:
         currentVoiced.store (r.voiced);
         currentInMidi.store (inMidi);
         currentOutMidi.store (o.outMidi);
+        currentClarity.store (r.clarity, std::memory_order_relaxed);
+        currentDelayMs.store ((float) (1000.0 * r.centreDelay / sr), std::memory_order_relaxed);
         currentNote.store (dp.note);
 
         curVoiced = r.voiced;

@@ -157,6 +157,8 @@ int main (int argc, char** argv)
         else if (k == "follow")    p.followKeyChanges = v != 0.0;
         else if (k == "guard")     p.peakGuard = v != 0.0;
         else if (k == "backdate")  p.backdateSwitch = v != 0.0;
+        else if (k == "fresh")     p.freshAnalysis = v != 0.0;
+        else if (k == "swingkeep") p.swingKeep = v != 0.0;
         else if (k == "lock")      lockKey = (int) v;
         else if (k == "realtime")  realtime = v != 0.0;
         else if (k == "block")     block = std::max (1, (int) v);

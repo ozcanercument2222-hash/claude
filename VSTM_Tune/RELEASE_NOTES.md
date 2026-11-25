@@ -1,5 +1,29 @@
 # VSTM Tune – sürüm notları
 
+## 1.4.0 (aday, 25.11.2026) – yayımlanmadı
+
+**Dinleme yapılmadı, DAW'da denenmedi, Windows / macOS derlemesi yapılmadı.** Ayrıntılar `docs/1.4.0/`:
+
+- değişiklik günlüğü,
+- kalite raporu,
+- `.drp` biçimi,
+- yetki tasarımı,
+- yayın kontrol listesi.
+
+1.3.0 aday 3'ün üzerine kuruldu. 1.3 değişiklikleri `docs/1.3.0/` altında.
+
+- **Yeni:**
+  - `.drp` preset biçimi (sürümlü, doğrulanan, ikili); preset içe aktarma.
+  - Ed25519 imzalı admin yetki dosyası: geliştirici paneli ve uzman motor anahtarları.
+- **Ses:** algılayıcının oktav-aşağı koruması, kısa bir boşluktan sonra da ve 3 kat periyotta çalışıyor.
+  - Toplamda oktav / kaba hata azaldı.
+  - Gerçek kayıtlarda dosya başına sonuç karışık: REALTIME'da 8 iyileşen, 7 kötüleşen.
+- **Uyumluluk:**
+  - Eklenti ve parametre kimlikleri, oturum biçimi (2) ve gecikmeler aynı.
+  - `.vstmpreset` okunuyor.
+  - 1.3, 1.4'ün `.drp` presetlerini okuyamaz.
+- **Testler:** EngineTest 78 / 78, PluginTest 97 / 97, pluginval seviye 10 SUCCESS (Linux).
+
 ## 1.2.0 (24.11.2026) – Kalite / güvenilirlik sürümü
 
 **Dinleme yapılmadı, DAW'da denenmedi.** Ses ifadeleri ölçüm (MEASURED) veya kod incelemesine (INSPECTED) dayanır.

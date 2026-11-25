@@ -73,7 +73,11 @@ void PresetManager::refreshUserPresets()
     const auto folder = getUserPresetFolder();
     if (folder.isDirectory())
     {
-        userFiles = folder.findChildFiles (juce::File::findFiles, false, "*.vstmpreset");
+        auto files = folder.findChildFiles (juce::File::findFiles, false, juce::String ("*") + kExtension);
+        for (const auto& f : folder.findChildFiles (juce::File::findFiles, false, juce::String ("*") + kLegacyExtension))
+            if (! f.withFileExtension (kExtension).existsAsFile())     // the .drp of the same name is newer
+                files.add (f);
+        userFiles = files;
         std::sort (userFiles.begin(), userFiles.end(),
                    [] (const juce::File& a, const juce::File& b) { return a.getFileNameWithoutExtension().compareNatural (b.getFileNameWithoutExtension()) < 0; });
     }
@@ -134,14 +138,11 @@ void PresetManager::loadPreset (int index)
         if (u < 0 || u >= userFiles.size())
             return;
 
-        if (auto xml = juce::XmlDocument::parse (userFiles[u]))
-        {
-            std::vector<Entry> values;
-            for (auto* e : xml->getChildWithTagNameIterator ("PARAM"))
-                values.push_back ({ e->getStringAttribute ("id"), (float) e->getDoubleAttribute ("value") });
-            applyValues (values, ! keepTonal);
-            currentName = userFiles[u].getFileNameWithoutExtension();
-        }
+        std::vector<Entry> values;
+        if (readPresetFile (userFiles[u], values) != drp::Error::none)
+            return;                                              // damaged or foreign: nothing changes
+        applyValues (values, ! keepTonal);
+        currentName = userFiles[u].getFileNameWithoutExtension();
     }
     apvts.state.setProperty ("presetName", currentName, nullptr);
     takeSnapshot();
@@ -182,20 +183,8 @@ bool PresetManager::saveUserPreset (const juce::String& rawName)
     if (! folder.createDirectory())
         return false;
 
-    juce::XmlElement xml ("VSTMTunePreset");
-    xml.setAttribute ("name", name);
-    xml.setAttribute ("version", 1);
-    for (auto* p : apvts.processor.getParameters())
-        if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
-            if (isPresetParameter (rp->paramID))
-            {
-                auto* e = xml.createNewChildElement ("PARAM");
-                e->setAttribute ("id", rp->paramID);
-                e->setAttribute ("value", (double) rp->convertFrom0to1 (rp->getValue()));
-            }
-
-    const auto file = folder.getChildFile (name + ".vstmpreset");
-    if (! xml.writeTo (file))
+    const auto file = folder.getChildFile (name + kExtension);
+    if (writeAtomically (file, currentAsDrp (name)) != drp::Error::none)
         return false;
 
     refreshUserPresets();
@@ -223,32 +212,28 @@ bool PresetManager::renameUserPreset (int index, const juce::String& rawName)
         return false;
 
     const auto from = userFiles[u];
-    const auto to = from.getSiblingFile (name + ".vstmpreset");
-    const bool sameFile = to == from;                       // JUCE compares as the file system does (case)
-    if (to.exists() && ! sameFile)
-        return false;                                       // never overwrite another preset by renaming
+    const auto to = from.getSiblingFile (name + kExtension);
+    const auto toLegacy = from.getSiblingFile (name + kLegacyExtension);
+    const bool sameFile = to == from || toLegacy == from;   // JUCE compares as the file system does (case)
+    if (! sameFile && (to.exists() || toLegacy.exists()))
+        return false;                                       // never overwrite or hide another preset by renaming
     for (int i = 0; i < getNumFactoryPresets(); ++i)
         if (factory[(size_t) i].name.equalsIgnoreCase (name))
             return false;                                   // would be hidden behind a factory name
 
-    auto xml = juce::XmlDocument::parse (from);
-    if (xml == nullptr)
+    std::vector<Entry> values;
+    if (readPresetFile (from, values) != drp::Error::none)
         return false;
-    xml->setAttribute ("name", name);
+    drp::PresetData data;
+    data.name = name;
+    for (const auto& e : values)
+        data.values.emplace_back (e.id, e.value);
+    const auto dest = from.getSiblingFile (name + kExtension);
     // write the new file first, then remove the old one: a failed write loses nothing
-    if (sameFile)
-    {
-        if (! xml->writeTo (from))
-            return false;
-        if (from.getFileName() != to.getFileName() && ! from.moveFileTo (to))
-            return false;                                   // only the letter case changed
-    }
-    else
-    {
-        if (! xml->writeTo (to))
-            return false;
-        from.deleteFile();
-    }
+    if (writeAtomically (dest, drp::writePreset (data)) != drp::Error::none)
+        return false;
+    if (dest != from)
+        from.deleteFile();                                  // includes a 1.0 - 1.3 .vstmpreset: renamed = migrated
 
     const bool wasCurrent = currentName == from.getFileNameWithoutExtension();
     refreshUserPresets();
@@ -282,5 +267,108 @@ void PresetManager::restoreCurrent (const juce::String& name)
     currentName = name.isNotEmpty() ? name : juce::String ("Default Preset");
     refreshUserPresets();
     takeSnapshot();
+}
+
+//------------------------------------------------------------------------------ .drp (1.4)
+juce::MemoryBlock PresetManager::currentAsDrp (const juce::String& name) const
+{
+    drp::PresetData data;
+    data.name = name;
+    for (auto* p : apvts.processor.getParameters())
+        if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
+            if (isPresetParameter (rp->paramID))
+                data.values.emplace_back (rp->paramID, rp->convertFrom0to1 (rp->getValue()));
+    return drp::writePreset (data);
+}
+
+drp::Error PresetManager::writeAtomically (const juce::File& file, const juce::MemoryBlock& data)
+{
+    const auto tmp = file.getSiblingFile (file.getFileName() + ".tmp");
+    if (! tmp.replaceWithData (data.getData(), data.getSize()) || ! tmp.moveFileTo (file))
+    {
+        tmp.deleteFile();
+        return drp::Error::cannotRead;
+    }
+    return drp::Error::none;
+}
+
+drp::Error PresetManager::readPresetFile (const juce::File& file, std::vector<Entry>& values, juce::String* storedName)
+{
+    values.clear();
+    if (file.hasFileExtension (kLegacyExtension))
+    {
+        // 1.0 - 1.3 XML preset. Size-limited before parsing; unknown ids and damaged numbers are ignored
+        // (the caller applies defaults); a file that is not this XML is refused.
+        if (! file.existsAsFile() || file.getSize() > 1024 * 1024)
+            return drp::Error::tooLarge;
+        auto xml = juce::XmlDocument::parse (file);
+        if (xml == nullptr || ! xml->hasTagName ("VSTMTunePreset"))
+            return drp::Error::badPayload;
+        for (auto* e : xml->getChildWithTagNameIterator ("PARAM"))
+            values.push_back ({ e->getStringAttribute ("id"), (float) e->getDoubleAttribute ("value") });
+        if (storedName != nullptr)
+            *storedName = xml->getStringAttribute ("name");
+        return drp::Error::none;
+    }
+
+    juce::MemoryBlock mb;
+    if (const auto e = drp::readFile (file, mb); e != drp::Error::none)
+        return e;
+    drp::PresetData data;
+    if (const auto e = drp::readPreset (mb.getData(), mb.getSize(), data); e != drp::Error::none)
+        return e;
+    for (const auto& [id, v] : data.values)
+        values.push_back ({ id, v });
+    if (storedName != nullptr)
+        *storedName = data.name;
+    return drp::Error::none;
+}
+
+juce::String PresetManager::freeUserName (const juce::String& wanted) const
+{
+    auto base = juce::File::createLegalFileName (wanted.trim());
+    if (base.isEmpty())
+        base = "Imported Preset";
+    const auto folder = getUserPresetFolder();
+    auto taken = [&] (const juce::String& n)
+    {
+        for (const auto& f : factory)
+            if (f.name.equalsIgnoreCase (n))
+                return true;
+        return folder.getChildFile (n + kExtension).exists() || folder.getChildFile (n + kLegacyExtension).exists();
+    };
+    if (! taken (base))
+        return base;
+    for (int i = 2; i < 1000; ++i)
+        if (const auto n = base + " (" + juce::String (i) + ")"; ! taken (n))
+            return n;
+    return {};
+}
+
+drp::Error PresetManager::importPreset (const juce::File& file, juce::String& importedName)
+{
+    std::vector<Entry> values;
+    juce::String stored;
+    if (const auto e = readPresetFile (file, values, &stored); e != drp::Error::none)
+        return e;                                              // nothing is written for a rejected file
+
+    const auto name = freeUserName (stored.isNotEmpty() ? stored : file.getFileNameWithoutExtension());
+    auto folder = getUserPresetFolder();
+    if (name.isEmpty() || ! folder.createDirectory())
+        return drp::Error::cannotRead;
+
+    drp::PresetData data;
+    data.name = name;
+    for (const auto& e : values)
+        data.values.emplace_back (e.id, e.value);
+    if (const auto e = writeAtomically (folder.getChildFile (name + kExtension), drp::writePreset (data)); e != drp::Error::none)
+        return e;
+
+    refreshUserPresets();
+    for (int i = getNumFactoryPresets(); i < getNumPresets(); ++i)
+        if (getPresetName (i) == name)
+            loadPreset (i);
+    importedName = name;
+    return drp::Error::none;
 }
 } // namespace vstm

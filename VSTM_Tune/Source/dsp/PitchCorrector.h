@@ -37,6 +37,7 @@ struct CorrectorSettings
     float    vibratoScale = 1.0f;   // 0..2, depth of natural pitch modulation
     float    transpose = 0.0f;      // semitones
     bool     adaptive = false;      // Adaptive: follows the performance within fixed limits (see below)
+    bool     swingKeep = true;      // 1.3: a switch inside a vibrato swing keeps the retune speed (internal switch)
 };
 
 class PitchCorrector
@@ -68,6 +69,8 @@ public:
         pendingAge = 0.0f;
         midHops = 0;
         midCandidate = kNoNote;
+        swingSide = 0;
+        swingAge[0] = swingAge[1] = swingAge[2] = kLongAgo;
         delta = 0.0f;
         glideProgress = 1.0f;
         forcedGlideMs = 0.0f;
@@ -110,6 +113,9 @@ public:
         if (! wasVoiced)
         {
             centre = inMidi;
+            centre2 = inMidi;
+            swingSide = 0;
+            swingAge[0] = swingAge[1] = swingAge[2] = kLongAgo;
             onsetAge = 0.0f;
             delta = 0.0f;
             note = kNoNote;
@@ -121,8 +127,23 @@ public:
                 adapt.restart (inMidi);
         }
         const float centreBefore = centre;
-        centre += (inMidi - centre) * (1.0f - std::exp (-dt * 2.0f * (float) kPi * 3.0f));
+        const float centreCoef = 1.0f - std::exp (-dt * 2.0f * (float) kPi * 3.0f);
+        centre += (inMidi - centre) * centreCoef;
+        centre2 += (centre - centre2) * centreCoef;     // 2-pole: a 5.5 Hz vibrato is ~13 dB down
         const float shaped = centre + s.vibratoScale * (inMidi - centre);
+
+        // vibrato swing tracker (used at a note switch below): which side of its vibrato-free centre the
+        // voice is on, and how long ago it last changed sides (the three most recent changes)
+        for (float& a : swingAge)
+            a = std::min (a + dt, kLongAgo);
+        const int side = shaped > centre2 + kSwingSt ? 1 : (shaped < centre2 - kSwingSt ? -1 : 0);
+        if (side != 0 && side != swingSide)
+        {
+            swingAge[2] = swingAge[1];
+            swingAge[1] = swingAge[0];
+            swingAge[0] = 0.0f;
+            swingSide = side;
+        }
         if (s.adaptive)
             adapt.observe (inMidi, centre, centreBefore, clarity, noteAge, dt, adaptState);
 
@@ -173,15 +194,27 @@ public:
             // two neighbouring notes stays >= 40 ct from both, so the dwell still stops note chatter, while
             // a sung step no longer waits for it (with the correctly timed detector of 1.2 the dwell
             // made every semitone step switch 14 - 52 ms after the singer did; 1.2 report, P0-E)
-            const bool arrived = (std::abs (shaped - (float) note) >= 1.5f
-                                  && std::abs (shaped - (float) candidate) <= 0.5f)
-                              || std::abs (shaped - (float) candidate) <= kArriveNear;
+            const bool leap = std::abs (shaped - (float) note) >= 1.5f
+                           && std::abs (shaped - (float) candidate) <= 0.5f;
+            const bool arrived = leap || std::abs (shaped - (float) candidate) <= kArriveNear;
             const float dwellMs = arrived ? 0.0f : 22.0f + 30.0f * human - 8.0f * robot;
             if (pendingAge * 1000.0f >= dwellMs)
             {
+                // Vibrato (1.3, human side). A vibrato wide enough to come near the neighbouring note makes
+                // the target switch to it and back on every cycle (VocalSet vibrato: 9 - 26 switches per second
+                // on held notes, at every ROBOTISM setting). Each switch restarted the note's retune speed
+                // (the slow "sustained" retune of humanize), so the correction followed the vibrato and
+                // flattened it: at 80 % only 42 % of the vibrato was left. While the voice is swinging around
+                // its centre (three side changes within kSwingWindowS), a switch keeps the retune speed of the
+                // held note instead. The switch itself (which note, when) and the glide are unchanged, so the
+                // number of note switches is the same; leaps restart as before. Faded in over the first 15 %
+                // of `human`: 50 % and the robotic side are unchanged.
+                const float keep = ! s.swingKeep || leap || swingAge[2] >= kSwingWindowS ? 0.0f : smoothstep (0.0f, 0.15f, human);
+                const float keptAge = noteAge * keep;
                 out.fromNote = note;
                 out.backdateHops = std::max (0, midHops - 1);
                 startTransition (candidate);
+                noteAge = keptAge;
                 out.noteChanged = true;
             }
         }
@@ -269,6 +302,9 @@ public:
 private:
     static constexpr int kNoNote = -1000;
     static constexpr float kArriveNear = 0.30f;      // semitones from the new note: arrived, no dwell
+    static constexpr float kSwingSt = 0.25f;         // vibrato swing: beyond this from the vibrato-free centre
+    static constexpr float kSwingWindowS = 0.40f;    // three side changes within this = the voice is swinging
+    static constexpr float kLongAgo = 10.0f;
     static constexpr float kInstantTauMs = 3.0f;     // retune time constant below which the output follows the target in ~1 hop
     // A key / scale change (the user's, or the Auto Key lock) moves a held note to the new target over at
     // least this long, also on the robotic side (1.0 / 1.1: an instant jump there; 1.2, P0-E)
@@ -344,6 +380,9 @@ private:
     float centre = 0.0f, delta = 0.0f;
     float glideFrom = 0.0f, glide = 0.0f, glideProgress = 1.0f, forcedGlideMs = 0.0f;
     float noteAge = 0.0f, onsetAge = 0.0f;
+    float centre2 = 0.0f;                  // 2-pole vibrato-free centre (swing tracker)
+    int swingSide = 0;
+    float swingAge[3] = { kLongAgo, kLongAgo, kLongAgo };
     bool settledFlag = true;
     Adapt adapt;
     AdaptiveState adaptState;
