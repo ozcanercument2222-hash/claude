@@ -56,6 +56,7 @@ VSTMTuneProcessor::VSTMTuneProcessor()
 
     presets.readableSaves = [this] { return savesReadablePresets(); };   // 1.6 readable .drp (authorized only)
     apvts.addParameterListener (ids::realtime, this);
+    apvts.addParameterListener (ids::range, this);
     apvts.addParameterListener (ids::autoCharacter, this);
     apvts.state.setProperty ("presetName", presets.getCurrentName(), nullptr);
 
@@ -66,6 +67,7 @@ VSTMTuneProcessor::VSTMTuneProcessor()
 VSTMTuneProcessor::~VSTMTuneProcessor()
 {
     apvts.removeParameterListener (ids::realtime, this);
+    apvts.removeParameterListener (ids::range, this);
     apvts.removeParameterListener (ids::autoCharacter, this);
 }
 
@@ -187,8 +189,11 @@ void VSTMTuneProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 void VSTMTuneProcessor::parameterChanged (const juce::String& id, float newValue)
 {
     // The latency mode is not automatable, so this arrives from the UI or a state restore.
+    // 1.7: the REALTIME latency depends on the vocal range (not automatable either)
     if (id == ids::realtime)
-        setLatencySamples (TuneEngine::latencyFor (currentRate, newValue > 0.5f));
+        setLatencySamples (TuneEngine::latencyFor (currentRate, newValue > 0.5f, juce::jlimit (0, 2, juce::roundToInt (pRange.get()))));
+    if (id == ids::range)
+        setLatencySamples (TuneEngine::latencyFor (currentRate, pRealtime.get() > 0.5f, juce::jlimit (0, 2, juce::roundToInt (newValue))));
     // 1.6: Auto Character switched off by the host (automation) or the UI: the auto values become the manual ones,
     // unless a session or a preset is setting every value anyway (its own manual values must win)
     if (id == ids::autoCharacter && newValue < 0.5f && ! restoringState.load() && ! presets.isApplying())

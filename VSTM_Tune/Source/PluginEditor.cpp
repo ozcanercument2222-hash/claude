@@ -456,7 +456,7 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
     waveButton.setTooltip (tr ("Show the raw input pitch in the display"));
     waveButton.onClick = [this] { display.showInput = ! display.showInput; waveButton.lit = display.showInput; waveButton.repaint(); display.repaint(); };
     autotuneToggle.setTooltip (tr ("Turn the tuning on / off (follows the host's bypass)."));
-    realtimeToggle.setTooltip (tr ("REALTIME on: low latency (20 ms) for tracking and live use.\nOff: high quality (40 ms), better for deep voices; the host compensates the delay."));
+    realtimeToggle.setTooltip (tr ("REALTIME on: low latency for tracking and live use (Soprano / Alto 13 ms, Tenor / Mid 15 ms, Bass / Baritone 17 ms).\nOff: high quality (40 ms), better for deep voices; the host compensates the delay."));
 
     // window size: fixed aspect, 768..1536 wide
     const float s = juce::jlimit (0.5f, 1.0f, audio.uiScale.load());

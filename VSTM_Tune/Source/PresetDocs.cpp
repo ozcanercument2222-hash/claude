@@ -2,6 +2,11 @@
 #include "Parameters.h"
 #include "dsp/Scales.h"
 
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
 #ifndef VSTM_TUNE_VERSION
  #define VSTM_TUNE_VERSION "unknown"
 #endif
@@ -13,6 +18,28 @@ namespace
 using drp::text::formatNumber;
 
 juce::String num (float v) { return formatNumber (v); }
+
+/** The value the parameter holds, as the shortest plain decimal that loads back to exactly that value (the same
+    32-bit float after the parameter's own conversion and snapping, PresetManager::applyValues). JUCE snaps a stepped
+    value as start + interval * n; where the compiler fuses that into one multiply-add (Apple silicon), the default
+    0 of a -50 .. 50 range in 0.1 steps is held as 7.4505806e-07 and -5.8 as -5.7999997 (MEASURED, a build with
+    fused multiply-add). Written as "0" and "-5.8" they load back to those very values there, and to the same
+    values as before everywhere else, so presets read the same on every platform. */
+float heldValue (const juce::RangedAudioParameter& p, float v)
+{
+    const auto held = [&p] (float x) { return p.convertFrom0to1 (p.convertTo0to1 (x)); };
+    const float target = held (v);
+    char buf[64];
+    for (int d = 0; d <= 9 && std::isfinite (v); ++d)
+    {
+        std::snprintf (buf, sizeof (buf), "%.*f", d, (double) v);
+        const float c = std::strtof (buf, nullptr);
+        const float h = held (c);
+        if (std::memcmp (&h, &target, sizeof (float)) == 0)
+            return c;
+    }
+    return v;
+}
 
 template <size_t N>
 juce::String table (const float (&t)[N], const char* unit)
@@ -113,7 +140,7 @@ juce::StringArray describeRange (juce::RangedAudioParameter& p)
     {
         const auto& r = p.getNormalisableRange();
         auto line = "Range " + num (r.start) + " .. " + num (r.end) + (p.getLabel().isNotEmpty() ? " " + p.getLabel() : juce::String())
-                  + ", step " + num (r.interval) + ", default " + num (def) + ".";
+                  + ", step " + num (r.interval) + ", default " + num (heldValue (p, def)) + ".";
         if (std::abs (r.skew - 1.0f) > 1.0e-6f)
             line << " (The control is skewed: skew factor " << num (r.skew) << "; the value here is the real value.)";
         s.add (line);
@@ -185,6 +212,7 @@ drp::text::Document describePreset (const juce::String& name, const std::vector<
         line.value = v;
         if (auto* p = apvts.getParameter (id))
         {
+            line.value = heldValue (*p, v);
             line.comment.add (p->getName (64) + " (" + id + ")");
             line.comment.addArray (purpose (id));
             line.comment.addArray (describeRange (*p));

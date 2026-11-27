@@ -41,7 +41,10 @@
   - Okurken BOM ve CRLF de kabul ediliyor; dosya başka bir editörde kaydedilse de açılıyor.
   - Bu bilinçli bir karar. Windows'ta gerçek Not Defteri testi **yapılmadı**.
 - **Yapı:** INI benzeri. `#` (ve `;`) ile başlayan satırlar yorumdur ve okunmaz. Yeni bir bağımlılık eklenmedi.
-- **Değerler:** parametrenin kendi biriminde, geri okununca **aynı 32 bit float'ı veren en kısa sade ondalıkla** yazılıyor (`80`, `75.3`, `0.35`). Kayıt → yükleme → kayıt bayt bayt aynı (test edildi).
+- **Değerler:** parametrenin kendi biriminde, eklentiye geri yüklenince **parametrenin tuttuğu aynı 32 bit float'ı veren en kısa sade ondalıkla** yazılıyor (`80`, `75.3`, `0.35`). Kayıt → yükleme → kayıt bayt bayt aynı (test edildi).
+  - Apple Silicon'da JUCE'nin adım yuvarlaması (`start + interval * n`, tek bir çarp-topla komutu) küçük kalıntı bırakıyor: varsayılan 0 → `7.4505806e-07`, -5.8 → `-5.7999997`. Bunlar da `0` ve `-5.8` olarak yazılıyor ve aynı değere geri yükleniyor.
+  - 1.6.0'ın ilk macOS CI çalışmasında (commit `de666e8`) PluginTest 3j bu yüzden düştü. FMA'lı yerel bir derlemede yeniden üretildi ve düzeltildi: Linux ve FMA'lı derlemenin yazdığı dosya artık bayt bayt aynı (MEASURED). Gerçek macOS'ta yeniden çalıştırılmadı.
+  - 1e-12'ye kadar küçük değerler de üslü değil, sade ve tam ondalıkla yazılıyor.
 - **Bölümler:**
   - `[Preset]`: `format = VSTM-DRP-TEXT`, `format_version = 2`, `plugin`, `plugin_version`, `state_version`, `name`.
   - `[Parameters]`: `kimlik = değer`.
@@ -137,7 +140,8 @@ Okunabilir kayıt yalnızca şu durumda yapılıyor: yetki aktif (admin) **ve** 
 | İçe aktarmada aralık dışı değerin sıkıştırılması | ✅ |
 | Eski ikili presetlerin yüklenmesi; yeniden adlandırmada biçim korunuyor; seçenek kapalıyken ikili kayıt | ✅ |
 | Oturum durumu ayrı | ✅ |
-| PluginTest'in tamamı (eski 3h `.drp` ve 3i yetki testleri dahil) | ✅ 104/104 |
+| Kayan nokta kalıntısı kısa yazılıyor ve aynı değere yükleniyor; 1e-12 .. 0.1 sade ve tam (2000 değer) | ✅ |
+| PluginTest'in tamamı (eski 3h `.drp` ve 3i yetki testleri dahil), Linux ve FMA'lı derleme | ✅ 105/105 |
 | EngineTest | ✅ hepsi |
 | pluginval seviye 10 | ✅ SUCCESS |
 

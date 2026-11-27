@@ -75,7 +75,7 @@ public:
     Result analyse (const float* fullRing, int fullMask, int64_t endIndex) noexcept
     {
         Result r;
-        const int n = kWindow + tauMax;
+        const int n = diffWindow + tauMax;
         if (decCount < n)
             return r;
 
@@ -102,7 +102,7 @@ public:
         bool endingCut = false;
         if (aligned)
         {
-            const int q = kWindow / 4;
+            const int q = diffWindow / 4;
             double eNew = 0.0;
             for (int i = n - q; i < n; ++i)
                 eNew += (double) frame[(size_t) i] * frame[(size_t) i];
@@ -121,7 +121,7 @@ public:
             // of a frame long enough for the longest lag (tenor 220 Hz: 13 ms instead of 22.5 ms)
             const float* a = frame.data() + (aligned ? tauMax - tau : 0);
             const float* b = a + tau;
-            for (int j = 0; j < kWindow; ++j)
+            for (int j = 0; j < diffWindow; ++j)
             {
                 const float d = a[j] - b[j];
                 s += (double) d * d;
@@ -190,6 +190,18 @@ public:
             }
         }
 
+        // 1.7: a voice that starts, or comes back after a gap, has no octave to compare with, and there YIN
+        // tends to take a harmonic's period: the frame reaches back into the gap or consonant before the note,
+        // which raises the difference at the long lags (MEASURED, 145 resynthesised recordings, 1.6 REALTIME:
+        // all 92 octave errors that reached the output were UP; 59 % began with the voice, mostly after a gap
+        // under 100 ms, 35 % at a note change; +19 st, the 3rd harmonic, 37 runs; +12 st 29 runs). Twice and
+        // three times the lag are checked on the newest full-rate samples with the octave rule's own test: a
+        // longer period wins only where it is clearly more periodic. The voicing keeps YIN's own dip, so a
+        // voice starts exactly when it did before; only its octave can change.
+        const int yinBest = best;
+        if (! wasVoiced)
+            best = longerPeriod (best, 2, 5, endIndex, fullRing, fullMask);
+
         // continuity: guard against octave jumps relative to the previous voiced period.
         // Octave choices are judged on the full-rate signal between the lag samples
         // (periodicity()): on the decimated grid a short period reads too shallow (A5 at ~12 kHz:
@@ -237,9 +249,23 @@ public:
                         best = alt;
                 }
             }
+            else if (wasVoiced && ratio > 0.38 && ratio < 0.63)
+            {
+                // 1.7: an octave up at a note change reads 8 - 17 st over the previous note (the rule above
+                // only takes 11 - 13 st): the same test for twice the lag
+                best = longerPeriod (best, 2, 2, endIndex, fullRing, fullMask);
+            }
+            else if (wasVoiced && ratio < 0.37)
+            {
+                // 1.7: the 3rd, 4th or 5th harmonic (+19, +24, +28 st)
+                const int k = (int) std::lround (1.0 / ratio);
+                if (k >= 3 && k <= 5 && std::abs (k * ratio - 1.0) < 0.1)
+                    best = longerPeriod (best, k, k, endIndex, fullRing, fullMask);
+            }
         }
 
-        const float minVal = cmnd[(size_t) best];
+        const float minVal = best != yinBest && ! wasVoiced ? std::min (cmnd[(size_t) best], cmnd[(size_t) yinBest])
+                                                            : cmnd[(size_t) best];
         double tauF = best;
         if (best > 1 && best < tauMax - 1)
         {
@@ -287,14 +313,19 @@ public:
     /** REALTIME (1.3): align the difference windows to the newest samples (see analyse()). The 1.2
         layout (false) centres every lag in one frame sized for the longest lag; HQ keeps it. */
     void setNewestAligned (bool b) noexcept { newestAligned = b; }
+
+    /** 1.7 experiments: the difference window in decimated samples (256 = every earlier version). A shorter
+        one makes the estimate fresher by half the difference; YIN sees fewer periods of a low voice. */
+    void setWindow (int w) noexcept { diffWindow = std::clamp (w, 64, kWindow); }
+    int getWindow() const noexcept  { return diffWindow; }
     bool isNewestAligned() const noexcept   { return newestAligned; }
 
 private:
     /** Full-rate samples between "now" and the centre of the audio a lag of `tau` (decimated) compares. */
     double centreDelayFor (double tau) const noexcept
     {
-        return aligned ? (kWindow + tau) * decim * 0.5
-                             : (double) (kWindow + tauMax) * decim - (kWindow + tau) * decim * 0.5;
+        return aligned ? (diffWindow + tau) * decim * 0.5
+                             : (double) (diffWindow + tauMax) * decim - (diffWindow + tau) * decim * 0.5;
     }
 
     static constexpr int kDecRing = 8192;
@@ -363,6 +394,27 @@ private:
                 v = std::clamp (v - (a - c) * (a - c) / (8.0 * den), 0.0, v);
         }
         return v;
+    }
+
+    /** 1.7: the period behind `best` when `best` was a harmonic's: the lags near `best` times kFrom ... kTo
+        (decimated) are tried shortest first, and one is taken only when it is clearly more periodic than the lag
+        taken so far (each pair measured on the same newest full-rate samples); `best` when none is. A real
+        period P is just as periodic at 2P and 3P, so this only moves a lag that was a harmonic's period, and it
+        goes to 2P only by the octave rule's own test against P. */
+    int longerPeriod (int best, int kFrom, int kTo, int64_t endIndex, const float* x, int mask) const noexcept
+    {
+        int pick = best;
+        for (int k = kFrom; k <= kTo; ++k)
+        {
+            const int alt = localMin ((int) std::lround (best * (double) k));
+            if (alt < 0 || alt <= pick)
+                continue;
+            const int w = std::clamp ((int) (1.5 * alt * decim), winMin, winMax);
+            const int64_t base = endIndex - w - (alt * decim + decim + 1);
+            if (clearlyMorePeriodic (periodicity (alt, base, w, x, mask), periodicity (pick, base, w, x, mask)))
+                pick = alt;
+        }
+        return pick;
     }
 
     int localMin (int around) const noexcept
@@ -452,6 +504,7 @@ private:
     bool shortLagCheck = false;    // setRange(): the short-lag check of analyse() is used in this range
     bool newestAligned = false;    // setNewestAligned(): REALTIME window layout
     bool aligned = false;          // this analysis uses the newest-aligned layout (see analyse())
+    int diffWindow = kWindow;      // difference window (decimated samples), setWindow()
     float voicedRms = 0.0f;             // smoothed rms of the recent voiced frames (~50 hops)
     int voicedRun = 0;                  // voiced hops in a row
 };

@@ -28,6 +28,11 @@ on:
           - macos-15
           - macos-latest
           - macos-26
+      windows_only:
+        description: "Yalniz Windows derle (macOS ve Linux atlanir)"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: vstm-tune-build-${{ github.ref }}
@@ -43,12 +48,10 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      # Windows, macOS, Linux; elle calistirmada "windows_only" secilirse yalniz Windows.
+      # macOS makine kapasitesi sorunlu saatlerde is 15 dk'da iptal olabilir: "Re-run failed jobs".
       matrix:
-        include:
-          - { name: Windows, os: windows-latest }
-          # macOS makine kapasitesi sorunlu saatlerde is 15 dk'da iptal olabilir: "Re-run failed jobs".
-          - { name: macOS,   os: "${{ inputs.macos_image || 'macos-15' }}" }
-          - { name: Linux,   os: ubuntu-22.04 }
+        include: ${{ fromJSON(inputs.windows_only && '[{"name":"Windows","os":"windows-latest"}]' || format('[{{"name":"Windows","os":"windows-latest"}},{{"name":"macOS","os":"{0}"}},{{"name":"Linux","os":"ubuntu-22.04"}}]', inputs.macos_image || 'macos-15')) }}
 
     defaults:
       run:

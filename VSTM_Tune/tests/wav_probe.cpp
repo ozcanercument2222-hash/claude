@@ -130,6 +130,7 @@ int main (int argc, char** argv)
 
     TuneEngine::Params p;
     bool realtime = true;
+    double rtLatMs = 0.0;      // 0 = the vocal range's REALTIME latency (1.7)
     int block = 512;
     int lockKey = -1;
     double switchEvery = 0.0;
@@ -187,14 +188,17 @@ int main (int argc, char** argv)
         else if (k == "midigap")   p.midiMinGapS = (float) v;       // notes as MIDI: shortest break that ends a note (s)
         else if (k == "lock")      lockKey = (int) v;
         else if (k == "realtime")  realtime = v != 0.0;
+        else if (k == "rtlat")     rtLatMs = v;                     // 1.7 experiments: fixed REALTIME latency (ms, 0 = by range)
+        else if (k == "rtwin")     p.rtWindow = (int) v;            // 1.7 experiments: REALTIME detector window
         else if (k == "block")     block = std::max (1, (int) v);
         else if (k == "switch")    switchEvery = std::max (0.0, v);
         else { std::fprintf (stderr, "unknown param %s\n", k.c_str()); return 2; }
     }
 
     TuneEngine e;
+    e.setRealtimeLatencyMs (rtLatMs);
+    e.setParams (p);                 // 1.7: as the plug-in does (prepareToPlay): the latency fits the range from the start
     e.prepare (w.rate, realtime);
-    e.setParams (p);
     if (lockKey >= 0)
         e.requestKeyLock (lockKey, 1.0f);
     const int nc = std::min (2, w.channels);

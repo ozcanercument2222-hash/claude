@@ -71,6 +71,7 @@ public:
         bool  peakGuard = true;         // output safety limiter (internal, not a plug-in parameter; tests switch it off)
         bool  backdateSwitch = true;    // hard tune: backdate confirmed note switches (internal; tests switch it off)
         bool  freshAnalysis = true;     // REALTIME: newest-aligned detector windows (internal; tests switch it off)
+        int   rtWindow = 256;           // 1.7 experiments: REALTIME detector window, decimated samples (internal)
         bool  swingKeep = true;         // human side: keep the retune speed across a switch in a vibrato swing (internal)
         bool  vibratoBand = true;       // 1.5: Vibrato Scale scales the vibrato band only, the note decision never (internal)
         float tuningRefHz = 440.0f;     // 1.5: A4 reference; the note grid (scale, Auto Key, display) moves with it
@@ -111,9 +112,24 @@ public:
     };
     enum : uint8_t { kVoiced = 1, kNoteChange = 2, kSettled = 4 };
 
-    static int latencyFor (double sampleRate, bool realtime) noexcept
+    /** The latency in samples. HQ: 40 ms. REALTIME (1.7: by vocal range, 20 ms in every earlier version): Soprano /
+        Alto 13 ms, Tenor 15 ms, Bass / Baritone 17 ms. A grain needs about two periods of the voice ahead of it;
+        these are the shortest values at which each range sounds at least as clean as 1.6 did at 20 ms (MEASURED,
+        null / shift / hard-tune renders of 145 recordings, docs/1.7.0). */
+    static int latencyFor (double sampleRate, bool realtime, int range = 1) noexcept
     {
-        return (int) std::lround (sampleRate * (realtime ? 0.020 : 0.040));
+        static constexpr double kRealtimeSeconds[3] = { 0.013, 0.015, 0.017 };
+        return (int) std::lround (sampleRate * (realtime ? kRealtimeSeconds[std::clamp (range, 0, 2)] : 0.040));
+    }
+
+    /** Tests and experiments: a fixed REALTIME latency in ms instead of the range's (0 = the range's, the
+        default). Call before prepare(). */
+    void setRealtimeLatencyMs (double ms) noexcept { rtLatencyMs = ms <= 0.0 ? 0.0 : std::clamp (ms, 4.0, 40.0); }
+    int latencyNow (bool rt) const noexcept
+    {
+        if (rt && rtLatencyMs > 0.0)
+            return (int) std::lround (sr * rtLatencyMs / 1000.0);
+        return latencyFor (sr, rt, params.range);
     }
 
     void prepare (double sampleRate, bool realtimeMode)
@@ -122,7 +138,7 @@ public:
         decim = std::max (1, (int) std::lround (sr / 11025.0));
         hop = 32 * decim;
         realtime = realtimeMode;
-        latency = latencyFor (sr, realtime);
+        latency = latencyNow (realtime);
         unvoicedHop = std::max (32.0, std::round (sr * 0.004));
 
         for (auto& b : in)  b.assign ((size_t) kRing, 0.0f);
@@ -134,6 +150,7 @@ public:
 
         detector.prepare (sr, decim);
         detector.setNewestAligned (realtime && params.freshAnalysis);
+        detector.setWindow (realtime ? params.rtWindow : 256);
         const double fc = 0.30 * sr / decim;
         aa1.setLowpass (sr, fc, 0.5412);
         aa2.setLowpass (sr, fc, 1.3066);
@@ -167,14 +184,21 @@ public:
             return;
         realtime = shouldBeRealtime;
         detector.setNewestAligned (realtime && params.freshAnalysis);   // analysis ~10 ms fresher in REALTIME (1.3)
-        latency = latencyFor (sr, realtime);
+        detector.setWindow (realtime ? params.rtWindow : 256);
+        retargetLatency();
+    }
+
+    /** The output's delay glides to latencyNow() (REALTIME <-> HQ, 1.7: a vocal range change in REALTIME). */
+    void retargetLatency() noexcept
+    {
+        latency = latencyNow (realtime);
         const int64_t tNow = nIn - accLatency;                  // the next output sample on the synthesis axis
         const double dNow = contentOffset ((double) tNow);
         rampFrom = dNow;
         rampTo = (double) (latency - accLatency);
         rampStart = tNow;
         const bool dryHeard = ! (params.active && params.mix >= 0.999f && mixSmooth >= 0.999f && wetSmooth >= 0.999f);
-        const double full = std::max (1.0, (double) std::abs (latencyFor (sr, true) - latencyFor (sr, false)));
+        const double full = std::max (1.0, (double) std::abs (latencyNow (true) - latencyNow (false)));
         rampLen = std::max (1.0, std::round (sr * (dryHeard ? kRampDrySeconds : kRampWetSeconds) * std::abs (rampTo - rampFrom) / full));
         ramping = std::abs (rampTo - rampFrom) > 1.0e-9;
     }
@@ -241,6 +265,7 @@ public:
         sNext = 0.0;
         lastS = -1.0e9;
         lastGrainSrc = -1.0e9;
+        usedMarkPos = -1.0e9;
         lastGrainVoiced = false;
         lastSrcOffset = 0.0;
         lastHOut = 0.0;
@@ -313,6 +338,8 @@ public:
         for (int d = 0; d < 12; ++d)
             p.degreeCents[d] = keep (p.degreeCents[d], params.degreeCents[d], -100.0f, 100.0f);
         detector.setNewestAligned (realtime && p.freshAnalysis);
+        p.rtWindow = std::clamp (p.rtWindow, 64, 256);
+        detector.setWindow (realtime ? p.rtWindow : 256);
         if (p.key < -1 || p.key > 11) p.key = -1;
         p.scale = std::clamp (p.scale, 0, (int) kNumScales - 1);
         p.range = std::clamp (p.range, 0, 2);
@@ -320,7 +347,11 @@ public:
         const bool rangeChanged = p.range != params.range;
         params = p;
         if (rangeChanged)
+        {
             applyRange();
+            if (realtime && latencyNow (true) != latency)
+                retargetLatency();                      // 1.7: the REALTIME latency follows the vocal range
+        }
 
         const bool shifting = std::abs (p.transpose) >= 0.5f || std::abs (p.formant) >= 0.05f;
         if (shifting && ! levelActive)
@@ -755,9 +786,16 @@ private:
     static constexpr int kMarkRing = 1024;
     static constexpr int kRecRing = 256;
 
-    struct Mark { double pos = 0.0; float period = 0.0f; bool voiced = false; };
+    struct Mark
+    {
+        double pos = 0.0; float period = 0.0f; bool voiced = false;
+        float predT = 0.0f;          // 1.7: the period its position was predicted with
+        bool provisional = false;    // 1.7 REALTIME: aligned on the input before it only, see generateMarks()
+        bool pastAligned = false;    // 1.7 REALTIME: was provisional and stays so (a grain used it, or the one before)
+    };
     struct Rec  { double time = 0.0; float inMidi = 0.0f, outMidi = 0.0f, pass = 1.0f; bool voiced = false; };
-    struct Plan { bool voiced = false; double s = 0.0, src = 0.0, hIn = 1.0, hOut = 1.0, spacing = 1.0, shiftSt = 0.0, period = 0.0; float gain = 1.0f; };
+    struct Plan { bool voiced = false; double s = 0.0, src = 0.0, hIn = 1.0, hOut = 1.0, spacing = 1.0, shiftSt = 0.0, period = 0.0; float gain = 1.0f;
+                  double nextPos = -1.0e9; };     // 1.7: the mark after `src` that gave the period (none: -1e9)
 
     void applyRange()
     {
@@ -933,8 +971,52 @@ private:
 
     const Mark& markAt (int i) const noexcept { return marks[(size_t) ((markHead + i) % kMarkRing)]; }
 
+    /** 1.7 REALTIME: provisional marks whose surrounding period has arrived are aligned on it again (in order:
+        each one on the mark before it), as long as no grain has been placed from them. */
+    void refreshProvisionalMarks() noexcept
+    {
+        // provisional marks are only among the newest ones (a mark older than the latency has been used by a
+        // grain and frozen): look at the last 64 at most
+        for (int i = std::max (1, markCount - 64); i < markCount; ++i)
+        {
+            Mark& m = marks[(size_t) ((markHead + i) % kMarkRing)];
+            if (! m.provisional)
+                continue;
+            const Mark& prev = markAt (i - 1);
+            if (m.pos <= usedMarkPos + 0.5 || prev.pastAligned || ! prev.voiced || ! m.voiced)
+            {
+                // a placed grain took it as its source or for its period (moving it now would shift every grain
+                // after it), or the mark before it stays aligned on the input before it (then this one must too,
+                // or their spacing jumps), or nothing to align on: it stays as it is
+                m.provisional = false;
+                m.pastAligned = true;
+                continue;
+            }
+            const double T = m.predT;
+            const int half = (int) (T * 0.5);
+            const int radius = std::max (2, (int) (T / 6.0));
+            const double predicted = prev.pos + T;
+            if (predicted + radius + half + 3 > (double) nIn)
+                break;                               // not yet, nor the ones after it
+            const double pos = refineMarkFrom (prev.pos, predicted, T, half, radius, half);
+            const double spacing = pos - prev.pos;
+            const double delta = pos - m.pos;
+            m.pos = pos;
+            m.period = spacing > 0.7 * T && spacing < 1.4 * T ? (float) spacing : (float) T;
+            m.provisional = false;
+            // the provisional marks after it were placed relative to where it was: they move with it (none of
+            // them has been used either), so their spacing stays what it was measured to be
+            for (int j = i + 1; j < markCount; ++j)
+                marks[(size_t) ((markHead + j) % kMarkRing)].pos += delta;
+            if (markCount > 0)
+                lastMarkPos = markAt (markCount - 1).pos;
+        }
+    }
+
     void generateMarks() noexcept
     {
+        if (realtime)
+            refreshProvisionalMarks();
         // never let mark generation fall far behind (e.g. after silence at start-up)
         if (lastMarkPos < (double) nIn - kRing / 4)
             lastMarkPos = (double) nIn - kRing / 8;
@@ -949,9 +1031,22 @@ private:
                     const double predicted = lastMarkPos + T;
                     const int half = (int) (T * 0.5);
                     const int radius = std::max (2, (int) (T / 6.0));
-                    if (predicted + radius + half + 3 > (double) nIn)
+                    // 1.7 REALTIME: a mark is aligned on the period around it (half a period past it). Where that
+                    // input is not there yet, it is placed at once on the period BEFORE it, as a provisional mark,
+                    // and aligned again on the period around it as soon as the input arrives, unless a grain has
+                    // used it by then (refreshProvisionalMarks). Waiting for that half period set how short the
+                    // latency could be before low notes lost their marks (MEASURED, null test at 20 ms: notes under
+                    // ~156 Hz not transparent); the period before alone puts the pulse on the window's edge and
+                    // the marks jitter (hard tune measured +-3 ct in the output), so it is only used until then.
+                    const bool centredReady = predicted + radius + half + 3 <= (double) nIn;
+                    if (! centredReady && ! (realtime && predicted + radius + 3 <= (double) nIn))
                         break;
-                    pushMark (refineMark (predicted, T, half, radius), (float) T, true);
+                    pushMark (refineMark (predicted, T, half, radius, centredReady ? half : 0), (float) T, true);
+                    {
+                        Mark& nm = marks[(size_t) ((markHead + markCount - 1) % kMarkRing)];
+                        nm.predT = (float) T;
+                        nm.provisional = ! centredReady;
+                    }
                     // keep the stored period equal to the real spacing (exact local pitch)
                     if (markCount >= 2)
                     {
@@ -990,15 +1085,22 @@ private:
 
     /** Waveform-similarity alignment: the segment around the previous mark is compared with
         candidates around the predicted position; best normalised correlation wins (sub-sample). */
-    double refineMark (double predicted, double T, int half, int radius) const noexcept
+    double refineMark (double predicted, double T, int half, int radius, int ahead) const noexcept
     {
-        const auto p0 = (int64_t) std::llround (lastMarkPos);
-        const double carry = lastMarkPos - (double) p0;
+        return refineMarkFrom (lastMarkPos, predicted, T, half, radius, ahead);
+    }
+
+    /** refineMark() against the mark at `prevPos`. */
+    double refineMarkFrom (double prevPos, double predicted, double T, int half, int radius, int ahead) const noexcept
+    {
+        const auto p0 = (int64_t) std::llround (prevPos);
+        const double carry = prevPos - (double) p0;
         const auto c0 = (int64_t) std::llround (predicted - carry);
         const int step = half > 200 ? 2 : 1;
+        const int jLo = ahead - 2 * half, jHi = ahead;         // a window of 2 * half samples, `ahead` past the mark
 
         double ea = 0.0;
-        for (int j = -half; j < half; j += step)
+        for (int j = jLo; j < jHi; j += step)
         {
             const float a = monoLp[(size_t) ((p0 + j) & kMask)];
             ea += (double) a * a;
@@ -1011,7 +1113,7 @@ private:
         for (int d = -r; d <= r; ++d)
         {
             double num = 0.0, eb = 0.0;
-            for (int j = -half; j < half; j += step)
+            for (int j = jLo; j < jHi; j += step)
             {
                 const float a = monoLp[(size_t) ((p0 + j) & kMask)];
                 const float b = monoLp[(size_t) ((c0 + d + j) & kMask)];
@@ -1036,7 +1138,7 @@ private:
         }
 
         const double pos = (double) (c0 + best) + frac + carry;
-        const double spacing = pos - lastMarkPos;
+        const double spacing = pos - prevPos;
         if (spacing < 0.7 * T || spacing > 1.4 * T)
             return predicted;
         return pos;
@@ -1140,12 +1242,16 @@ private:
             // the period this grain stands for = distance to the next mark when it is known;
             // with no correction the grains then land exactly on the analysis marks (transparent)
             double period = m.period;
+            out.nextPos = -1.0e9;
             if (chosen + 1 < markCount)
             {
                 const Mark& next = markAt (chosen + 1);
                 const double d = next.pos - m.pos;
                 if (next.voiced && d > 0.7 * m.period && d < 1.4 * m.period)
+                {
                     period = d;
+                    out.nextPos = next.pos;
+                }
             }
             const double localMidi = hzToMidi (sr / period);
             const Rec h = historyAt (m.pos);
@@ -1298,7 +1404,12 @@ private:
         {
             if (! planValid)
             {
+                // 1.7 REALTIME: the marks also reach up to the newest input between analysis hops (one more call
+                // per grain), so a grain does not wait up to a hop (2.7 ms) for its mark
+                if (realtime)
+                    generateMarks();
                 makePlan (plan);
+                planInput = nIn;
                 planValid = true;
                 // decided right after the previous grain, i.e. before any of the handover
                 // region has been output: schedule the crossfade now. The plan is remade on
@@ -1314,6 +1425,20 @@ private:
             if (plan.s - plan.hOut > (double) t)
                 return;
 
+            // 1.7 REALTIME: due now. The plan was made at the last analysis hop or right after the previous
+            // grain, with less input: the mark it wanted, or the next one that gives its real period, was not
+            // there yet, so it took an older mark or the detector's period (the grains then drift off the marks
+            // and the voice loses its own waveform). With the marks brought up to the newest input it is made
+            // again from what is there now.
+            if (realtime && plan.voiced && lastGrainVoiced && planInput < nIn)
+            {
+                generateMarks();
+                Plan fresh;
+                makePlan (fresh);
+                if (fresh.voiced && fresh.s - fresh.hOut <= (double) t)
+                    plan = fresh;
+            }
+
             if (plan.voiced && ! lastGrainVoiced)
                 xfadeArmed = false;              // handover grain placed; the tail runs on
             if (! plan.voiced && lastGrainVoiced)
@@ -1324,6 +1449,8 @@ private:
                     cancelCrossfade (t);
             }
             addGrain (plan, t);
+            if (plan.voiced)
+                usedMarkPos = std::max (usedMarkPos, std::max (plan.src, plan.nextPos));
             lastHOut = plan.hOut;
             lastS = plan.s;
             lastGrainSrc = std::max (lastGrainSrc, plan.src);
@@ -1386,6 +1513,8 @@ private:
     //------------------------------------------------------------------ state
     double sr = 44100.0;
     int decim = 4, hop = 128, latency = 882;
+    double rtLatencyMs = 0.0;           // setRealtimeLatencyMs(): 0 = the vocal range's REALTIME latency
+    int64_t planInput = 0;              // nIn when the current plan was made (placeGrains)
     bool realtime = true;
     double unvoicedHop = 176.0;
     Params params;
@@ -1416,6 +1545,7 @@ private:
     bool planValid = false;
     double sNext = 0.0, lastS = -1.0e9, lastHOut = 0.0, lastSrcOffset = 0.0;
     double lastGrainSrc = -1.0e9;       // content position of the newest placed grain (records before it are used up)
+    double usedMarkPos = -1.0e9;        // 1.7: the newest mark a placed grain used (source or period): marks up to it stay
     bool lastGrainVoiced = false;
     bool tailActive = false, xfadeArmed = false;
     double tailNext = 0.0, tailLast = 0.0, tailOffset = 0.0;

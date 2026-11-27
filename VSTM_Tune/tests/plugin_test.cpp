@@ -10,6 +10,7 @@
 #include <thread>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "DrpText.h"
+#include "PresetDocs.h"
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "Parameters.h"
@@ -370,10 +371,21 @@ int main (int argc, char* argv[])
         VSTMTuneProcessor p;
         p.setPlayConfigDetails (2, 2, kFs, 512);
         p.prepareToPlay (kFs, 512);
-        CHECK (p.getLatencySamples() == 960, "latency REALTIME: %d samples (20 ms)", p.getLatencySamples());
+        CHECK (p.getLatencySamples() == 720, "latency REALTIME, Tenor (the default range): %d samples (15 ms; 20 ms before 1.7)", p.getLatencySamples());
         setParam (p, vstm::ids::realtime, 0.0f);
         CHECK (p.getLatencySamples() == 1920, "latency HQ: %d samples (40 ms)", p.getLatencySamples());
+        // 1.7: the REALTIME latency follows the vocal range (HQ does not); the host is told at once, in either order
+        setParam (p, vstm::ids::range, 0.0f);
+        const int hqSop = p.getLatencySamples();
         setParam (p, vstm::ids::realtime, 1.0f);
+        const int rtSop = p.getLatencySamples();
+        setParam (p, vstm::ids::range, 2.0f);
+        const int rtBass = p.getLatencySamples();
+        setParam (p, vstm::ids::range, 1.0f);
+        CHECK (hqSop == 1920 && rtSop == 624 && rtBass == 816 && p.getLatencySamples() == 720
+               && rtSop == vstm::TuneEngine::latencyFor (kFs, true, 0) && rtBass == vstm::TuneEngine::latencyFor (kFs, true, 2),
+               "latency by vocal range (REALTIME): Soprano / Alto %d (13 ms), Tenor 720 (15 ms), Bass %d (17 ms); HQ %d (40 ms) in any range",
+               rtSop, rtBass, hqSop);
 
         setParam (p, vstm::ids::scale, (float) vstm::kChromatic);
         setParam (p, vstm::ids::retune, 0.0f);
@@ -792,7 +804,9 @@ int main (int argc, char* argv[])
             const auto evSwitch = run (true, false, 40).first;           // block 40 = 0.43 s, the voice still sounding
             const bool onRight = evOn.size() == 2 && evOn[0].on && evOn[0].note == 57 && ! evOn[1].on && evOn[1].note == 57
                               && std::abs ((double) evOn[0].at - lat) < 0.08 * kFs          // the voice starts at 0
-                              && std::abs ((double) evOn[1].at - (kFs + lat)) < 0.04 * kFs; // ... and ends at 1 s
+                              // ... and ends at 1 s; 1.7: the note-off comes when the analysis has seen the end, so
+                              // with the shorter REALTIME latency (15 ms, 20 ms before) it is that much later vs the audio
+                              && std::abs ((double) evOn[1].at - (kFs + lat)) < 0.04 * kFs + std::max (0, (int) (0.020 * kFs) - lat);
             const bool switchRight = evSwitch.size() == 2 && evSwitch[0].on && ! evSwitch[1].on && evSwitch[1].at == 40 * 512;
             CHECK (onRight && evOff.empty() && evByp.empty() && switchRight,
                    "notes as MIDI: note-on 57 at %.1f ms, note-off at %.1f ms (latency %.1f ms, voice 0 - 1000 ms), input MIDI not passed through; off / bypassed: %d / %d events; switched off mid-note: note-off at the block start (%s)",
@@ -1717,6 +1731,36 @@ int main (int argc, char* argv[])
                "readable file: UTF-8 text with the format / version header, every preset parameter with its explanation, no authorization data (%d bytes)",
                (int) text1.getSize());
 
+        // float noise of the parameter's own snapping (macOS on Apple silicon fuses start + interval * n into one
+        // multiply-add: the default 0 of tunecents is held as 7.4505806e-07, -5.8 as -5.7999997): written as the
+        // short decimal that loads back to the same held value, on every platform
+        {
+            auto held = [&p] (const juce::String& id, float x) { auto* rp = p.apvts.getParameter (id); return rp->convertFrom0to1 (rp->convertTo0to1 (x)); };
+            auto sameBits = [] (float a, float b) { return std::memcmp (&a, &b, sizeof (float)) == 0; };
+            const std::vector<std::pair<juce::String, float>> noisy { { vstm::ids::tuneCents (0), 7.4505806e-07f },
+                                                                      { vstm::ids::formant, -5.7999997f },
+                                                                      { vstm::ids::formant, -5.8f } };
+            const auto doc = vstm::describePreset ("Noise", noisy, p.apvts);
+            const auto noiseText = juce::String::fromUTF8 ((const char*) vstm::drp::text::write (doc).getData(), (int) vstm::drp::text::write (doc).getSize());
+            bool shortSame = doc.params.size() == 3;
+            for (size_t i = 0; shortSame && i < 3; ++i)
+                shortSame = sameBits (held (noisy[i].first, doc.params[i].value), held (noisy[i].first, noisy[i].second));
+            shortSame = shortSame && noiseText.contains ("\ntunecents0 = 0\n") && noiseText.contains ("\nformant = -5.8\n")
+                     && ! noiseText.contains ("-5.79") && ! noiseText.contains ("e-0") && noiseText.contains ("default 0.");
+            // tiny values (typed into a file): still plain decimals, still exact
+            bool tinyPlain = true;
+            juce::Random tinyRnd (77);
+            for (int i = 0; i < 2000; ++i)
+            {
+                const float v = (tinyRnd.nextBool() ? 1.0f : -1.0f) * std::pow (10.0f, -11.9f + 10.8f * tinyRnd.nextFloat());
+                const auto t = vstm::drp::text::formatNumber (v);
+                tinyPlain = tinyPlain && ! t.containsAnyOf ("eE") && sameBits (std::strtof (t.toRawUTF8(), nullptr), v);
+            }
+            CHECK (shortSame && tinyPlain && vstm::drp::text::formatNumber (1.0e-7f) == "0.0000001",
+                   "values with float noise are written short and load back to the same value (tunecents0 = 0, formant = -5.8); "
+                   "1e-12 .. 0.1 written as plain, exact decimals (2000 values)");
+        }
+
         // save -> load -> save: same values, same bytes
         std::vector<float> before;
         for (auto* prm : p.getParameters())
@@ -2120,7 +2164,7 @@ int main (int argc, char* argv[])
                        found[0]->name.toRawUTF8(), found[0]->manufacturerName.toRawUTF8());
                 plugin->setPlayConfigDetails (2, 2, kFs, 512);
                 plugin->prepareToPlay (kFs, 512);
-                CHECK (plugin->getLatencySamples() == 960, "latency reported to the host: %d samples", plugin->getLatencySamples());
+                CHECK (plugin->getLatencySamples() == 720, "latency reported to the host: %d samples (REALTIME, Tenor: 15 ms)", plugin->getLatencySamples());
 
                 int automatable = 0;
                 for (auto* prm : plugin->getParameters())

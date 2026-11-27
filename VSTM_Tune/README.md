@@ -55,7 +55,7 @@ kalır. Tenor, sentetik: %10'da %4,5 → %9, %35'te %49 → %72, %50'de %74 → 
 | **MIX** | Orijinal ↔ düzeltilmiş ses karışımı. |
 | **ADAPTIVE** (deneysel) | Kapalıyken motor eskisiyle aynı çıkışı verir. Açıkken performansa sabit sınırlar içinde uyum sağlamaya çalışır: algılayıcı emin değilken düzeltme en çok %50'ye iner; vibrato ve bilinçli kaymalarda düzeltme gevşer (ROBOTISM %15'ten %50'ye doğru); hızlı koşularda notalar daha çabuk oturur. Hiçbir parametreyi değiştirmez. **Ölçüm (1.2, 91 gerçek kayıt):** İnsansı uçta (%100) vibratonun yalnız ~%50'si kalıyor (kapalıyken ~%92). Robotik uçta da küçük bir etkisi var (notaya yakınlık 1,5 → 2,6 ct). Varsayılan değildir; dinleme testi yapılmadı. |
 | **AUTOTUNE ON** | Aç / kapat. DAW'ın bypass düğmesiyle senkron; kapalıyken ses gecikmesi korunur (takır yok). |
-| **REALTIME** | Açık: düşük gecikme (**20 ms**, kayıt / canlı için). Kapalı: yüksek kalite (**40 ms**, çok kalın sesler için). DAW gecikmeyi otomatik telafi eder. Çalarken değiştirilebilir (1.2): bildirilen gecikme hemen değişir. Ses kesilmeden yeni gecikmeye kayar: 0,4 s içinde, kuru ses de duyuluyorsa 2 s içinde. Hiçbir hece tekrarlanmaz ya da atlanmaz; bulunan ton korunur. Kayma sırasında kuru sesin hızı en çok ~%1,6 değişir. |
+| **REALTIME** | Açık: düşük gecikme (kayıt / canlı için; 1.7: ses aralığına göre **Soprano / Alto 13 ms, Tenor 15 ms, Bas 17 ms**, önceden 20 ms; aralık çalarken değişirse gecikme kayarak değişir). Kapalı: yüksek kalite (**40 ms**, çok kalın sesler için). DAW gecikmeyi otomatik telafi eder. Çalarken değiştirilebilir (1.2): bildirilen gecikme hemen değişir. Ses kesilmeden yeni gecikmeye kayar: 0,4 s içinde, kuru ses de duyuluyorsa 2 s içinde. Hiçbir hece tekrarlanmaz ya da atlanmaz; bulunan ton korunur. Kayma sırasında kuru sesin hızı en çok ~%1,6 değişir. |
 | 〰 düğmesi | Perde ekranında ham giriş perdesini de gösterir. |
 
 **Perde ekranı:** dikey çizgi yazma kafasıdır, soldan sağa tarar (6 saniye). Mor eğri düzeltilmiş çıkış,
@@ -304,7 +304,7 @@ cmake --build build --config Release
   ```bash
   ./build/VSTMTune_AuditProbe olcumler            # hepsi;  tek senaryo: ... olcumler S2 S3
   ```
-- **PluginTest:** parametre varsayılanları ve yazıları, 7 dilin eksiksizliği ve diller arası değer okuma, gecikme bildirimi (20 / 40 ms), bypass, oturum kaydet / geri yükle,
+- **PluginTest:** parametre varsayılanları ve yazıları, 7 dilin eksiksizliği ve diller arası değer okuma, gecikme bildirimi (REALTIME 13 / 15 / 17 ms aralığa göre, HQ 40 ms), bypass, oturum kaydet / geri yükle,
   Auto Key kilidinin oturumda ve `prepareToPlay`'de korunması, bozuk oturum değerleri, presetlerin tonu koruması, yeniden adlandırma,
   preset / ton / dizi değişiminde tık, KEY kutusundaki yüzdenin motorla aynı olması, klavye ve host gesture'ları, editör;
   `goruntuler/` klasörüne ekran görüntüleri (her dil için `07_lang_xx.png`); `--vst3` ile derlenmiş VST3'ü bir DAW gibi yükleyip sınar.

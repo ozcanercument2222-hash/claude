@@ -55,11 +55,13 @@ juce::String formatNumber (float v)
     if (! std::isfinite (v) || std::fpclassify (v) == FP_ZERO)
         return "0";                                         // also -0
     // the shortest text that reads back to the very same float (compared bit for bit: exact round trip); plain
-    // decimals ("80", "0.35", "-12.5") for every value a parameter can have, the exponent form only as a last resort
+    // decimals ("80", "0.35", "-12.5") for every value a parameter can have, the exponent form only as a last resort.
+    // Down to 1e-12 (a tiny value typed into the file, or float noise of a continuous control) up to 24 decimals
+    // are tried: enough for the 9 significant digits an exact float needs (1e-6 needed up to 15, 12 were tried).
     auto sameBits = [] (float a, float b) { return std::memcmp (&a, &b, sizeof (float)) == 0; };
     char buf[64];
-    if (std::abs (v) >= 1.0e-6f && std::abs (v) < 1.0e9f)
-        for (int d = 0; d <= 12; ++d)
+    if (std::abs (v) >= 1.0e-12f && std::abs (v) < 1.0e9f)
+        for (int d = 0; d <= 24; ++d)
         {
             std::snprintf (buf, sizeof (buf), "%.*f", d, (double) v);
             if (sameBits (std::strtof (buf, nullptr), v))

@@ -1,5 +1,22 @@
 # VSTM Tune – sürüm notları
 
+## 1.7.0 (aday, 27.11.2026) – ara notalarda oktav hataları, daha kısa REALTIME gecikmesi; commit edilmedi
+
+**Dinleme yapılmadı, gerçek DAW'da denenmedi.** Ayrıntılar `docs/1.7.0/VSTM_Tune_1.7.0_Changelog.md`.
+
+- **Oktav hataları:**
+  - Çıkıştaki oktav hataları 92 → 39 parça, süre 3,71 → 1,25 s (MEASURED, 145 kayıt, REALTIME).
+  - Sesin başında ve nota geçişinde 2–5 kat periyot sınanıyor. Aşağı oktav hatası eklenmedi.
+- **REALTIME gecikmesi ses aralığına göre:**
+  - Soprano / Alto 13 ms, Tenor 15 ms, Bas 17 ms (1.6: hepsi 20 ms). HQ 40 ms (değişmedi).
+  - Her aralık 1.6'nın 20 ms'deki kadar temiz.
+  - Çalarken aralık değişirse gecikme kayarak değişir.
+- **Bedeller:**
+  - Sert düzeltmede medyan sapma 0,3 → 0,6 ct.
+  - MIDI note-off'ları sese göre ~5 ms daha geç görünür.
+- **macOS CI düzeltmesi:** okunabilir .drp'de Apple Silicon kalıntısı (`7.45e-07`) artık `0` yazılıyor.
+- **Testler:** EngineTest ve PluginTest tümü (Linux).
+
 ## 1.6.0 (aday, 25.11.2026) – Natural Auto Correction; yayımlanmadı, commit edilmedi
 
 **Dinleme yapılmadı, gerçek DAW'da denenmedi.** Ayrıntılar `docs/1.6.0/VSTM_Tune_1.6.0_Changelog.md`.

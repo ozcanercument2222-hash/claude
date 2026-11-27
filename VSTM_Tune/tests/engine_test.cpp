@@ -699,7 +699,10 @@ int main()
         std::string seq;
         for (const auto& ev : evs) seq += std::to_string (ev.second) + "@" + std::to_string ((int) std::lround (1000.0 * ev.first / sr)) + " ";
         const double lim = rtMode ? 30.0 : 10.0;
-        check (notesRight && blockFree && c1 > 0.0 && c2 > 0.0 && d1 > -5.0 && d2 > -5.0 && d1 < lim && d2 < lim && std::abs (offEnd) < 40.0,
+        // 1.7: the note-off can only come when the analysis has seen the voice end; the REALTIME output now plays
+        // 5 ms sooner (15 ms instead of 20 ms), so the same decision lands that much later relative to the audio
+        const double offLim = 40.0 + (rtMode ? std::max (0.0, 1000.0 * (0.020 - lat)) : 0.0);
+        check (notesRight && blockFree && c1 > 0.0 && c2 > 0.0 && d1 > -5.0 && d2 > -5.0 && d1 < lim && d2 < lim && std::abs (offEnd) < offLim,
                std::string ("notes as MIDI (") + (rtMode ? "REALTIME" : "HQ") + "): events " + seq + "ms; the note changes are "
                + std::to_string (d1) + " / " + std::to_string (d2) + " ms after the output changes note (limit "
                + std::to_string ((int) lim) + "), the note-off " + std::to_string (offEnd) + " ms from the end of the voice; blocks 256 / 97 "
@@ -1599,6 +1602,52 @@ int main()
                "REALTIME switch: longest zero run " + std::to_string (longest) + " samples, step " + std::to_string (atSwitch)
                    + " vs steady " + std::to_string (steady) + ", latency " + std::to_string (latHQ) + " / " + std::to_string (latRT)
                    + ", tuning " + std::to_string (c1) + " / " + std::to_string (c2) + " ct");
+
+        // 12b) 1.7: the REALTIME latency follows the vocal range (Soprano / Alto 13 ms, Tenor 15 ms, Bass 17 ms):
+        //      a range change while the voice sounds glides to the new delay like the mode switch (no silence, no
+        //      click, the tuning kept) and settles on exactly the new latency
+        {
+            TuneEngine er;
+            er.prepare (sr, true);
+            er.setParams (baseParams());
+            const int latTenor = er.getLatencySamples();
+            auto yr = x;
+            int latSop = 0, latBass = 0;
+            bool rampSop = true, rampBass = true;
+            for (size_t pos = 0; pos < yr.size(); pos += 256)
+            {
+                if (pos == (size_t) (1.0 * sr) / 256 * 256) { auto pr = baseParams(); pr.range = 0; er.setParams (pr); }
+                if (pos == (size_t) (2.0 * sr) / 256 * 256) { auto pr = baseParams(); pr.range = 2; er.setParams (pr); }
+                if (pos == (size_t) (1.5 * sr) / 256 * 256) { latSop = er.getLatencySamples(); rampSop = er.isLatencyRamping(); }
+                if (pos == (size_t) (2.5 * sr) / 256 * 256) { latBass = er.getLatencySamples(); rampBass = er.isLatencyRamping(); }
+                const int n = (int) std::min ((size_t) 256, yr.size() - pos);
+                float* chans[2] = { yr.data() + pos, nullptr };
+                er.process (chans, 1, n);
+            }
+            size_t zr = 0, longestR = 0;
+            bool finiteR = true;
+            double steadyR = 0.0, stepR = 0.0;
+            for (size_t i = (size_t) (0.5 * sr); i < yr.size(); ++i)
+            {
+                finiteR = finiteR && std::isfinite (yr[i]);
+                zr = yr[i] == 0.0f ? zr + 1 : 0;
+                longestR = std::max (longestR, zr);
+                const double d = std::abs (yr[i] - yr[i - 1]);
+                const double ts = (double) i / sr;
+                if (ts >= 0.6 && ts < 0.95) steadyR = std::max (steadyR, d);
+                if ((ts >= 0.98 && ts < 1.10) || (ts >= 1.98 && ts < 2.10)) stepR = std::max (stepR, d);
+            }
+            const double r1 = cents (measureHz (yr, sr, (int) (sr * 1.5), (int) (sr * 0.2), 220.0), 220.0);
+            const double r2 = cents (measureHz (yr, sr, (int) (sr * 2.6), (int) (sr * 0.2), 220.0), 220.0);
+            check (finiteR && longestR < (size_t) (0.001 * sr) && stepR <= 1.5 * steadyR && latTenor == TuneEngine::latencyFor (sr, true, 1)
+                       && latSop == TuneEngine::latencyFor (sr, true, 0) && latBass == TuneEngine::latencyFor (sr, true, 2)
+                       && ! rampSop && ! rampBass && std::abs (r1) < 1.0 && std::abs (r2) < 1.0,
+                   "REALTIME latency by vocal range (1.7): Tenor " + std::to_string (latTenor) + " -> Soprano/Alto " + std::to_string (latSop)
+                       + " -> Bass " + std::to_string (latBass) + " samples while the voice sounds; longest zero run "
+                       + std::to_string (longestR) + ", step " + std::to_string (stepR) + " vs steady " + std::to_string (steadyR)
+                       + ", tuning " + std::to_string (r1) + " / " + std::to_string (r2) + " ct, glide settled ("
+                       + (rampSop || rampBass ? "no" : "yes") + ")");
+        }
 
         // the automatic key survives the switch (C major melody sung five times, switched at 24 s, after the
         // key is locked; the one-shot lock of the final quality pass waits for several phrases, this test
