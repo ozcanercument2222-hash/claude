@@ -1,4 +1,5 @@
 #include "PresetManager.h"
+#include "PresetDocs.h"
 #include "Parameters.h"
 
 namespace vstm
@@ -190,7 +191,8 @@ bool PresetManager::saveUserPreset (const juce::String& rawName)
         return false;
 
     const auto file = folder.getChildFile (name + kExtension);
-    if (writeAtomically (file, currentAsDrp (name)) != drp::Error::none)
+    const bool asText = readableSaves != nullptr && readableSaves();
+    if (writeAtomically (file, encode (name, currentValues(), asText)) != drp::Error::none)
         return false;
 
     refreshUserPresets();
@@ -228,15 +230,12 @@ bool PresetManager::renameUserPreset (int index, const juce::String& rawName)
             return false;                                   // would be hidden behind a factory name
 
     std::vector<Entry> values;
-    if (readPresetFile (from, values) != drp::Error::none)
+    bool wasText = false;
+    if (readPresetFile (from, values, nullptr, &wasText) != drp::Error::none)
         return false;
-    drp::PresetData data;
-    data.name = name;
-    for (const auto& e : values)
-        data.values.emplace_back (e.id, e.value);
     const auto dest = from.getSiblingFile (name + kExtension);
-    // write the new file first, then remove the old one: a failed write loses nothing
-    if (writeAtomically (dest, drp::writePreset (data)) != drp::Error::none)
+    // write the new file first, then remove the old one: a failed write loses nothing. The format stays as it was.
+    if (writeAtomically (dest, encode (name, values, wasText)) != drp::Error::none)
         return false;
     if (dest != from)
         from.deleteFile();                                  // includes a 1.0 - 1.3 .vstmpreset: renamed = migrated
@@ -276,14 +275,31 @@ void PresetManager::restoreCurrent (const juce::String& name)
 }
 
 //------------------------------------------------------------------------------ .drp (1.4)
-juce::MemoryBlock PresetManager::currentAsDrp (const juce::String& name) const
+std::vector<PresetManager::Entry> PresetManager::currentValues() const
 {
-    drp::PresetData data;
-    data.name = name;
+    std::vector<Entry> values;
     for (auto* p : apvts.processor.getParameters())
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
             if (isPresetParameter (rp->paramID))
-                data.values.emplace_back (rp->paramID, rp->convertFrom0to1 (rp->getValue()));
+                values.push_back ({ rp->paramID, rp->convertFrom0to1 (rp->getValue()) });
+    return values;
+}
+
+juce::MemoryBlock PresetManager::currentAsDrp (const juce::String& name) const
+{
+    return encode (name, currentValues(), false);
+}
+
+juce::MemoryBlock PresetManager::encode (const juce::String& name, const std::vector<Entry>& values, bool asText) const
+{
+    std::vector<std::pair<juce::String, float>> pairs;
+    for (const auto& e : values)
+        pairs.emplace_back (e.id, e.value);
+    if (asText)
+        return drp::text::write (describePreset (name, pairs, apvts));      // 1.6 readable .drp (format 2)
+    drp::PresetData data;
+    data.name = name;
+    data.values = std::move (pairs);
     return drp::writePreset (data);
 }
 
@@ -298,9 +314,12 @@ drp::Error PresetManager::writeAtomically (const juce::File& file, const juce::M
     return drp::Error::none;
 }
 
-drp::Error PresetManager::readPresetFile (const juce::File& file, std::vector<Entry>& values, juce::String* storedName)
+drp::Error PresetManager::readPresetFile (const juce::File& file, std::vector<Entry>& values, juce::String* storedName, bool* wasText)
 {
     values.clear();
+    lastReadNotes.clear();
+    if (wasText != nullptr)
+        *wasText = false;
     if (file.hasFileExtension (kLegacyExtension))
     {
         // 1.0 - 1.3 XML preset. Size-limited before parsing; unknown ids and damaged numbers are ignored
@@ -315,6 +334,27 @@ drp::Error PresetManager::readPresetFile (const juce::File& file, std::vector<En
         if (storedName != nullptr)
             *storedName = xml->getStringAttribute ("name");
         return drp::Error::none;
+    }
+
+    // 1.6: the readable .drp (text) is recognised by its content, not its name; anything else is the binary .drp
+    if (file.existsAsFile() && file.getSize() <= (int64_t) drp::text::kMaxTextSize && file.getSize() > (int64_t) drp::kHeaderSize)
+    {
+        juce::MemoryBlock head;
+        if (file.loadFileAsData (head) && drp::text::isTextPreset (head.getData(), head.getSize()))
+        {
+            drp::PresetData data;
+            drp::text::ReadReport report;
+            if (const auto e = drp::text::read (head.getData(), head.getSize(), data, &report); e != drp::Error::none)
+                return e;
+            for (const auto& [id, v] : data.values)
+                values.push_back ({ id, v });
+            if (storedName != nullptr)
+                *storedName = data.name;
+            if (wasText != nullptr)
+                *wasText = true;
+            lastReadNotes = report.notes;
+            return drp::Error::none;
+        }
     }
 
     juce::MemoryBlock mb;
@@ -355,7 +395,8 @@ drp::Error PresetManager::importPreset (const juce::File& file, juce::String& im
 {
     std::vector<Entry> values;
     juce::String stored;
-    if (const auto e = readPresetFile (file, values, &stored); e != drp::Error::none)
+    bool wasText = false;
+    if (const auto e = readPresetFile (file, values, &stored, &wasText); e != drp::Error::none)
         return e;                                              // nothing is written for a rejected file
 
     const auto name = freeUserName (stored.isNotEmpty() ? stored : file.getFileNameWithoutExtension());
@@ -363,11 +404,8 @@ drp::Error PresetManager::importPreset (const juce::File& file, juce::String& im
     if (name.isEmpty() || ! folder.createDirectory())
         return drp::Error::cannotRead;
 
-    drp::PresetData data;
-    data.name = name;
-    for (const auto& e : values)
-        data.values.emplace_back (e.id, e.value);
-    if (const auto e = writeAtomically (folder.getChildFile (name + kExtension), drp::writePreset (data)); e != drp::Error::none)
+    // the imported copy keeps the format it came in (a readable file stays readable, a binary one binary)
+    if (const auto e = writeAtomically (folder.getChildFile (name + kExtension), encode (name, values, wasText)); e != drp::Error::none)
         return e;
 
     refreshUserPresets();

@@ -66,6 +66,13 @@ public:
     /** Key, Scale, Custom Scale and its 12 notes: the song's settings. */
     static bool isTonalParameter (const juce::String& paramID);
 
+    /** 1.6: saves as the readable text .drp (DrpText.h) when this says so. The processor sets it: authorized
+        (admin) and the preset-menu choice on. Unset or false: the binary .drp, exactly as before. Loading
+        reads both formats whatever it says. */
+    std::function<bool()> readableSaves;
+    /** Notes of the last preset file read (skipped lines, unknown sections; empty when clean). */
+    juce::StringArray getLastReadNotes() const         { return lastReadNotes; }
+
     /** Tests: keep user presets in another folder (an empty File = the normal location). */
     static void setUserPresetFolderOverride (const juce::File& folder);
 
@@ -74,10 +81,16 @@ private:
     struct Factory { juce::String name, category; std::vector<Entry> values; };
 
     void applyValues (const std::vector<Entry>& values, bool includeTonal);
-    /** Reads a user preset file of either format; false if it is damaged or not a preset. */
-    static drp::Error readPresetFile (const juce::File& file, std::vector<Entry>& values, juce::String* storedName = nullptr);
+    /** Reads a user preset file of any format (binary .drp, readable .drp, 1.0 - 1.3 .vstmpreset); `wasText` tells
+        whether it was the readable .drp. */
+    drp::Error readPresetFile (const juce::File& file, std::vector<Entry>& values, juce::String* storedName = nullptr,
+                               bool* wasText = nullptr);
     /** The current values as a .drp file. */
     juce::MemoryBlock currentAsDrp (const juce::String& name) const;
+    /** Values as a .drp file in either format (text: with the explanations of PresetDocs). */
+    juce::MemoryBlock encode (const juce::String& name, const std::vector<Entry>& values, bool asText) const;
+    std::vector<Entry> currentValues() const;
+    juce::StringArray lastReadNotes;
     static drp::Error writeAtomically (const juce::File& file, const juce::MemoryBlock& data);
     juce::String freeUserName (const juce::String& wanted) const;
     void takeSnapshot();

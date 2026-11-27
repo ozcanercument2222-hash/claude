@@ -54,6 +54,7 @@ VSTMTuneProcessor::VSTMTuneProcessor()
     for (int i = 0; i < 12; ++i)
         pTuneCents[i] = raw (ids::tuneCents (i));
 
+    presets.readableSaves = [this] { return savesReadablePresets(); };   // 1.6 readable .drp (authorized only)
     apvts.addParameterListener (ids::realtime, this);
     apvts.addParameterListener (ids::autoCharacter, this);
     apvts.state.setProperty ("presetName", presets.getCurrentName(), nullptr);
@@ -431,6 +432,7 @@ void VSTMTuneProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("autoKeyConf", (double) engine.getKeyConfidenceForState(), nullptr);
     state.setProperty ("followKeyChanges", followKeyChanges.load() ? 1 : 0, nullptr);
     state.setProperty ("presetsKeepKey", presets.getKeepTonal() ? 1 : 0, nullptr);
+    state.setProperty ("readablePresets", readablePresets.load() ? 1 : 0, nullptr);     // 1.6 (only used when authorized)
     state.setProperty ("midiCC", midiLearn.toString(), nullptr);          // 1.5: MIDI Learn assignments
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
@@ -479,6 +481,7 @@ void VSTMTuneProcessor::setStateInformation (const void* data, int sizeInBytes)
             // A newer version's unknown properties are ignored; the known ones are read the same way.
             followKeyChanges = boolProperty (state, "followKeyChanges", false);
             presets.setKeepTonal (boolProperty (state, "presetsKeepKey", true));
+            readablePresets = boolProperty (state, "readablePresets", true);
             const int lock = intProperty (state, "autoKeyLock", -1, 11, -1);
             const double conf = state.getProperty ("autoKeyConf", 0.0);
             if (lock >= 0)

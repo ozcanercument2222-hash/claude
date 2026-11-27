@@ -9,6 +9,7 @@
 #include <atomic>
 #include <thread>
 #include <juce_gui_basics/juce_gui_basics.h>
+#include "DrpText.h"
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "Parameters.h"
@@ -1661,6 +1662,192 @@ int main (int argc, char* argv[])
                    "expert switches: refused without authorization, work with it, are not saved in the session, reset when it ends");
         }
         am.remove();
+    }
+
+    //--------------------------------------------------------------------------
+    std::printf ("\n=== 3j) Readable .drp presets when authorized (1.6) ===\n");
+    {
+        namespace txt = vstm::drp::text;
+        using vstm::drp::Error;
+        const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("VSTMTune_PluginTest_DrpText");
+        folder.deleteRecursively();
+        folder.createDirectory();
+        vstm::PresetManager::setUserPresetFolderOverride (folder);
+        auto bytesOf = [] (const juce::File& f) { juce::MemoryBlock mb; f.loadFileAsData (mb); return mb; };
+        auto isBinary = [&] (const juce::File& f) { const auto mb = bytesOf (f); return mb.getSize() > 8 && std::memcmp (mb.getData(), "VSTMDRP", 7) == 0; };
+        auto plainOf = [] (VSTMTuneProcessor& q, const juce::String& id) { auto* prm = q.apvts.getParameter (id); return prm->convertFrom0to1 (prm->getValue()); };
+
+        // without authorization: the binary .drp, exactly as before (the readable choice has no effect)
+        VSTMTuneProcessor p;
+        p.presets.setKeepTonal (false);
+        p.auth.remove();
+        CHECK (! p.auth.isAdmin() && ! p.savesReadablePresets() && p.presets.saveUserPreset ("Binary One") && isBinary (folder.getChildFile ("Binary One.drp")),
+               "not authorized: presets are saved as the binary .drp");
+
+        // authorized (a test key): readable text
+        TestKey k (31);
+        p.auth.setTrustedKeysForTesting ({ k.trusted });
+        const auto authFile = signAuth (adminAuth (k), k);
+        CHECK (p.auth.importData (authFile.getData(), authFile.getSize()) == Error::none && p.auth.isAdmin() && p.savesReadablePresets(),
+               "authorized + readable on (default): presets will be saved as readable text");
+        juce::Random rnd (1606);
+        for (auto* prm : p.getParameters())
+            if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (prm))
+                if (vstm::PresetManager::isPresetParameter (rp->paramID))
+                    rp->setValueNotifyingHost (rp->convertTo0to1 (rp->convertFrom0to1 (rnd.nextFloat())));
+        setParam (p, vstm::ids::autoCharacter, 0.0f);
+        CHECK (p.presets.saveUserPreset ("Readable"), "save a readable preset");
+        const auto file1 = folder.getChildFile ("Readable.drp");
+        const auto text1 = bytesOf (file1);
+        const auto str = juce::String::fromUTF8 ((const char*) text1.getData(), (int) text1.getSize());
+        bool everyParam = true, explained = true;
+        for (auto* prm : p.getParameters())
+            if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (prm))
+                if (vstm::PresetManager::isPresetParameter (rp->paramID))
+                {
+                    everyParam = everyParam && str.contains ("\n" + rp->paramID + " = ");
+                    explained = explained && str.contains (rp->getName (64) + " (" + rp->paramID + ")");
+                }
+        const bool header = str.startsWith ("# VSTM Tune preset") && str.contains ("[Preset]\nformat = VSTM-DRP-TEXT\nformat_version = 2\n")
+                         && str.contains ("[Parameters]") && juce::CharPointer_UTF8::isValidString ((const char*) text1.getData(), (int) text1.getSize())
+                         && ! isBinary (file1) && (unsigned char) str[0] == '#';
+        const bool noSecrets = ! str.contains ("test admin") && ! str.containsIgnoreCase ("signature:") && ! str.containsIgnoreCase ("serial");
+        const bool plainNumbers = ! str.contains ("e+0") && ! str.contains ("e-0");      // "80", not "8e+01"
+        CHECK (header && everyParam && explained && noSecrets && plainNumbers && str.contains ("Auto Character is OFF"),
+               "readable file: UTF-8 text with the format / version header, every preset parameter with its explanation, no authorization data (%d bytes)",
+               (int) text1.getSize());
+
+        // save -> load -> save: same values, same bytes
+        std::vector<float> before;
+        for (auto* prm : p.getParameters())
+            if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (prm))
+                if (vstm::PresetManager::isPresetParameter (rp->paramID))
+                    before.push_back (rp->getValue());
+        VSTMTuneProcessor q;
+        q.presets.setKeepTonal (false);
+        q.auth.setTrustedKeysForTesting ({ k.trusted });
+        q.auth.refresh();
+        int idx = -1;
+        for (int i = 0; i < q.presets.getNumPresets(); ++i)
+            if (q.presets.getPresetName (i) == "Readable") idx = i;
+        if (idx >= 0) q.presets.loadPreset (idx);
+        std::vector<float> after;
+        for (auto* prm : q.getParameters())
+            if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (prm))
+                if (vstm::PresetManager::isPresetParameter (rp->paramID))
+                    after.push_back (rp->getValue());
+        bool sameValues = idx >= 0 && after.size() == before.size();
+        for (size_t i = 0; sameValues && i < before.size(); ++i)
+            sameValues = std::abs (after[i] - before[i]) < 1.0e-7f;
+        const bool savedAgain = q.auth.isAdmin() && q.presets.saveUserPreset ("Readable");
+        CHECK (sameValues && savedAgain && bytesOf (file1) == text1, "save -> load -> save: every value identical, the file byte for byte the same");
+
+        // Auto Character on / off round trips (ROBOTISM and the manual values kept; the file says which)
+        setParam (p, vstm::ids::robotism, 30.0f);
+        setParam (p, vstm::ids::retune, 80.0f);
+        setParam (p, vstm::ids::humanize, 12.0f);
+        setParam (p, vstm::ids::autoCharacter, 1.0f);
+        p.presets.saveUserPreset ("Auto On");
+        const auto autoText = juce::String::fromUTF8 ((const char*) bytesOf (folder.getChildFile ("Auto On.drp")).getData(),
+                                                      (int) folder.getChildFile ("Auto On.drp").getSize());
+        if (const auto* example = std::getenv ("VSTM_DRP_EXAMPLE"))        // docs: a real file written by the plug-in
+            folder.getChildFile ("Auto On.drp").copyFileTo (juce::File (juce::String (example)));
+        VSTMTuneProcessor r;
+        r.presets.setKeepTonal (false);
+        for (int i = 0; i < r.presets.getNumPresets(); ++i)
+            if (r.presets.getPresetName (i) == "Auto On") r.presets.loadPreset (i);
+        const auto c30 = vstm::params::characterFor (30.0f);
+        const bool autoKept = r.apvts.getParameter (vstm::ids::autoCharacter)->getValue() > 0.5f && std::abs (plainOf (r, vstm::ids::robotism) - 30.0f) < 1.0e-4f
+                           && std::abs (plainOf (r, vstm::ids::retune) - 80.0f) < 1.0e-3f && std::abs (plainOf (r, vstm::ids::humanize) - 12.0f) < 1.0e-3f
+                           && autoText.contains ("Auto Character is ON") && autoText.contains ("retune " + juce::String (c30.retuneMs, 2) + " ms");
+        setParam (p, vstm::ids::autoCharacter, 0.0f);            // hand-over: retune / humanize take the auto values of ROBOTISM 30
+        p.presets.saveUserPreset ("Auto Off");
+        VSTMTuneProcessor r2;
+        r2.presets.setKeepTonal (false);
+        for (int i = 0; i < r2.presets.getNumPresets(); ++i)
+            if (r2.presets.getPresetName (i) == "Auto Off") r2.presets.loadPreset (i);
+        const bool offKept = r2.apvts.getParameter (vstm::ids::autoCharacter)->getValue() < 0.5f
+                          && std::abs (plainOf (r2, vstm::ids::retune) - plainOf (p, vstm::ids::retune)) < 1.0e-4f
+                          && std::abs (plainOf (r2, vstm::ids::retune) - c30.retuneMs) < 0.06f;
+        CHECK (autoKept && offKept, "Auto Character round trips: on (ROBOTISM 30, manual retune 80 / humanize 12 kept, the file shows the auto values); off after the hand-over (retune %.2f ms)",
+               (double) plainOf (r2, vstm::ids::retune));
+
+        // the documented curves are the code's: the formula written in the file, evaluated here, equals characterFor
+        auto smooth = [] (double a, double b, double x) { const double t = std::clamp ((x - a) / (b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); };
+        double worst = 0.0;
+        for (int i = 0; i <= 200; ++i)
+        {
+            const double rr = i / 200.0;
+            const double rt = rr <= 0.5 ? 15.0 * std::pow (rr / 0.5, 2.0) : 15.0 + 10.0 * std::pow ((rr - 0.5) / 0.5, 1.5);
+            const double hu = rr <= 0.5 ? 35.0 * smooth (0.2, 0.5, rr) : 35.0 + 15.0 * (rr - 0.5) / 0.5;
+            const double vb = rr <= 0.5 ? 60.0 + 40.0 * smooth (0.0, 0.5, rr) : 100.0;
+            const auto c = vstm::params::characterFor ((float) (rr * 100.0));
+            worst = std::max ({ worst, std::abs (rt - c.retuneMs), std::abs (hu - c.humanizePct), std::abs (vb - c.vibratoPct) });
+        }
+        CHECK (worst < 1.0e-3 && str.contains ("retune (ms)   r <= 0.5: 15 x (r / 0.5)^2"),
+               "the Auto Character formula written in the file matches params::characterFor at 201 points (largest difference %.2g)", worst);
+
+        // tolerant reading: unknown fields kept, damaged lines skipped, BOM + CRLF; refused: no format line, newer version,
+        // another plug-in, binary bytes, empty
+        const juce::String good = juce::String::fromUTF8 ("\xef\xbb\xbf# hand edited\r\n[Preset]\r\nformat = VSTM-DRP-TEXT\r\nformat_version = 2\r\nplugin = VSTM Tune\r\nname = Edited\r\n"
+                                   "[Parameters]\r\nretune = 5000\r\nhumanize = abc\r\nfuture_param = 1.5\r\nmix = 50\r\n[Extra]\r\nfoo = 1\r\n");
+        vstm::drp::PresetData pd;
+        txt::ReadReport rep;
+        const auto e1 = txt::read (good.toRawUTF8(), good.getNumBytesAsUTF8(), pd, &rep);
+        bool hasFuture = false;
+        for (const auto& v : pd.values) hasFuture = hasFuture || v.first == "future_param";
+        const bool tolerant = e1 == Error::none && pd.name == "Edited" && pd.values.size() == 3 && hasFuture && rep.skippedLines == 1 && rep.unknownSections == 1;
+        auto variant = [&good] (const char* from, const char* to) { return good.replace (from, to); };
+        auto readErr = [&pd] (const juce::String& s) { return txt::read (s.toRawUTF8(), s.getNumBytesAsUTF8(), pd); };
+        const bool refused = readErr (variant ("format = VSTM-DRP-TEXT", "format = OTHER")) == Error::badMagic
+                          && readErr (variant ("format_version = 2", "format_version = 3")) == Error::unsupportedVersion
+                          && readErr (variant ("plugin = VSTM Tune", "plugin = Other Plug-in")) == Error::wrongPlugin
+                          && readErr (variant ("format_version = 2\r\n", "")) == Error::badPayload
+                          && txt::read ("", 0, pd) == Error::truncated;
+        juce::MemoryBlock binary;
+        binary.setSize (64, true);
+        std::memcpy (binary.getData(), "VSTMDRP\x1a", 8);
+        const bool notText = ! txt::isTextPreset (binary.getData(), binary.getSize()) && txt::isTextPreset (good.toRawUTF8(), good.getNumBytesAsUTF8());
+        folder.getChildFile ("Edited.drp").replaceWithText (good, false, false, nullptr);
+        juce::String importedName;
+        VSTMTuneProcessor t;
+        t.presets.setKeepTonal (false);
+        const auto ei = t.presets.importPreset (folder.getChildFile ("Edited.drp"), importedName);
+        const bool clamped = ei == Error::none && std::abs (plainOf (t, vstm::ids::retune) - 200.0f) < 1.0e-3f && std::abs (plainOf (t, vstm::ids::mix) - 50.0f) < 1.0e-3f
+                          && std::abs (plainOf (t, vstm::ids::humanize) - 35.0f) < 1.0e-3f
+                          && ! isBinary (folder.getChildFile (importedName + ".drp"));
+        CHECK (tolerant && refused && notText && clamped,
+               "reading: BOM + CRLF ok, unknown field kept, damaged line skipped (%d), unknown section ignored; refused: no format line, version 3, another plug-in, missing version, empty; binary never taken for text; import: out-of-range clamped, damaged value default, imported copy stays text",
+               rep.skippedLines);
+
+        // the format is kept on rename; old binary presets keep loading; readable off -> binary again
+        int binIdx = -1;
+        for (int i = 0; i < p.presets.getNumPresets(); ++i)
+            if (p.presets.getPresetName (i) == "Binary One") binIdx = i;
+        if (binIdx >= 0) p.presets.loadPreset (binIdx);
+        bool renamedKeeps = false;
+        for (int i = 0; i < p.presets.getNumPresets(); ++i)
+            if (p.presets.getPresetName (i) == "Readable")
+            {
+                p.presets.loadPreset (i);
+                renamedKeeps = p.presets.renameUserPreset (i, "Readable Renamed") && ! isBinary (folder.getChildFile ("Readable Renamed.drp"));
+            }
+        p.readablePresets = false;
+        const bool offBinary = ! p.savesReadablePresets() && p.presets.saveUserPreset ("Binary Two") && isBinary (folder.getChildFile ("Binary Two.drp"));
+        CHECK (binIdx >= 0 && renamedKeeps && offBinary, "binary presets load as before; a renamed readable preset stays readable; readable off (authorized): binary again");
+
+        // the session (host state) is separate from presets: only the readable choice is in it
+        juce::MemoryBlock st;
+        p.getStateInformation (st);
+        auto xml = juce::AudioProcessor::getXmlFromBinary (st.getData(), (int) st.getSize());
+        VSTMTuneProcessor s2;
+        s2.setStateInformation (st.getData(), (int) st.getSize());
+        CHECK (xml != nullptr && ! xml->toString().contains ("VSTM-DRP-TEXT") && xml->getStringAttribute ("readablePresets") == "0" && ! s2.readablePresets.load(),
+               "session state: holds the readable choice only, never preset text; restored");
+
+        p.auth.remove();
+        vstm::PresetManager::setUserPresetFolderOverride ({});
+        folder.deleteRecursively();
     }
 
     //--------------------------------------------------------------------------

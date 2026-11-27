@@ -113,6 +113,12 @@ private:
     double currentRate = 44100.0;
     std::atomic<bool> expert[(int) Expert::count] { true, true, true, true };
     std::atomic<bool> followKeyChanges { false };
+public:
+    /** 1.6: authorized users save presets as the readable .drp (text) while this is on (preset menu; saved with
+        the session). Without authorization it has no effect: presets are saved as the binary .drp. */
+    std::atomic<bool> readablePresets { true };
+    bool savesReadablePresets() const noexcept { return auth.isAdmin() && readablePresets.load(); }
+private:
 
     void notifyStateChanged();
 

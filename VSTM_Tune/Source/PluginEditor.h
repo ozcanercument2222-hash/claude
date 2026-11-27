@@ -21,6 +21,8 @@ public:
     std::function<void()> onImportPreset, onImportAuthorization, onRemoveAuthorization;
     /** Empty unless an admin authorization is valid; then the status line shown in the menu. */
     std::function<juce::String()> authorizationStatus;
+    std::function<bool()> isAuthorized, readableOn;          // 1.6 readable .drp (shown only when authorized)
+    std::function<void (bool)> onReadableChanged;
 
     void refresh()
     {

@@ -282,6 +282,9 @@ void PresetBar::showMenu()
     m.addItem (10007, tr ("Import authorization file..."));
     if (authStatus.isNotEmpty())
         m.addItem (10008, tr ("Remove authorization"));
+    // 1.6: authorized users choose the format their presets are saved in (loading reads both)
+    if (isAuthorized && isAuthorized())
+        m.addItem (10010, tr ("Save presets as readable text (.drp)"), true, readableOn && readableOn());
     m.addSeparator();
     // the song's key and scale stay when a preset is loaded (off: presets set them, as in 1.0)
     m.addItem (10005, tr ("Presets keep key and scale"), true, presets.getKeepTonal());
@@ -300,6 +303,7 @@ void PresetBar::showMenu()
                          else if (result == 10007) { if (safe->onImportAuthorization) safe->onImportAuthorization(); }
                          else if (result == 10008) { if (safe->onRemoveAuthorization) safe->onRemoveAuthorization(); }
                          else if (result == 10009) {}
+                         else if (result == 10010) { if (safe->onReadableChanged && safe->readableOn) safe->onReadableChanged (! safe->readableOn()); }
                          else if (result == 10003)
                          {
                              auto folder = vstm::PresetManager::getUserPresetFolder();
@@ -442,6 +446,9 @@ VSTMTuneEditor::VSTMTuneEditor (VSTMTuneProcessor& p)
     presetBar.onImportAuthorization = [this] { importAuthorization(); };
     presetBar.onRemoveAuthorization = [this] { removeAuthorization(); };
     presetBar.authorizationStatus = [this] { return authorizationStatusText(); };
+    presetBar.isAuthorized = [this] { return audio.auth.isAdmin(); };
+    presetBar.readableOn = [this] { return audio.readablePresets.load(); };
+    presetBar.onReadableChanged = [this] (bool on) { audio.readablePresets = on; };
     sizeButton.setTooltip (tr ("Window size"));
     sizeButton.onClick = [this] { showSizeMenu(); };
     settingsButton.setTooltip (tr ("Settings"));
@@ -1013,7 +1020,10 @@ void VSTMTuneEditor::askRenamePreset()
 
 void VSTMTuneEditor::askPresetName()
 {
-    auto* w = new juce::AlertWindow (tr ("Save preset"), tr ("Name of the new preset:"), juce::MessageBoxIconType::NoIcon, this);
+    // 1.6: say which format the file gets (authorized + readable: text that a text editor shows, with explanations)
+    const auto prompt = tr ("Name of the new preset:") + (audio.savesReadablePresets()
+                            ? "\n" + tr ("Format: readable text .drp (authorized). Off in the preset menu.") : juce::String());
+    auto* w = new juce::AlertWindow (tr ("Save preset"), prompt, juce::MessageBoxIconType::NoIcon, this);
     w->setLookAndFeel (&lnf);
     w->addTextEditor ("name", audio.presets.isFactoryPreset (audio.presets.getCurrentIndex()) ? tr ("My Preset") : audio.presets.getCurrentName());
     w->addButton (tr ("Save"), 1, juce::KeyPress (juce::KeyPress::returnKey));

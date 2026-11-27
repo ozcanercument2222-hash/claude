@@ -95,6 +95,10 @@ set(VSTM_PLUGIN_SOURCES
     Source/PresetManager.h
     Source/Drp.cpp
     Source/Drp.h
+    Source/DrpText.cpp
+    Source/DrpText.h
+    Source/PresetDocs.cpp
+    Source/PresetDocs.h
     Source/Authorization.cpp
     Source/Authorization.h
     Source/ui/DeveloperPanel.h
